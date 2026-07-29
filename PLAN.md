@@ -40,3 +40,6 @@
 - `./gradlew clean check javadoc --warning-mode=fail`
 - `./gradlew :runtime-fixtures:test --tests '*Lwjgl3FixtureSmokeTest' --rerun-tasks`
 - `./gradlew check --write-locks --warning-mode=fail`
+- `./gradlew --write-verification-metadata sha256 clean check javadoc --warning-mode=fail`
+- `./gradlew -PreleaseVersion=0.1.0 clean check javadoc assemble --warning-mode=fail`
+  with byte-for-byte archive checksum comparison against the preceding assembly

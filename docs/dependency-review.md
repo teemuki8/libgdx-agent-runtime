@@ -1,6 +1,6 @@
 # Dependency and license review
 
-Reviewed from the resolved POMs and committed lockfiles on 2026-07-29:
+Reviewed from the resolved POMs and committed lockfiles on 2026-07-30:
 
 | Scope | Dependency | Version | Declared license |
 | --- | --- | --- | --- |
@@ -16,5 +16,13 @@ under `tools.jackson`, so both lines are present without package collision. This
 artifact's dependency footprint and should be re-reviewed before release.
 
 `runtime-core` resolves no dependency beyond `java.base`, verified with Gradle and `jdeps`.
-All resolved versions are captured in per-module lockfiles. Fixture and test dependencies are not
-published as runtime API artifacts.
+All resolved versions are captured in per-module lockfiles. The committed Gradle dependency
+verification metadata pins SHA-256 checksums for 251 artifacts across 128 components, including
+build plugins and metadata. Fixture and test dependencies are not published as runtime API
+artifacts.
+
+libGDX 1.14.2 is the latest upstream release reviewed for this candidate. Its LWJGL3 backend
+resolves LWJGL 3.3.3. On JDK 25 that native stack can emit `Unsafe` and unsupported-JNI-version
+warnings while the qualified smoke test still completes successfully. The project does not
+override libGDX's LWJGL dependency independently; that compatibility boundary must be reviewed
+again before the final release.

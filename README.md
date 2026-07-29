@@ -149,4 +149,12 @@ publishes.
 - [Releasing to Maven Central](docs/guides/releasing.md)
 - [Behavioral contract](docs/design-contract.md)
 - [Dependency review](docs/dependency-review.md)
+- [Sonatype Central compliance](docs/sonatype-central-compliance.md)
 - [Roadmap](docs/roadmap.md)
+
+## License
+
+Copyright 2026 Teemu Jääskeläinen.
+
+Licensed under the [Apache License 2.0](LICENSE). `libGDX` is used descriptively; this independent
+third-party project is not affiliated with, endorsed by, or sponsored by the libGDX project.

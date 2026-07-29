@@ -3,12 +3,14 @@ import org.gradle.api.plugins.quality.CheckstyleExtension
 import org.gradle.api.publish.PublishingExtension
 import org.gradle.api.publish.maven.MavenPublication
 import org.gradle.api.tasks.bundling.AbstractArchiveTask
+import org.gradle.api.tasks.bundling.Jar
 import org.gradle.api.tasks.compile.JavaCompile
 import org.gradle.api.tasks.javadoc.Javadoc
 import org.gradle.api.tasks.testing.Test
 import org.gradle.external.javadoc.StandardJavadocDocletOptions
 import org.gradle.jvm.toolchain.JavaLanguageVersion
 import org.gradle.plugins.signing.SigningExtension
+import java.util.zip.ZipFile
 
 val publishedModules = setOf(
     "runtime-core",
@@ -88,6 +90,37 @@ subprojects {
         apply(plugin = "maven-publish")
         apply(plugin = "signing")
 
+        val publicationArchives = tasks.withType<Jar>()
+        publicationArchives.configureEach {
+            from(rootProject.file("LICENSE")) {
+                into("META-INF")
+            }
+            from(rootProject.file("NOTICE")) {
+                into("META-INF")
+            }
+        }
+
+        val verifyPublicationArchives = tasks.register("verifyPublicationArchives") {
+            group = "verification"
+            description = "Verifies that every publication archive contains licensing notices"
+            dependsOn(publicationArchives)
+            doLast {
+                publicationArchives.forEach { archiveTask ->
+                    val archiveFile = archiveTask.archiveFile.get().asFile
+                    ZipFile(archiveFile).use { archive ->
+                        listOf("META-INF/LICENSE", "META-INF/NOTICE").forEach { entry ->
+                            check(archive.getEntry(entry) != null) {
+                                "${archiveFile.name} does not contain $entry"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        tasks.named("check") {
+            dependsOn(verifyPublicationArchives)
+        }
+
         extensions.configure<PublishingExtension> {
             publications.create<MavenPublication>("mavenJava") {
                 from(components["java"])
@@ -108,7 +141,9 @@ subprojects {
                     developers {
                         developer {
                             id.set("teemuki8")
-                            name.set("libGDX Agent Runtime maintainers")
+                            name.set("Teemu Jääskeläinen")
+                            email.set("teemuki8@users.noreply.github.com")
+                            url.set("https://github.com/teemuki8")
                         }
                     }
                     scm {

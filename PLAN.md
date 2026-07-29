@@ -27,6 +27,7 @@
 - [x] Milestone 5: eight MCP tools and stdio lifecycle.
 - [x] First vertical slice through MCP.
 - [x] Milestone 6: guides, release candidate documentation, and full verification.
+- [x] Audit and harden the `0.1.0` publication against current Sonatype Central requirements.
 
 ## Verification
 
@@ -43,3 +44,6 @@
 - `./gradlew --write-verification-metadata sha256 clean check javadoc --warning-mode=fail`
 - `./gradlew -PreleaseVersion=0.1.0 clean check javadoc assemble --warning-mode=fail`
   with byte-for-byte archive checksum comparison against the preceding assembly
+- `./gradlew -PreleaseVersion=0.1.0 clean check javadoc assemble
+  generatePomFileForMavenJavaPublication --warning-mode=fail`
+  with license/notice archive entries and generated maintainer metadata inspected

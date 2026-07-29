@@ -1,0 +1,125 @@
+package io.github.teemuki8.libgdx.agent.runtime.fixtures;
+
+import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
+import io.github.teemuki8.libgdx.agent.runtime.core.DecisionScope;
+import io.github.teemuki8.libgdx.agent.runtime.core.DecisionType;
+import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
+import io.github.teemuki8.libgdx.agent.runtime.core.EntityType;
+import io.github.teemuki8.libgdx.agent.runtime.core.EventSpec;
+import io.github.teemuki8.libgdx.agent.runtime.core.InspectableEntity;
+import io.github.teemuki8.libgdx.agent.runtime.core.Reason;
+import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
+import io.github.teemuki8.libgdx.agent.runtime.core.SessionId;
+import io.github.teemuki8.libgdx.agent.runtime.libgdx.LibGdxAgentRuntime;
+import java.util.ArrayList;
+import java.util.List;
+
+/** Tiny deterministic tower simulation used by every public vertical-stack fixture test. */
+public final class DeterministicSimulation {
+    /** Stable fixture session. */
+    public static final SessionId SESSION_ID = SessionId.of("deterministic-fixture");
+    private final Unit player = new Unit("player-1", "player", 100, 0, 0, "READY");
+    private final Unit tower1 = new Unit("tower-1", "tower", 100, 0, 0, "IDLE");
+    private final Unit tower2 = new Unit("tower-2", "tower", 100, 30, 0, "IDLE");
+    private final List<Unit> enemies = new ArrayList<>();
+
+    /** Creates initial fixture state. */
+    public DeterministicSimulation() {
+        enemies.add(new Unit("enemy-1", "enemy", 100, 20, 5, "MOVING"));
+        enemies.add(new Unit("enemy-2", "enemy", 100, 8, 1, "MOVING"));
+    }
+
+    /** Creates, instruments, and starts a runtime on the calling thread. */
+    public AgentRuntime startRuntime() {
+        AgentRuntime runtime = LibGdxAgentRuntime.builder()
+                .captureThread(Thread.currentThread())
+                .sessionId(SESSION_ID)
+                .build();
+        register(runtime, player);
+        register(runtime, tower1);
+        register(runtime, tower2);
+        runtime.entities().registerSource("enemies", () -> enemies.stream().map(this::inspectable));
+        runtime.start();
+        return runtime;
+    }
+
+    /** Advances one exact fixture frame through public runtime APIs. */
+    public void advance(AgentRuntime runtime, int frame) {
+        runtime.frame(16_000_000, () -> update(runtime, frame));
+    }
+
+    private void update(AgentRuntime runtime, int frame) {
+        if (frame == 10) {
+            Unit spawned = new Unit("enemy-3", "enemy", 100, 35, 2, "MOVING");
+            enemies.add(spawned);
+            runtime.emit(EventSpec.type("entity.spawned").subject(EntityId.of(spawned.id)));
+        }
+        if (frame == 20) {
+            try (DecisionScope decision = runtime.beginDecision(
+                    DecisionType.of("target-selection"), EntityId.of(tower1.id))) {
+                decision.reject(EntityId.of("enemy-1"), Reason.of("out-of-range"),
+                        RuntimeValues.field("distance", RuntimeValues.decimal(20.6)),
+                        RuntimeValues.field("range", RuntimeValues.decimal(10)));
+                decision.accept(EntityId.of("enemy-2"),
+                        RuntimeValues.field("distance", RuntimeValues.decimal(8.1)));
+                decision.choose(EntityId.of("enemy-2"), Reason.of("nearest-in-range"));
+            }
+            tower1.state = "TRACKING";
+        }
+        if (frame == 25) {
+            Unit enemy = enemy("enemy-2");
+            runtime.emit(EventSpec.type("projectile.hit")
+                    .subject(EntityId.of(enemy.id))
+                    .source(EntityId.of("projectile-3"))
+                    .attribute("amount", RuntimeValues.integer(25)));
+            enemy.health -= 25;
+        }
+        if (frame == 39) {
+            enemy("enemy-2").state = "DEAD";
+        }
+        if (frame == 40) {
+            runtime.emit(EventSpec.type("entity.destroyed")
+                    .subject(EntityId.of("enemy-2")));
+            enemies.removeIf(enemy -> enemy.id.equals("enemy-2"));
+        }
+    }
+
+    private void register(AgentRuntime runtime, Unit unit) {
+        runtime.entities().register(EntityId.of(unit.id), EntityType.of(unit.type),
+                () -> unit.id, inspector -> inspect(inspector, unit));
+    }
+
+    private InspectableEntity inspectable(Unit unit) {
+        return InspectableEntity.of(EntityId.of(unit.id), EntityType.of(unit.type),
+                () -> unit.id, inspector -> inspect(inspector, unit));
+    }
+
+    private static void inspect(
+            io.github.teemuki8.libgdx.agent.runtime.core.EntityInspector inspector, Unit unit) {
+        inspector.property("health", () -> unit.health)
+                .property("position", () -> RuntimeValues.vector2(unit.x, unit.y))
+                .property("state", () -> RuntimeValues.enumValue(unit.state));
+    }
+
+    private Unit enemy(String id) {
+        return enemies.stream().filter(enemy -> enemy.id.equals(id)).findFirst().orElseThrow();
+    }
+
+    private static final class Unit {
+        private final String id;
+        private final String type;
+        private long health;
+        private final double x;
+        private final double y;
+        private String state;
+
+        Unit(String id, String type, long health, double x, double y, String state) {
+            this.id = id;
+            this.type = type;
+            this.health = health;
+            this.x = x;
+            this.y = y;
+            this.state = state;
+        }
+    }
+}

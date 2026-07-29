@@ -1,0 +1,18 @@
+# Security policy
+
+## Supported versions
+
+No production-supported release exists yet. Security reports for the current `0.1.x` development
+line are welcome through GitHub's private vulnerability reporting for this repository.
+
+## Boundary
+
+MCP is a local development tool over stdio. It exposes only properties registered by the
+application and provides no shell, filesystem, reflection, script, arbitrary class loading, network
+destination, or remote listener.
+
+Do not publish credentials, tokens, secrets, private user data, or filesystem information as entity
+properties, event attributes, decision attributes, names, or diagnostics.
+
+Reports should include affected version, reproducible input, impact, and whether a configured limit
+was bypassed. Do not include live secrets in a report.

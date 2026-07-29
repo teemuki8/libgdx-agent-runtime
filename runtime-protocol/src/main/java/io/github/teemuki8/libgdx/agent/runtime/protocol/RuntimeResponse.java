@@ -1,0 +1,125 @@
+package io.github.teemuki8.libgdx.agent.runtime.protocol;
+
+import com.fasterxml.jackson.annotation.JsonSubTypes;
+import com.fasterxml.jackson.annotation.JsonTypeInfo;
+import io.github.teemuki8.libgdx.agent.runtime.core.DecisionTrace;
+import io.github.teemuki8.libgdx.agent.runtime.core.EntityHistory;
+import io.github.teemuki8.libgdx.agent.runtime.core.EntitySnapshot;
+import io.github.teemuki8.libgdx.agent.runtime.core.FrameSnapshot;
+import io.github.teemuki8.libgdx.agent.runtime.core.FrameSummary;
+import io.github.teemuki8.libgdx.agent.runtime.core.PropertyChange;
+import io.github.teemuki8.libgdx.agent.runtime.core.QueryPage;
+import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeEvent;
+import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeLimits;
+import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeStatus;
+import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
+
+/** Explicit correlated success/error response union. */
+@JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "status")
+@JsonSubTypes({
+    @JsonSubTypes.Type(value = RuntimeResponse.Success.class, name = "ok"),
+    @JsonSubTypes.Type(value = RuntimeResponse.Failure.class, name = "error")
+})
+public sealed interface RuntimeResponse permits RuntimeResponse.Success, RuntimeResponse.Failure {
+    /** Response protocol version. */
+    ProtocolVersion version();
+
+    /** Request correlation ID. */
+    String requestId();
+
+    /** Successful response. */
+    record Success(ProtocolVersion version, String requestId, Result result)
+            implements RuntimeResponse {
+        /** Validates response. */
+        public Success {
+            Objects.requireNonNull(version, "version");
+            ProtocolJson.requireIdentifier(requestId, "requestId");
+            Objects.requireNonNull(result, "result");
+        }
+    }
+
+    /** Failed response. */
+    record Failure(ProtocolVersion version, String requestId, ProtocolError error)
+            implements RuntimeResponse {
+        /** Validates response. */
+        public Failure {
+            Objects.requireNonNull(version, "version");
+            ProtocolJson.requireIdentifier(requestId, "requestId");
+            Objects.requireNonNull(error, "error");
+        }
+    }
+
+    /** Explicit result union for the eight commands. */
+    @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "type")
+    @JsonSubTypes({
+        @JsonSubTypes.Type(value = Result.Sessions.class, name = "sessions"),
+        @JsonSubTypes.Type(value = Result.Capabilities.class, name = "capabilities"),
+        @JsonSubTypes.Type(value = Result.Frames.class, name = "frames"),
+        @JsonSubTypes.Type(value = Result.Snapshot.class, name = "snapshot"),
+        @JsonSubTypes.Type(value = Result.Entity.class, name = "entity"),
+        @JsonSubTypes.Type(value = Result.Changes.class, name = "changes"),
+        @JsonSubTypes.Type(value = Result.Events.class, name = "events"),
+        @JsonSubTypes.Type(value = Result.Decisions.class, name = "decisions")
+    })
+    sealed interface Result permits Result.Sessions, Result.Capabilities, Result.Frames,
+            Result.Snapshot, Result.Entity, Result.Changes, Result.Events, Result.Decisions {
+        /** Published session catalog. */
+        record Sessions(List<SessionInfo> sessions) implements Result {
+            /** Copies sessions. */
+            public Sessions {
+                sessions = List.copyOf(sessions);
+                if (sessions.size() > ProtocolJson.MAX_RESULT_ITEMS) {
+                    throw new IllegalArgumentException("too many protocol sessions");
+                }
+            }
+        }
+
+        /** Session capabilities and limits. */
+        record Capabilities(
+                ProtocolVersion protocolVersion,
+                List<String> supportedTools,
+                List<String> enabledFeatures,
+                RuntimeLimits limits,
+                Optional<Long> currentFrame,
+                RuntimeStatus runtimeStatus) implements Result {
+            /** Copies values. */
+            public Capabilities {
+                supportedTools = List.copyOf(supportedTools);
+                enabledFeatures = List.copyOf(enabledFeatures);
+                Objects.requireNonNull(limits, "limits");
+                currentFrame = Objects.requireNonNull(currentFrame, "currentFrame");
+                Objects.requireNonNull(runtimeStatus, "runtimeStatus");
+            }
+        }
+
+        /** Bounded frame summaries. */
+        record Frames(QueryPage<FrameSummary> page) implements Result {}
+
+        /** One filtered immutable completed frame. */
+        record Snapshot(FrameSnapshot snapshot, boolean filtered, boolean hasMore) implements Result {}
+
+        /** Latest and historical entity evidence. */
+        record Entity(EntitySnapshot latest, EntityHistory history) implements Result {}
+
+        /** Bounded change results. */
+        record Changes(QueryPage<PropertyChange> page) implements Result {}
+
+        /** Bounded event results. */
+        record Events(QueryPage<RuntimeEvent> page) implements Result {}
+
+        /** Bounded decision results. */
+        record Decisions(QueryPage<DecisionTrace> page) implements Result {}
+    }
+
+    /** Minimal session metadata. */
+    record SessionInfo(String sessionId, RuntimeStatus status, Optional<Long> currentFrame) {
+        /** Validates metadata. */
+        public SessionInfo {
+            ProtocolJson.requireIdentifier(sessionId, "sessionId");
+            Objects.requireNonNull(status, "status");
+            currentFrame = Objects.requireNonNull(currentFrame, "currentFrame");
+        }
+    }
+}

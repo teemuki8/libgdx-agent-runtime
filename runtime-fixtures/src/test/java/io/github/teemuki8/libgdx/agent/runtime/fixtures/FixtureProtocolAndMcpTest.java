@@ -1,0 +1,92 @@
+package io.github.teemuki8.libgdx.agent.runtime.fixtures;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
+import io.github.teemuki8.libgdx.agent.runtime.mcp.RuntimeToolHandler;
+import io.github.teemuki8.libgdx.agent.runtime.protocol.ProtocolJson;
+import io.github.teemuki8.libgdx.agent.runtime.protocol.ProtocolVersion;
+import io.github.teemuki8.libgdx.agent.runtime.protocol.PublishedRuntime;
+import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeCommand;
+import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeProtocolService;
+import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeRegistry;
+import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeRequest;
+import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeResponse;
+import io.modelcontextprotocol.spec.McpSchema;
+import java.time.Duration;
+import java.util.Map;
+import java.util.stream.IntStream;
+import org.junit.jupiter.api.Test;
+
+final class FixtureProtocolAndMcpTest {
+    @Test
+    void fixtureEvidenceRoundTripsThroughProtocol() {
+        Fixture fixture = fixture();
+        try (PublishedRuntime publication = fixture.registry.publish(fixture.runtime)) {
+            assertEquals(fixture.runtime.sessionId(), publication.sessionId());
+            RuntimeResponse response = new RuntimeProtocolService(fixture.registry).execute(
+                    new RuntimeRequest(ProtocolVersion.V1, "fixture-events",
+                            DeterministicSimulation.SESSION_ID.value(),
+                            new RuntimeCommand.Events(
+                                    0, 45, "projectile.hit", false,
+                                    "enemy-2", "projectile-3", 10)));
+            RuntimeResponse decoded = ProtocolJson.decodeResponse(ProtocolJson.encode(response));
+            RuntimeResponse.Result.Events result = assertInstanceOf(
+                    RuntimeResponse.Result.Events.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, decoded).result());
+            assertEquals(1, result.page().items().size());
+            assertEquals(25, ((io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue.IntegerValue)
+                    result.page().items().getFirst().attributes().getFirst().value()).value());
+        }
+        fixture.runtime.close();
+    }
+
+    @Test
+    void fixtureEvidenceIsAvailableThroughMcpToolCalls() {
+        Fixture fixture = fixture();
+        try (PublishedRuntime publication = fixture.registry.publish(fixture.runtime);
+                RuntimeToolHandler handler =
+                        new RuntimeToolHandler(new RuntimeProtocolService(fixture.registry))) {
+            assertEquals(fixture.runtime.sessionId(), publication.sessionId());
+            McpSchema.CallToolResult snapshot = handler.handle(call("runtime_snapshot", Map.of(
+                    "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                    "entityId", "enemy-1"))).block(Duration.ofSeconds(5));
+            assertNotNull(snapshot);
+            assertFalse(snapshot.isError());
+            assertTrue(snapshot.structuredContent().toString().contains("enemy-1"));
+
+            McpSchema.CallToolResult events = handler.handle(call("runtime_events", Map.of(
+                    "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                    "eventType", "projectile.hit"))).block(Duration.ofSeconds(5));
+            assertNotNull(events);
+            assertFalse(events.isError());
+            assertTrue(events.structuredContent().toString().contains("projectile.hit"));
+
+            McpSchema.CallToolResult decisions = handler.handle(call("runtime_decisions", Map.of(
+                    "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                    "reasonCode", "out-of-range"))).block(Duration.ofSeconds(5));
+            assertNotNull(decisions);
+            assertFalse(decisions.isError());
+            assertTrue(decisions.structuredContent().toString().contains("out-of-range"));
+        }
+        fixture.runtime.close();
+    }
+
+    private static McpSchema.CallToolRequest call(
+            String name, Map<String, Object> arguments) {
+        return McpSchema.CallToolRequest.builder(name).arguments(arguments).build();
+    }
+
+    private static Fixture fixture() {
+        DeterministicSimulation simulation = new DeterministicSimulation();
+        AgentRuntime runtime = simulation.startRuntime();
+        IntStream.rangeClosed(1, 45).forEach(frame -> simulation.advance(runtime, frame));
+        return new Fixture(runtime, new RuntimeRegistry());
+    }
+
+    private record Fixture(AgentRuntime runtime, RuntimeRegistry registry) {}
+}

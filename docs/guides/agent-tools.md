@@ -1,0 +1,94 @@
+# Agent tools
+
+All tools use protocol V1, deterministic ascending frame/sequence ordering, strict closed input
+schemas (`additionalProperties: false`), and a maximum requested `limit` of 1000. Query defaults are
+`fromFrame: 0`, `toFrame: 9223372036854775807`, and `limit: 100`.
+
+## Tools
+
+| Tool | Required fields | Optional fields |
+| --- | --- | --- |
+| `runtime_sessions` | none | none |
+| `runtime_capabilities` | `sessionId` | none |
+| `runtime_frames` | `sessionId` | `fromFrame`, `toFrame`, `limit` |
+| `runtime_snapshot` | `sessionId` | `frameId`, `entityId`, `entityIdPrefix`, `entityType`, `entityTypePrefix`, `limit` |
+| `runtime_entity` | `sessionId`, `entityId` | `fromFrame`, `toFrame`, `limit` |
+| `runtime_changes` | `sessionId` | range, `entityId`, `entityType`, `property`, `limit` |
+| `runtime_events` | `sessionId` | range, `eventType`, `eventTypePrefix`, `subject`, `source`, `limit` |
+| `runtime_decisions` | `sessionId` | range, `decisionType`, `actor`, `chosenCandidate`, `reasonCode`, `limit` |
+
+Every identifier is a nonblank string of at most 256 UTF-16 code units. Frame fields are
+non-negative integers. Prefix matching is available only where the schema has an explicit prefix
+boolean; there are no regular expressions or generic expressions.
+
+## Result metadata
+
+Protocol query pages contain:
+
+- `items`: retained matching records;
+- `hasMore`: more matches existed than the result limit;
+- `requestedRangePartiallyEvicted`: requested frames predate current retention;
+- `oldestRetainedFrame` and `newestRetainedFrame`.
+
+Snapshots contain `hasMore` when an entity filter/limit omitted matching entities. Capture-level
+`truncations` report dimension, observed count, retained count, and limit. These are distinct from a
+query result limit.
+
+Example event query:
+
+```json
+{
+  "sessionId": "deterministic-fixture",
+  "fromFrame": 20,
+  "toFrame": 30,
+  "eventType": "projectile.hit",
+  "subject": "enemy-2",
+  "limit": 10
+}
+```
+
+Representative structured result:
+
+```json
+{
+  "type": "events",
+  "page": {
+    "items": [{
+      "id": {"value": 2},
+      "frameId": {"value": 25},
+      "type": {"value": "projectile.hit"},
+      "subject": {"value": "enemy-2"},
+      "source": {"value": "projectile-3"},
+      "attributes": [{
+        "name": "amount",
+        "value": {"valueType": "integer", "value": 25}
+      }],
+      "truncations": []
+    }],
+    "hasMore": false,
+    "requestedRangePartiallyEvicted": false
+  }
+}
+```
+
+## Errors and bounds
+
+Errors use `SESSION_NOT_FOUND`, `FRAME_NOT_FOUND`, `ENTITY_NOT_FOUND`, `INVALID_QUERY`,
+`INVALID_RANGE`, `LIMIT_EXCEEDED`, `RUNTIME_CLOSED`, `CAPTURE_NOT_AVAILABLE`,
+`PROTOCOL_VERSION_UNSUPPORTED`, or `INTERNAL_ERROR`. MCP returns these in a structured error with
+`isError: true`.
+
+Raw requests are limited to 1 MiB, encoded responses to 8 MiB, JSON depth to 32, normal JSON strings
+to 16384 code units, and query counts to both the protocol maximum and the runtime's configured
+limit. Unknown fields, trailing JSON, unknown subtypes, and unsafe polymorphic bases are rejected.
+
+## Bundled fixture
+
+On Linux with Xvfb:
+
+```bash
+xvfb-run -a ./gradlew -q :runtime-fixtures:runMcpFixture
+```
+
+The fixture and MCP server share one JVM and session `deterministic-fixture`. It advances to frame
+45, then retains stable state until the MCP client closes stdin.

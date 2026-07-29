@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: JDK 25 / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Install JDK 25
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Configure Gradle
+        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a
+      - name: Install Linux virtual display
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes xvfb
+      - name: Check and document on Linux
+        if: runner.os == 'Linux'
+        run: xvfb-run -a ./gradlew clean check javadoc --warning-mode=fail
+      - name: Check backend-neutral code on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\gradlew.bat clean check javadoc -x :runtime-fixtures:test --warning-mode=fail
+      - name: Check backend-neutral code on macOS
+        if: runner.os == 'macOS'
+        run: ./gradlew clean check javadoc -x :runtime-fixtures:test --warning-mode=fail
+      - name: Compile native fixture on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\gradlew.bat :runtime-fixtures:testClasses --warning-mode=fail
+      - name: Compile native fixture on macOS
+        if: runner.os == 'macOS'
+        run: ./gradlew :runtime-fixtures:testClasses --warning-mode=fail
+      - name: Retain failed reports
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: failed-reports-${{ matrix.os }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            **/build/reports/**
+            **/build/test-results/**

@@ -24,6 +24,8 @@ val artifactNames = mapOf(
 )
 val releaseVersion = providers.gradleProperty("releaseVersion").orElse("0.1.0-SNAPSHOT")
 val repositoryUrl = "https://github.com/teemuki8/libgdx-agent-runtime"
+val mavenCentralStagingUrl =
+    "https://ossrh-staging-api.central.sonatype.com/service/local/staging/deploy/maven2/"
 val junitJupiter = libs.junit.jupiter
 val junitPlatformLauncher = libs.junit.platform.launcher
 
@@ -115,6 +117,16 @@ subprojects {
                             "scm:git:ssh://git@github.com/teemuki8/libgdx-agent-runtime.git",
                         )
                         url.set(repositoryUrl)
+                    }
+                }
+            }
+            repositories {
+                maven {
+                    name = "mavenCentral"
+                    url = uri(mavenCentralStagingUrl)
+                    credentials {
+                        username = providers.environmentVariable("MAVEN_CENTRAL_USERNAME").orNull
+                        password = providers.environmentVariable("MAVEN_CENTRAL_PASSWORD").orNull
                     }
                 }
             }

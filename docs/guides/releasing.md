@@ -31,11 +31,14 @@ build logs.
 ## Stage a candidate
 
 1. Confirm `main` is green and the version has never been published.
-2. Create and push a version tag such as `v0.1.0`.
-3. Publish a GitHub release for that tag.
-4. Approve the waiting `Stage Maven Central` environment deployment.
-5. Inspect the deployment in the Central Publisher Portal.
-6. Publish it only after all Central validations pass; otherwise drop it.
+2. Complete the maintainer confirmations in the
+   [Sonatype Central compliance checklist](../sonatype-central-compliance.md), including reviewing
+   Sonatype's then-current terms and publishing limits.
+3. Create and push a version tag such as `v0.1.0`.
+4. Publish a GitHub release for that tag.
+5. Approve the waiting `Stage Maven Central` environment deployment.
+6. Inspect the deployment in the Central Publisher Portal.
+7. Publish it only after all Central validations pass; otherwise drop it.
 
 For recovery, the workflow can be dispatched manually only when the selected Git ref is a `v*`
 version tag. The environment does not permit branches to access its secrets.

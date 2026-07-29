@@ -17,7 +17,7 @@ artifact's dependency footprint and should be re-reviewed before release.
 
 `runtime-core` resolves no dependency beyond `java.base`, verified with Gradle and `jdeps`.
 All resolved versions are captured in per-module lockfiles. The committed Gradle dependency
-verification metadata pins SHA-256 checksums for 251 artifacts across 128 components, including
+verification metadata pins SHA-256 checksums for 263 artifacts across 135 components, including
 build plugins and metadata. Fixture and test dependencies are not published as runtime API
 artifacts.
 

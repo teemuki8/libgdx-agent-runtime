@@ -146,6 +146,7 @@ publishes.
 - [Instrumenting game state](docs/guides/instrumenting-game-state.md)
 - [Decision tracing](docs/guides/decision-tracing.md)
 - [Agent tools](docs/guides/agent-tools.md)
+- [Releasing to Maven Central](docs/guides/releasing.md)
 - [Behavioral contract](docs/design-contract.md)
 - [Dependency review](docs/dependency-review.md)
 - [Roadmap](docs/roadmap.md)

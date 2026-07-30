@@ -45,3 +45,14 @@ version tag. The environment does not permit branches to access its secrets.
 
 Maven Central versions are immutable. Never retry a changed build with a version that was already
 published.
+
+## Inspect, publish, or drop a candidate
+
+The protected `Manage Maven Central` workflow can inspect Portal deployments or perform the final
+publish/drop operation. Run it from a temporary `v*` management tag so the workflow can access the
+protected environment. Publishing verifies the exact four coordinates, `VALIDATED` state, embedded
+license and notice, and maintainer metadata before calling Sonatype's immutable publish endpoint.
+
+Use `inspect` first and copy the corrected candidate's deployment UUID. Use `publish` only for the
+row marked `Corrected metadata: yes`; use `drop` for a superseded candidate. Every operation
+requires approval from the `maven-central` environment reviewer.

@@ -1,0 +1,211 @@
+name: Manage Maven Central
+
+run-name: Maven Central ${{ inputs.operation }} ${{ inputs.release_tag }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Operation to perform
+        required: true
+        default: inspect
+        type: choice
+        options:
+          - inspect
+          - publish
+          - drop
+      release_tag:
+        description: Exact release tag whose coordinates must be present
+        required: true
+        type: string
+      deployment_id:
+        description: Central deployment UUID; required for publish and drop
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: maven-central
+  cancel-in-progress: false
+
+jobs:
+  manage:
+    name: ${{ inputs.operation }} validated deployment
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: maven-central
+      url: https://central.sonatype.com/publishing/deployments
+    env:
+      MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+      MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+      MAVEN_CENTRAL_NAMESPACE: ${{ vars.MAVEN_CENTRAL_NAMESPACE }}
+      OPERATION: ${{ inputs.operation }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      DEPLOYMENT_ID: ${{ inputs.deployment_id }}
+    steps:
+      - name: Validate request
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::release_tag must be a version tag such as v0.1.0."
+            exit 1
+          fi
+          for variable_name in \
+            MAVEN_CENTRAL_USERNAME \
+            MAVEN_CENTRAL_PASSWORD \
+            MAVEN_CENTRAL_NAMESPACE
+          do
+            if [[ -z "${!variable_name}" ]]; then
+              echo "::error::$variable_name is not configured in the maven-central environment."
+              exit 1
+            fi
+          done
+          if [[ "$OPERATION" != "inspect" ]] \
+            && [[ ! "$DEPLOYMENT_ID" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+            echo "::error::A Central deployment UUID is required for $OPERATION."
+            exit 1
+          fi
+      - name: Inspect or manage deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          authorization="$(
+            printf '%s:%s' "$MAVEN_CENTRAL_USERNAME" "$MAVEN_CENTRAL_PASSWORD" \
+              | base64 \
+              | tr -d '\n'
+          )"
+          echo "::add-mask::$authorization"
+          version="${RELEASE_TAG#v}"
+          central_api="https://central.sonatype.com/api/v1/publisher"
+
+          status_for() {
+            curl \
+              --fail-with-body \
+              --silent \
+              --show-error \
+              --request POST \
+              --header "Authorization: Bearer $authorization" \
+              "$central_api/status?id=$1"
+          }
+
+          verify_candidate() {
+            local deployment_id="$1"
+            local work_directory
+            work_directory="$(mktemp -d)"
+
+            local base_path
+            base_path="io/github/teemuki8/agent-runtime-core/$version"
+            curl \
+              --fail-with-body \
+              --silent \
+              --show-error \
+              --header "Authorization: Bearer $authorization" \
+              --output "$work_directory/core.jar" \
+              "$central_api/deployment/$deployment_id/download/$base_path/agent-runtime-core-$version.jar"
+            curl \
+              --fail-with-body \
+              --silent \
+              --show-error \
+              --header "Authorization: Bearer $authorization" \
+              --output "$work_directory/core.pom" \
+              "$central_api/deployment/$deployment_id/download/$base_path/agent-runtime-core-$version.pom"
+
+            local result=0
+            unzip -Z1 "$work_directory/core.jar" \
+              | grep --quiet --fixed-strings --line-regexp META-INF/LICENSE \
+              || result=1
+            unzip -Z1 "$work_directory/core.jar" \
+              | grep --quiet --fixed-strings --line-regexp META-INF/NOTICE \
+              || result=1
+            grep --quiet '<name>Teemu Jääskeläinen</name>' "$work_directory/core.pom" || result=1
+            grep --quiet '<email>teemuki8@users.noreply.github.com</email>' \
+              "$work_directory/core.pom" \
+              || result=1
+            grep --quiet '<url>https://github.com/teemuki8</url>' "$work_directory/core.pom" \
+              || result=1
+            rm -rf "$work_directory"
+            return "$result"
+          }
+
+          if [[ "$OPERATION" == "inspect" ]]; then
+            repositories="$(
+              curl \
+                --fail-with-body \
+                --silent \
+                --show-error \
+                --header "Authorization: Bearer $authorization" \
+                "https://ossrh-staging-api.central.sonatype.com/manual/search/repositories?ip=any&profile_id=$MAVEN_CENTRAL_NAMESPACE"
+            )"
+            {
+              echo "## Maven Central candidates for $RELEASE_TAG"
+              echo
+              echo "| Deployment | State | Corrected metadata | PURLs |"
+              echo "| --- | --- | --- | --- |"
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            while IFS= read -r deployment_id; do
+              [[ -n "$deployment_id" ]] || continue
+              status="$(status_for "$deployment_id")"
+              state="$(jq -r '.deploymentState' <<<"$status")"
+              purls="$(jq -r '.purls // [] | join(\"<br>\")' <<<"$status")"
+              corrected="no"
+              if [[ "$state" == "VALIDATED" ]] && verify_candidate "$deployment_id"; then
+                corrected="yes"
+              fi
+              echo "| \`$deployment_id\` | $state | $corrected | $purls |" \
+                >> "$GITHUB_STEP_SUMMARY"
+              jq '{deploymentId, deploymentName, deploymentState, purls, errors}' <<<"$status"
+              echo "correctedMetadata=$corrected"
+            done < <(jq -r '.repositories[].portal_deployment_id // empty' <<<"$repositories")
+            exit 0
+          fi
+
+          status="$(status_for "$DEPLOYMENT_ID")"
+          state="$(jq -r '.deploymentState' <<<"$status")"
+          if [[ "$OPERATION" == "publish" ]]; then
+            if [[ "$state" != "VALIDATED" ]]; then
+              echo "::error::Deployment $DEPLOYMENT_ID is $state, not VALIDATED."
+              exit 1
+            fi
+            expected_purls="$(
+              printf '%s\n' \
+                "pkg:maven/io.github.teemuki8/agent-runtime-core@$version" \
+                "pkg:maven/io.github.teemuki8/agent-runtime-libgdx@$version" \
+                "pkg:maven/io.github.teemuki8/agent-runtime-mcp@$version" \
+                "pkg:maven/io.github.teemuki8/agent-runtime-protocol@$version" \
+                | sort
+            )"
+            actual_purls="$(jq -r '.purls[]' <<<"$status" | sort)"
+            if [[ "$actual_purls" != "$expected_purls" ]]; then
+              echo "::error::Deployment coordinates do not exactly match $RELEASE_TAG."
+              exit 1
+            fi
+            verify_candidate "$DEPLOYMENT_ID"
+            curl \
+              --fail-with-body \
+              --silent \
+              --show-error \
+              --request POST \
+              --header "Authorization: Bearer $authorization" \
+              "$central_api/deployment/$DEPLOYMENT_ID"
+            echo "Published corrected deployment $DEPLOYMENT_ID for $RELEASE_TAG." \
+              >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if [[ "$state" != "VALIDATED" && "$state" != "FAILED" ]]; then
+            echo "::error::Deployment $DEPLOYMENT_ID is $state and cannot be dropped."
+            exit 1
+          fi
+          curl \
+            --fail-with-body \
+            --silent \
+            --show-error \
+            --request DELETE \
+            --header "Authorization: Bearer $authorization" \
+            "$central_api/deployment/$DEPLOYMENT_ID"
+          echo "Dropped deployment $DEPLOYMENT_ID for $RELEASE_TAG." >> "$GITHUB_STEP_SUMMARY"

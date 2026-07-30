@@ -151,7 +151,7 @@ jobs:
               [[ -n "$deployment_id" ]] || continue
               status="$(status_for "$deployment_id")"
               state="$(jq -r '.deploymentState' <<<"$status")"
-              purls="$(jq -r '.purls // [] | join(\"<br>\")' <<<"$status")"
+              purls="$(jq -r '.purls // [] | join("<br>")' <<<"$status")"
               corrected="no"
               if [[ "$state" == "VALIDATED" ]] && verify_candidate "$deployment_id"; then
                 corrected="yes"

@@ -1,5 +1,20 @@
 # Getting started
 
+## Linux development prerequisite
+
+Install `xvfb-run` before running the repository's native fixture or bundled headless MCP launcher:
+
+```bash
+# Fedora or Nobara
+sudo dnf install xorg-x11-server-Xvfb
+
+# Debian or Ubuntu
+sudo apt-get install xvfb
+```
+
+Xvfb is required for Linux headless development workflows, not for a game that embeds the runtime
+inside its existing libGDX process and display session.
+
 ## Add dependencies
 
 During snapshot development:

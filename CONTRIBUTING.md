@@ -10,5 +10,14 @@ Run:
 ./gradlew clean check javadoc --warning-mode=fail
 ```
 
-Linux native changes must also pass the LWJGL3 smoke test under Xvfb. Keep commits focused and do
-not add unbounded fields, collections, logs, protocol commands, or MCP tools.
+Linux development requires `xvfb-run` from `xorg-x11-server-Xvfb` on Fedora/Nobara or `xvfb` on
+Debian/Ubuntu. The official Linux fixture and full gates must run under Xvfb; an active desktop
+display is not a substitute. Use:
+
+```bash
+.agents/skills/libgdx-agent-runtime-dev/scripts/verify.sh fixture
+.agents/skills/libgdx-agent-runtime-dev/scripts/verify.sh full
+```
+
+Keep commits focused and do not add unbounded fields, collections, logs, protocol commands, or MCP
+tools.

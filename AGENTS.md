@@ -62,6 +62,8 @@ workflow rather than blocking ordinary development.
 - Public Java records and methods validate and defensively copy inputs and have warning-free Javadocs.
 - Protocol JSON and MCP inputs remain closed and reject unknown fields and unsupported versions.
 - Linux-native integration changes pass the real LWJGL3 fixture under Xvfb.
+- On Linux, treat `xvfb-run` as a repository verification prerequisite. Do not substitute the
+  developer's active desktop display for the isolated fixture or full gate.
 - Broad or release-facing work passes `./gradlew clean check javadoc --warning-mode=fail` (under Xvfb
   on Linux).
 - Publishing to Maven Central is irreversible and requires explicit user authorization plus current

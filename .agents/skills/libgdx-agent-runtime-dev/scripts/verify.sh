@@ -18,7 +18,7 @@ fixture_gate() {
             echo "fixture gate requires xvfb-run on Linux" >&2
             exit 2
         fi
-        exec xvfb-run -a ./gradlew :runtime-fixtures:test --warning-mode=fail
+        exec xvfb-run -a ./gradlew :runtime-fixtures:test --rerun-tasks --warning-mode=fail
     fi
     exec ./gradlew :runtime-fixtures:testClasses --warning-mode=fail
 }

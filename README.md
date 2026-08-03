@@ -122,12 +122,35 @@ Group: `io.github.teemuki8`. Snapshot version: `0.1.0-SNAPSHOT`.
 
 ## Build
 
+### Linux prerequisite
+
+Linux repository verification, native LWJGL3 fixture tests, and the bundled headless MCP fixture
+require `xvfb-run`. An existing desktop `DISPLAY` is not a substitute for the isolated verification
+gate.
+
+On Fedora or Nobara:
+
+```bash
+sudo dnf install xorg-x11-server-Xvfb
+```
+
+On Debian or Ubuntu:
+
+```bash
+sudo apt-get install xvfb
+```
+
+This is a development and headless-fixture requirement, not an application runtime dependency.
+Applications that embed the library in their existing libGDX process and graphics session do not
+need Xvfb.
+
 ```bash
 ./gradlew clean check javadoc --warning-mode=fail
 ```
 
-Linux CI runs the real fixture under Xvfb. Windows and macOS compile the fixture but do not create a
-native graphics context on hosted runners.
+Use `.agents/skills/libgdx-agent-runtime-dev/scripts/verify.sh full` for the official local gate.
+On Linux it refuses to run without `xvfb-run` and executes the complete Gradle gate inside Xvfb.
+Windows and macOS compile the fixture but do not create a native graphics context on hosted runners.
 
 ## Security model
 

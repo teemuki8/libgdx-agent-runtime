@@ -53,6 +53,10 @@ Run `.agents/skills/libgdx-agent-runtime-dev/scripts/verify.sh <gate>` from the 
 - `full`: clean end-to-end gate; require `xvfb-run` on Linux and follow hosted CI behavior on other
   systems.
 
+On Linux, install `xvfb-run` before using `fixture` or `full`. Use package
+`xorg-x11-server-Xvfb` on Fedora/Nobara or `xvfb` on Debian/Ubuntu. Do not bypass the gate with the
+active desktop `DISPLAY`.
+
 Use a focused gate while iterating. Use `check` for cross-module code or public API changes and
 `full` for broad, native-integration, dependency, packaging, release-facing, or explicitly requested
 verification. Report exactly what ran and any skipped platform-native coverage.

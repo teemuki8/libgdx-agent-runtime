@@ -1,0 +1,4 @@
+interface:
+  display_name: "libGDX Agent Runtime Development"
+  short_description: "Develop and verify the bounded runtime library"
+  default_prompt: "Use $libgdx-agent-runtime-dev to implement and verify a repository change."

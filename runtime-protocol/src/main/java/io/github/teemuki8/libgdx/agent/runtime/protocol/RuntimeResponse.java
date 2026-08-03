@@ -6,6 +6,7 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import io.github.teemuki8.libgdx.agent.runtime.core.DecisionTrace;
 import io.github.teemuki8.libgdx.agent.runtime.core.CommandLookup;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityHistory;
+import io.github.teemuki8.libgdx.agent.runtime.core.EpochFramePage;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntitySnapshot;
 import io.github.teemuki8.libgdx.agent.runtime.core.FrameSnapshot;
 import io.github.teemuki8.libgdx.agent.runtime.core.FrameSummary;
@@ -65,11 +66,12 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         @JsonSubTypes.Type(value = Result.Events.class, name = "events"),
         @JsonSubTypes.Type(value = Result.Decisions.class, name = "decisions"),
         @JsonSubTypes.Type(value = Result.CommandStatus.class, name = "commandStatus"),
-        @JsonSubTypes.Type(value = Result.CommandCancellation.class, name = "commandCancellation")
+        @JsonSubTypes.Type(value = Result.CommandCancellation.class, name = "commandCancellation"),
+        @JsonSubTypes.Type(value = Result.EpochFrames.class, name = "epochFrames")
     })
     sealed interface Result permits Result.Sessions, Result.Capabilities, Result.Frames,
             Result.Snapshot, Result.Entity, Result.Changes, Result.Events, Result.Decisions,
-            Result.CommandStatus, Result.CommandCancellation {
+            Result.CommandStatus, Result.CommandCancellation, Result.EpochFrames {
         /** Published session catalog. */
         record Sessions(List<SessionInfo> sessions) implements Result {
             /** Copies sessions. */
@@ -146,6 +148,13 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
                 implements Result {
             public CommandCancellation {
                 Objects.requireNonNull(cancellation, "cancellation");
+            }
+        }
+
+        /** Completed frame summaries for one execution epoch. */
+        record EpochFrames(EpochFramePage page) implements Result {
+            public EpochFrames {
+                Objects.requireNonNull(page, "page");
             }
         }
     }

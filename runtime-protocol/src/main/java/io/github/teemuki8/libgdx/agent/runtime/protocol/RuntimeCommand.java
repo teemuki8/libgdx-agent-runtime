@@ -15,12 +15,13 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
     @JsonSubTypes.Type(value = RuntimeCommand.Events.class, name = "events"),
     @JsonSubTypes.Type(value = RuntimeCommand.Decisions.class, name = "decisions"),
     @JsonSubTypes.Type(value = RuntimeCommand.CommandStatus.class, name = "commandStatus"),
-    @JsonSubTypes.Type(value = RuntimeCommand.CommandCancel.class, name = "commandCancel")
+    @JsonSubTypes.Type(value = RuntimeCommand.CommandCancel.class, name = "commandCancel"),
+    @JsonSubTypes.Type(value = RuntimeCommand.EpochFrames.class, name = "epochFrames")
 })
 public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeCommand.Capabilities,
         RuntimeCommand.Frames, RuntimeCommand.Snapshot, RuntimeCommand.Entity,
         RuntimeCommand.Changes, RuntimeCommand.Events, RuntimeCommand.Decisions,
-        RuntimeCommand.CommandStatus, RuntimeCommand.CommandCancel {
+        RuntimeCommand.CommandStatus, RuntimeCommand.CommandCancel, RuntimeCommand.EpochFrames {
     /** Lists published sessions. */
     record Sessions() implements RuntimeCommand {}
 
@@ -138,6 +139,16 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
     record CommandCancel(String commandRequestId) implements RuntimeCommand {
         public CommandCancel {
             ProtocolJson.requireIdentifier(commandRequestId, "commandRequestId");
+        }
+    }
+
+    /** Reads retained completed frames belonging to one execution epoch. */
+    record EpochFrames(long executionEpochId, int limit) implements RuntimeCommand {
+        public EpochFrames {
+            if (executionEpochId < 0) {
+                throw new IllegalArgumentException("executionEpochId must be non-negative");
+            }
+            validateLimit(limit);
         }
     }
 

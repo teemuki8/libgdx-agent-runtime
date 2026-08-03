@@ -29,7 +29,7 @@ public final class RuntimeToolCatalog {
                         object(Map.of(), List.of())),
                 tool("runtime_capabilities",
                         "Report capabilities; protocolMinor defaults to frozen V1.0",
-                        sessionInput(Map.of("protocolMinor", integer(0, 2)), List.of())),
+                        sessionInput(Map.of("protocolMinor", integer(0, 3)), List.of())),
                 tool("runtime_frames",
                         "List frame summaries; fromFrame defaults to 0, toFrame to max, limit to 100",
                         queryInput(Map.of(), List.of())),
@@ -75,6 +75,14 @@ public final class RuntimeToolCatalog {
                     "Cancel an application command only before capture-thread dispatch",
                     sessionInput(Map.of("commandRequestId", string()),
                             List.of("commandRequestId"))));
+        }
+        if (supported.contains("runtime_epoch_frames")) {
+            selected.add(tool("runtime_epoch_frames",
+                    "Read bounded completed frame summaries for one execution epoch",
+                    sessionInput(Map.of(
+                            "executionEpochId", integer(0, Long.MAX_VALUE),
+                            "limit", integer(1, MAX_RESULTS)),
+                            List.of("executionEpochId"))));
         }
         selected.removeIf(tool -> !supported.contains(tool.name()));
         tools = List.copyOf(selected);

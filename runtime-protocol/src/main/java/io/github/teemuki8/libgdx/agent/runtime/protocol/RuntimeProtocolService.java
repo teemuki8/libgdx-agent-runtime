@@ -9,6 +9,7 @@ import io.github.teemuki8.libgdx.agent.runtime.core.EntityHistory;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntitySnapshot;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityType;
+import io.github.teemuki8.libgdx.agent.runtime.core.ExecutionEpochId;
 import io.github.teemuki8.libgdx.agent.runtime.core.EventQuery;
 import io.github.teemuki8.libgdx.agent.runtime.core.FrameId;
 import io.github.teemuki8.libgdx.agent.runtime.core.FrameRange;
@@ -32,10 +33,12 @@ public final class RuntimeProtocolService {
     public static final List<String> BASE_TOOLS = TOOLS;
     private static final List<String> COMMAND_TOOLS =
             List.of("runtime_command_status", "runtime_command_cancel");
+    private static final List<String> EPOCH_TOOLS = List.of("runtime_epoch_frames");
     private static final List<String> FEATURES = List.of(
             "entities", "frames", "changes", "events", "decisions");
     private static final List<ProtocolVersion> SUPPORTED_VERSIONS =
-            List.of(ProtocolVersion.V1, ProtocolVersion.V1_1, ProtocolVersion.V1_2);
+            List.of(ProtocolVersion.V1, ProtocolVersion.V1_1, ProtocolVersion.V1_2,
+                    ProtocolVersion.V1_3);
     private final RuntimeRegistry registry;
 
     /** Creates a service over an isolated or global registry. */
@@ -47,8 +50,9 @@ public final class RuntimeProtocolService {
     public List<String> toolNames() {
         boolean commandDispatch = registry.sessions().stream()
                 .anyMatch(runtime -> runtime.commands().isPresent());
-        return commandDispatch ? Stream.concat(BASE_TOOLS.stream(), COMMAND_TOOLS.stream()).toList()
-                : BASE_TOOLS;
+        Stream<String> tools = Stream.concat(BASE_TOOLS.stream(), EPOCH_TOOLS.stream());
+        return commandDispatch ? Stream.concat(tools, COMMAND_TOOLS.stream()).toList()
+                : tools.toList();
     }
 
     /** Executes one request without exposing local exceptions or stack traces. */
@@ -57,7 +61,7 @@ public final class RuntimeProtocolService {
         if (!SUPPORTED_VERSIONS.contains(request.version())) {
             return failure(request, ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                     "protocol version is unsupported", Map.of(
-                            "supported", "1.0,1.1,1.2",
+                            "supported", "1.0,1.1,1.2,1.3",
                             "requested", request.version().major() + "." + request.version().minor()));
         }
         try {
@@ -66,6 +70,11 @@ public final class RuntimeProtocolService {
                     && !ProtocolVersion.V1_2.equals(request.version())) {
                 throw new ProtocolFailure(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                         "command requires protocol version 1.2", Map.of());
+            }
+            if (request.command() instanceof RuntimeCommand.EpochFrames
+                    && !ProtocolVersion.V1_3.equals(request.version())) {
+                throw new ProtocolFailure(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
+                        "command requires protocol version 1.3", Map.of());
             }
             return new RuntimeResponse.Success(
                     request.version(), request.requestId(), executeCommand(request));
@@ -113,6 +122,7 @@ public final class RuntimeProtocolService {
                     new RuntimeResponse.Result.CommandCancellation(
                             runtime.commands().orElseThrow(() -> capabilityUnavailable(runtime))
                                     .cancel(command.commandRequestId()));
+            case RuntimeCommand.EpochFrames command -> epochFrames(runtime, command);
             case RuntimeCommand.Sessions ignored ->
                     throw new AssertionError("sessions handled before runtime lookup");
         };
@@ -132,7 +142,7 @@ public final class RuntimeProtocolService {
                 .map(RuntimeCapability::id)
                 .toList();
         return new RuntimeResponse.Result.Capabilities(
-                version, ProtocolVersion.V1_2.equals(version) ? toolsFor(runtime) : BASE_TOOLS,
+                version, toolsFor(runtime, version),
                 enabled, runtime.configuration().limits(),
                 runtime.latestFrame().map(frame -> frame.frameId().value()), runtime.status(),
                 Optional.of(new CapabilityReport(RuntimeVersion.current(), details)));
@@ -176,7 +186,7 @@ public final class RuntimeProtocolService {
                                 "queryResults", (long) limits.queryResults(),
                                 "retainedFrames", (long) limits.retainedFrames()),
                         List.of("exact", "latest", "range"), List.of())));
-        if (ProtocolVersion.V1_2.equals(version)) {
+        if (ProtocolVersion.V1_2.equals(version) || ProtocolVersion.V1_3.equals(version)) {
             boolean available = runtime.commands().isPresent();
             Map<String, Long> commandLimits = runtime.commands().map(commands -> Map.of(
                     "queuedCommands", (long) commands.limits().queuedCommands(),
@@ -196,13 +206,44 @@ public final class RuntimeProtocolService {
                     List.of("commandStatus", "commandCancel"), COMMAND_TOOLS, commandLimits,
                     List.of("application-owned", "at-most-once", "bounded"), List.of()));
         }
+        if (ProtocolVersion.V1_3.equals(version)) {
+            details.add(new RuntimeCapability(
+                    "execution-epochs", ProtocolVersion.V1_3,
+                    runtime.configuration().enabled()
+                            ? RuntimeCapability.Availability.AVAILABLE
+                            : RuntimeCapability.Availability.UNAVAILABLE,
+                    runtime.configuration().enabled() ? Optional.empty()
+                            : Optional.of("runtime-disabled"),
+                    RuntimeCapability.Access.READ_ONLY,
+                    List.of("AgentRuntime#currentEpoch", "AgentRuntime#frames",
+                            "AgentRuntime#startEpoch"),
+                    List.of("epochFrames"), EPOCH_TOOLS, Map.of(
+                            "queryResults", (long) limits.queryResults(),
+                            "retainedFrames", (long) limits.retainedFrames()),
+                    List.of("baseline", "epoch-filter"), List.of("frames")));
+        }
         return List.copyOf(details);
     }
 
-    private static List<String> toolsFor(AgentRuntime runtime) {
-        return runtime.commands().isPresent()
-                ? Stream.concat(BASE_TOOLS.stream(), COMMAND_TOOLS.stream()).toList()
-                : BASE_TOOLS;
+    private static List<String> toolsFor(AgentRuntime runtime, ProtocolVersion version) {
+        Stream<String> tools = BASE_TOOLS.stream();
+        if (ProtocolVersion.V1_3.equals(version)) {
+            tools = Stream.concat(tools, EPOCH_TOOLS.stream());
+        }
+        return runtime.commands().isPresent() && (ProtocolVersion.V1_2.equals(version)
+                || ProtocolVersion.V1_3.equals(version))
+                ? Stream.concat(tools, COMMAND_TOOLS.stream()).toList() : tools.toList();
+    }
+
+    private static RuntimeResponse.Result epochFrames(
+            AgentRuntime runtime, RuntimeCommand.EpochFrames command) {
+        ExecutionEpochId epochId = new ExecutionEpochId(command.executionEpochId());
+        if (epochId.compareTo(runtime.currentEpoch()) > 0) {
+            throw new ProtocolFailure(ProtocolErrorCode.INVALID_QUERY,
+                    "execution epoch does not exist", Map.of(
+                            "executionEpochId", Long.toString(command.executionEpochId())));
+        }
+        return new RuntimeResponse.Result.EpochFrames(runtime.frames(epochId, command.limit()));
     }
 
     private static ProtocolFailure capabilityUnavailable(AgentRuntime runtime) {
@@ -249,7 +290,8 @@ public final class RuntimeProtocolService {
         boolean hasMore = matches.size() > command.limit();
         List<EntitySnapshot> retained = matches.stream().limit(command.limit()).toList();
         FrameSnapshot result = new FrameSnapshot(
-                source.sessionId(), source.frameId(), source.monotonicTimeNanos(),
+                source.sessionId(), source.frameId(), source.executionEpochId(),
+                source.baselineKind(), source.monotonicTimeNanos(),
                 source.deltaNanos(), source.capturedAt(), retained,
                 source.changes().stream()
                         .filter(change -> retained.stream()

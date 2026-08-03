@@ -15,6 +15,8 @@ import io.github.teemuki8.libgdx.agent.runtime.core.QueryPage;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeEvent;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeLimits;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeStatus;
+import io.github.teemuki8.libgdx.agent.runtime.core.ScenarioDescriptor;
+import io.github.teemuki8.libgdx.agent.runtime.core.ScenarioReset;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -67,11 +69,14 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         @JsonSubTypes.Type(value = Result.Decisions.class, name = "decisions"),
         @JsonSubTypes.Type(value = Result.CommandStatus.class, name = "commandStatus"),
         @JsonSubTypes.Type(value = Result.CommandCancellation.class, name = "commandCancellation"),
-        @JsonSubTypes.Type(value = Result.EpochFrames.class, name = "epochFrames")
+        @JsonSubTypes.Type(value = Result.EpochFrames.class, name = "epochFrames"),
+        @JsonSubTypes.Type(value = Result.Scenarios.class, name = "scenarios"),
+        @JsonSubTypes.Type(value = Result.Reset.class, name = "reset")
     })
     sealed interface Result permits Result.Sessions, Result.Capabilities, Result.Frames,
             Result.Snapshot, Result.Entity, Result.Changes, Result.Events, Result.Decisions,
-            Result.CommandStatus, Result.CommandCancellation, Result.EpochFrames {
+            Result.CommandStatus, Result.CommandCancellation, Result.EpochFrames,
+            Result.Scenarios, Result.Reset {
         /** Published session catalog. */
         record Sessions(List<SessionInfo> sessions) implements Result {
             /** Copies sessions. */
@@ -155,6 +160,23 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         record EpochFrames(EpochFramePage page) implements Result {
             public EpochFrames {
                 Objects.requireNonNull(page, "page");
+            }
+        }
+
+        /** Stable metadata for registered scenarios. */
+        record Scenarios(List<ScenarioDescriptor> scenarios) implements Result {
+            public Scenarios {
+                scenarios = List.copyOf(scenarios);
+                if (scenarios.size() > ProtocolJson.MAX_RESULT_ITEMS) {
+                    throw new IllegalArgumentException("too many protocol scenarios");
+                }
+            }
+        }
+
+        /** Correlated reset status and optional completed baseline evidence. */
+        record Reset(ScenarioReset reset) implements Result {
+            public Reset {
+                Objects.requireNonNull(reset, "reset");
             }
         }
     }

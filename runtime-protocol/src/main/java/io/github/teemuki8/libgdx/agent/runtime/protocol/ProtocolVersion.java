@@ -10,8 +10,10 @@ public record ProtocolVersion(int major, int minor) {
     public static final ProtocolVersion V1_2 = new ProtocolVersion(1, 2);
     /** Execution-epoch and baseline protocol version. */
     public static final ProtocolVersion V1_3 = new ProtocolVersion(1, 3);
+    /** Explicit resettable-scenario protocol version. */
+    public static final ProtocolVersion V1_4 = new ProtocolVersion(1, 4);
     /** Latest implemented protocol version. */
-    public static final ProtocolVersion CURRENT = V1_3;
+    public static final ProtocolVersion CURRENT = V1_4;
 
     /** Validates version components. */
     public ProtocolVersion {

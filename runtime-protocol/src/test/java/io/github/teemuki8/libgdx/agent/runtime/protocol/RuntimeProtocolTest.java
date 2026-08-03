@@ -90,7 +90,7 @@ final class RuntimeProtocolTest {
                 service.execute(new RuntimeRequest(
                         new ProtocolVersion(2, 0), "v", null, new RuntimeCommand.Sessions())));
         assertEquals(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED, version.error().code());
-        assertEquals("1.0,1.1,1.2,1.3", version.error().details().get("supported"));
+        assertEquals("1.0,1.1,1.2,1.3,1.4", version.error().details().get("supported"));
 
         RuntimeResponse.Failure missing = assertInstanceOf(RuntimeResponse.Failure.class,
                 service.execute(new RuntimeRequest(ProtocolVersion.V1, "s", "missing",
@@ -374,6 +374,48 @@ final class RuntimeProtocolTest {
             assertEquals(1, changes.page().items().size());
             assertEquals("health",
                     changes.page().items().getFirst().property().orElseThrow());
+        }
+    }
+
+    @Test
+    void registeredScenarioCatalogAndResetReturnBaselineEvidence() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("scenarios"))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .build();
+        runtime.scenarios().register("basic-combat", "Known state", () -> {});
+        runtime.start();
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime)) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            RuntimeProtocolService service = new RuntimeProtocolService(registry);
+            RuntimeResponse.Result.Scenarios catalog = assertInstanceOf(
+                    RuntimeResponse.Result.Scenarios.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V1_4, "list", "scenarios",
+                                    new RuntimeCommand.Scenarios()))).result());
+            assertEquals("basic-combat", catalog.scenarios().getFirst().id());
+
+            RuntimeCommand.Reset command = new RuntimeCommand.Reset(
+                    "basic-combat", "reset-1", 1_000);
+            RuntimeResponse.Result.Reset queued = assertInstanceOf(
+                    RuntimeResponse.Result.Reset.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V1_4, "submit", "scenarios",
+                                    command))).result());
+            assertEquals(CommandState.QUEUED,
+                    queued.reset().command().status().orElseThrow().state());
+            queue.removeFirst().run();
+            RuntimeResponse.Result.Reset completed = assertInstanceOf(
+                    RuntimeResponse.Result.Reset.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V1_4, "poll", "scenarios",
+                                    command))).result());
+            assertEquals(1, completed.reset().baselineFrameId().orElseThrow().value());
+            assertTrue(service.toolNames().containsAll(
+                    List.of("runtime_scenarios", "runtime_reset")));
         }
     }
 

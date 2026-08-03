@@ -29,7 +29,7 @@ public final class RuntimeToolCatalog {
                         object(Map.of(), List.of())),
                 tool("runtime_capabilities",
                         "Report capabilities; protocolMinor defaults to frozen V1.0",
-                        sessionInput(Map.of("protocolMinor", integer(0, 3)), List.of())),
+                        sessionInput(Map.of("protocolMinor", integer(0, 4)), List.of())),
                 tool("runtime_frames",
                         "List frame summaries; fromFrame defaults to 0, toFrame to max, limit to 100",
                         queryInput(Map.of(), List.of())),
@@ -83,6 +83,20 @@ public final class RuntimeToolCatalog {
                             "executionEpochId", integer(0, Long.MAX_VALUE),
                             "limit", integer(1, MAX_RESULTS)),
                             List.of("executionEpochId"))));
+        }
+        if (supported.contains("runtime_scenarios")) {
+            selected.add(tool("runtime_scenarios",
+                    "List explicitly registered application-owned scenarios",
+                    sessionInput(Map.of(), List.of())));
+        }
+        if (supported.contains("runtime_reset")) {
+            selected.add(tool("runtime_reset",
+                    "Submit or poll an idempotently correlated scenario reset",
+                    sessionInput(Map.of(
+                            "scenarioId", string(),
+                            "resetRequestId", string(),
+                            "timeoutNanos", integer(1, Long.MAX_VALUE)),
+                            List.of("scenarioId", "resetRequestId", "timeoutNanos"))));
         }
         selected.removeIf(tool -> !supported.contains(tool.name()));
         tools = List.copyOf(selected);

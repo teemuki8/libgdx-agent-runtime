@@ -9,7 +9,7 @@ strict closed input schemas (`additionalProperties: false`), and a maximum reque
 | Tool | Required fields | Optional fields |
 | --- | --- | --- |
 | `runtime_sessions` | none | none |
-| `runtime_capabilities` | `sessionId` | `protocolMinor` (`0` through `3`; default `0`) |
+| `runtime_capabilities` | `sessionId` | `protocolMinor` (`0` through `4`; default `0`) |
 | `runtime_frames` | `sessionId` | `fromFrame`, `toFrame`, `limit` |
 | `runtime_snapshot` | `sessionId` | `frameId`, `entityId`, `entityIdPrefix`, `entityType`, `entityTypePrefix`, `limit` |
 | `runtime_entity` | `sessionId`, `entityId` | `fromFrame`, `toFrame`, `limit` |
@@ -19,9 +19,14 @@ strict closed input schemas (`additionalProperties: false`), and a maximum reque
 | `runtime_command_status`* | `sessionId`, `commandRequestId` | none |
 | `runtime_command_cancel`* | `sessionId`, `commandRequestId` | none |
 | `runtime_epoch_frames` | `sessionId`, `executionEpochId` | `limit` |
+| `runtime_scenarios`** | `sessionId` | none |
+| `runtime_reset`** | `sessionId`, `scenarioId`, `resetRequestId`, `timeoutNanos` | none |
 
 \* Command tools are included in the server-start catalog only when at least one published runtime
 has explicitly registered application command dispatch. They use protocol 1.2.
+
+\*\* Scenario tools are included only when at least one published runtime explicitly registers a
+scenario. Reset additionally requires application command dispatch. They use protocol 1.4.
 
 Every identifier is a nonblank string of at most 256 UTF-16 code units. Frame fields are
 non-negative integers. Prefix matching is available only where the schema has an explicit prefix
@@ -29,9 +34,15 @@ boolean; there are no regular expressions or generic expressions.
 
 ## Protocol and capabilities
 
-Protocol 1.0 retains the exact original capabilities result. Set `protocolMinor` to `1` or `2` only
+Protocol 1.0 retains the exact original capabilities result. Set `protocolMinor` from `1` to `4`
 on `runtime_capabilities` to request extension metadata. The read-only MCP tools continue to use
-1.0. Command status and cancellation use protocol 1.2; epoch queries use protocol 1.3.
+1.0. Command status and cancellation use protocol 1.2; epoch queries use protocol 1.3; scenario
+catalog and reset use protocol 1.4.
+
+Scenario resets are idempotently correlated by `resetRequestId`. The first response may be queued;
+repeat the same reset request or read `runtime_command_status` until it is terminal. A successful
+reset includes the new `executionEpochId` and completed `baselineFrameId`. Read
+`runtime_scenarios` instead of inventing scenario IDs.
 
 The 1.1 result adds `capabilityReport`, containing the runtime artifact version and stable capability
 descriptors ordered by ID. Each descriptor reports availability, an unavailable reason when needed,

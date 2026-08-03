@@ -36,6 +36,10 @@ This document makes lifecycle and evidence edge cases explicit.
 20. Every frame identifies an execution epoch. Frame zero is the `INITIAL` baseline of epoch zero;
     successful reset/restore baselines increment the epoch and frame ID without diffing across the
     discontinuity. Protocol `1.3` exposes bounded epoch-filtered frame queries.
+21. Resettable scenarios are application-owned callbacks registered under stable IDs with optional
+    bounded descriptions. Resets run through the application dispatcher, start a new
+    `SCENARIO_RESET` epoch, return its completed baseline frame, and never depend on reflection or
+    arbitrary object serialization.
 
 Closing during a frame is rejected. `frame` completes capture and rethrows callback failure.
 Disabled runtimes retain no providers or frames and perform no serialization.

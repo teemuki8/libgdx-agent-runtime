@@ -32,6 +32,7 @@ public final class AgentRuntime implements AutoCloseable {
     private final Clock wallClock;
     private final Thread captureThread;
     private final Optional<CommandDispatch> commands;
+    private final ScenarioRegistry scenarios;
     private final EntityRegistry entities = new EntityRegistry(this);
     private final LinkedHashMap<EntityId, InspectableEntity> staticEntities = new LinkedHashMap<>();
     private final LinkedHashMap<String, Supplier<? extends Stream<InspectableEntity>>> sources =
@@ -65,6 +66,7 @@ public final class AgentRuntime implements AutoCloseable {
                 .filter(ignored -> configuration.enabled()).map(dispatcher ->
                 new CommandDispatch(dispatcher, builder.commandDispatchLimits,
                         monotonicClock, captureThread));
+        scenarios = new ScenarioRegistry(this, builder.scenarioLimits);
     }
 
     /** Creates a runtime builder owned by the calling thread by default. */
@@ -95,6 +97,11 @@ public final class AgentRuntime implements AutoCloseable {
     /** Returns command dispatch only when the application explicitly configured it. */
     public Optional<CommandDispatch> commands() {
         return commands;
+    }
+
+    /** Returns the explicit registry for application-owned resettable scenarios. */
+    public ScenarioRegistry scenarios() {
+        return scenarios;
     }
 
     /**
@@ -751,6 +758,20 @@ public final class AgentRuntime implements AutoCloseable {
         }
     }
 
+    void requireScenarioRegistration() {
+        requireMutableRegistration();
+    }
+
+    FrameId executeScenarioReset(Runnable reset) {
+        requireCaptureThread();
+        requireRunning();
+        if (activeFrame != null) {
+            throw lifecycle("a scenario cannot reset while a frame is open");
+        }
+        reset.run();
+        return startEpoch(BaselineKind.SCENARIO_RESET);
+    }
+
     private void requireCaptureThread() {
         if (Thread.currentThread() != captureThread) {
             throw new AgentRuntimeException(
@@ -984,6 +1005,7 @@ public final class AgentRuntime implements AutoCloseable {
         private ApplicationCommandDispatcher commandDispatcher;
         private CommandDispatchLimits commandDispatchLimits =
                 CommandDispatchLimits.developmentDefaults();
+        private ScenarioLimits scenarioLimits = ScenarioLimits.developmentDefaults();
 
         private Builder() {}
 
@@ -1026,6 +1048,12 @@ public final class AgentRuntime implements AutoCloseable {
         /** Sets hard queue, outcome, request-ID, and diagnostic bounds. */
         public Builder commandDispatchLimits(CommandDispatchLimits value) {
             commandDispatchLimits = Objects.requireNonNull(value, "commandDispatchLimits");
+            return this;
+        }
+
+        /** Configures hard bounds for application-registered scenarios. */
+        public Builder scenarioLimits(ScenarioLimits value) {
+            scenarioLimits = Objects.requireNonNull(value, "value");
             return this;
         }
 

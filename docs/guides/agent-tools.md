@@ -9,7 +9,7 @@ strict closed input schemas (`additionalProperties: false`), and a maximum reque
 | Tool | Required fields | Optional fields |
 | --- | --- | --- |
 | `runtime_sessions` | none | none |
-| `runtime_capabilities` | `sessionId` | `protocolMinor` (`0` through `4`; default `0`) |
+| `runtime_capabilities` | `sessionId` | `protocolMinor` (`0` through `5`; default `0`) |
 | `runtime_frames` | `sessionId` | `fromFrame`, `toFrame`, `limit` |
 | `runtime_snapshot` | `sessionId` | `frameId`, `entityId`, `entityIdPrefix`, `entityType`, `entityTypePrefix`, `limit` |
 | `runtime_entity` | `sessionId`, `entityId` | `fromFrame`, `toFrame`, `limit` |
@@ -21,6 +21,9 @@ strict closed input schemas (`additionalProperties: false`), and a maximum reque
 | `runtime_epoch_frames` | `sessionId`, `executionEpochId` | `limit` |
 | `runtime_scenarios`** | `sessionId` | none |
 | `runtime_reset`** | `sessionId`, `scenarioId`, `resetRequestId`, `timeoutNanos` | none |
+| `runtime_attributed_changes` | `sessionId` | range, entity/property filters, `sourceSubsystem`, `correlationId`, `limit` |
+| `runtime_attributed_events` | `sessionId` | range, event/entity filters, `sourceSubsystem`, `correlationId`, `limit` |
+| `runtime_attributed_decisions` | `sessionId` | range, decision filters, `sourceSubsystem`, `correlationId`, `limit` |
 
 \* Command tools are included in the server-start catalog only when at least one published runtime
 has explicitly registered application command dispatch. They use protocol 1.2.
@@ -34,10 +37,13 @@ boolean; there are no regular expressions or generic expressions.
 
 ## Protocol and capabilities
 
-Protocol 1.0 retains the exact original capabilities result. Set `protocolMinor` from `1` to `4`
+Protocol 1.0 retains the exact original capabilities result. Set `protocolMinor` from `1` to `5`
 on `runtime_capabilities` to request extension metadata. The read-only MCP tools continue to use
 1.0. Command status and cancellation use protocol 1.2; epoch queries use protocol 1.3; scenario
 catalog and reset use protocol 1.4.
+Attributed fact queries use protocol 1.5. Their `sourceSubsystem` is separate from the event `source`
+entity ID. A `sourceLocation` in output is an unverified, bounded application-provided label;
+correlation indicates association, not inferred causality.
 
 Scenario resets are idempotently correlated by `resetRequestId`. The first response may be queued;
 repeat the same reset request or read `runtime_command_status` until it is terminal. A successful

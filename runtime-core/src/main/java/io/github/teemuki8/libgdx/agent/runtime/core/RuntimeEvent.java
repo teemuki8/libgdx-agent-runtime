@@ -13,6 +13,7 @@ public record RuntimeEvent(
         EventType type,
         Optional<EntityId> subject,
         Optional<EntityId> source,
+        FactMetadata metadata,
         List<RuntimeValue.Field> attributes,
         List<Truncation> truncations) {
     /** Validates and orders attributes. */
@@ -22,6 +23,7 @@ public record RuntimeEvent(
         Objects.requireNonNull(type, "type");
         subject = Objects.requireNonNull(subject, "subject");
         source = Objects.requireNonNull(source, "source");
+        Objects.requireNonNull(metadata, "metadata");
         var copy = new ArrayList<>(Objects.requireNonNull(attributes, "attributes"));
         copy.sort(Comparator.comparing(RuntimeValue.Field::name));
         for (int index = 1; index < copy.size(); index++) {
@@ -32,5 +34,12 @@ public record RuntimeEvent(
         }
         attributes = List.copyOf(copy);
         truncations = List.copyOf(Objects.requireNonNull(truncations, "truncations"));
+    }
+
+    /** Compatibility constructor for an event without fact metadata. */
+    public RuntimeEvent(EventId id, FrameId frameId, EventType type,
+            Optional<EntityId> subject, Optional<EntityId> source,
+            List<RuntimeValue.Field> attributes, List<Truncation> truncations) {
+        this(id, frameId, type, subject, source, FactMetadata.empty(), attributes, truncations);
     }
 }

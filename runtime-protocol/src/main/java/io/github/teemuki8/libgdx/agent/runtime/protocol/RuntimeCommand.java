@@ -18,13 +18,17 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
     @JsonSubTypes.Type(value = RuntimeCommand.CommandCancel.class, name = "commandCancel"),
     @JsonSubTypes.Type(value = RuntimeCommand.EpochFrames.class, name = "epochFrames"),
     @JsonSubTypes.Type(value = RuntimeCommand.Scenarios.class, name = "scenarios"),
-    @JsonSubTypes.Type(value = RuntimeCommand.Reset.class, name = "reset")
+    @JsonSubTypes.Type(value = RuntimeCommand.Reset.class, name = "reset"),
+    @JsonSubTypes.Type(value = RuntimeCommand.AttributedChanges.class, name = "attributedChanges"),
+    @JsonSubTypes.Type(value = RuntimeCommand.AttributedEvents.class, name = "attributedEvents"),
+    @JsonSubTypes.Type(value = RuntimeCommand.AttributedDecisions.class, name = "attributedDecisions")
 })
 public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeCommand.Capabilities,
         RuntimeCommand.Frames, RuntimeCommand.Snapshot, RuntimeCommand.Entity,
         RuntimeCommand.Changes, RuntimeCommand.Events, RuntimeCommand.Decisions,
         RuntimeCommand.CommandStatus, RuntimeCommand.CommandCancel, RuntimeCommand.EpochFrames,
-        RuntimeCommand.Scenarios, RuntimeCommand.Reset {
+        RuntimeCommand.Scenarios, RuntimeCommand.Reset, RuntimeCommand.AttributedChanges,
+        RuntimeCommand.AttributedEvents, RuntimeCommand.AttributedDecisions {
     /** Lists published sessions. */
     record Sessions() implements RuntimeCommand {}
 
@@ -167,6 +171,52 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
             if (timeoutNanos <= 0) {
                 throw new IllegalArgumentException("timeoutNanos must be positive");
             }
+        }
+    }
+
+    /** Queries property changes with exact explicit-metadata filters. */
+    record AttributedChanges(long fromFrame, long toFrame, String entityId, String entityType,
+            String property, String sourceSubsystem, String correlationId, int limit)
+            implements RuntimeCommand {
+        public AttributedChanges {
+            validateRange(fromFrame, toFrame);
+            requireOptionalIdentifier(entityId, "entityId");
+            requireOptionalIdentifier(entityType, "entityType");
+            requireOptionalIdentifier(property, "property");
+            requireOptionalIdentifier(sourceSubsystem, "sourceSubsystem");
+            requireOptionalIdentifier(correlationId, "correlationId");
+            validateLimit(limit);
+        }
+    }
+
+    /** Queries events with exact explicit-metadata filters. */
+    record AttributedEvents(long fromFrame, long toFrame, String eventType,
+            boolean eventTypePrefix, String subject, String source, String sourceSubsystem,
+            String correlationId, int limit) implements RuntimeCommand {
+        public AttributedEvents {
+            validateRange(fromFrame, toFrame);
+            requireOptionalIdentifier(eventType, "eventType");
+            requireOptionalIdentifier(subject, "subject");
+            requireOptionalIdentifier(source, "source");
+            requireOptionalIdentifier(sourceSubsystem, "sourceSubsystem");
+            requireOptionalIdentifier(correlationId, "correlationId");
+            validateLimit(limit);
+        }
+    }
+
+    /** Queries decisions with exact explicit-metadata filters. */
+    record AttributedDecisions(long fromFrame, long toFrame, String decisionType, String actor,
+            String chosenCandidate, String reasonCode, String sourceSubsystem,
+            String correlationId, int limit) implements RuntimeCommand {
+        public AttributedDecisions {
+            validateRange(fromFrame, toFrame);
+            requireOptionalIdentifier(decisionType, "decisionType");
+            requireOptionalIdentifier(actor, "actor");
+            requireOptionalIdentifier(chosenCandidate, "chosenCandidate");
+            requireOptionalIdentifier(reasonCode, "reasonCode");
+            requireOptionalIdentifier(sourceSubsystem, "sourceSubsystem");
+            requireOptionalIdentifier(correlationId, "correlationId");
+            validateLimit(limit);
         }
     }
 

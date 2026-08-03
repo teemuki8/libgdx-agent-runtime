@@ -90,7 +90,7 @@ final class RuntimeProtocolTest {
                 service.execute(new RuntimeRequest(
                         new ProtocolVersion(2, 0), "v", null, new RuntimeCommand.Sessions())));
         assertEquals(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED, version.error().code());
-        assertEquals("1.0,1.1,1.2,1.3,1.4", version.error().details().get("supported"));
+        assertEquals("1.0,1.1,1.2,1.3,1.4,1.5", version.error().details().get("supported"));
 
         RuntimeResponse.Failure missing = assertInstanceOf(RuntimeResponse.Failure.class,
                 service.execute(new RuntimeRequest(ProtocolVersion.V1, "s", "missing",
@@ -416,6 +416,33 @@ final class RuntimeProtocolTest {
             assertEquals(1, completed.reset().baselineFrameId().orElseThrow().value());
             assertTrue(service.toolNames().containsAll(
                     List.of("runtime_scenarios", "runtime_reset")));
+        }
+    }
+
+    @Test
+    void attributedEventQueryRoundTripsWithoutChangingEventSourceMeaning() {
+        AgentRuntime runtime = AgentRuntime.builder().sessionId(SessionId.of("facts")).build();
+        runtime.start();
+        runtime.frame(1, () -> runtime.emit(EventSpec.type("damage.applied")
+                .source(EntityId.of("attacker"))
+                .sourceSubsystem("combat")
+                .sourceLocation("DamageSystem.java:84")
+                .correlationId("attack-172")));
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime)) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            RuntimeResponse.Result.Events result = assertInstanceOf(
+                    RuntimeResponse.Result.Events.class,
+                    assertInstanceOf(RuntimeResponse.Success.class,
+                            new RuntimeProtocolService(registry).execute(new RuntimeRequest(
+                                    ProtocolVersion.V1_5, "facts", "facts",
+                                    new RuntimeCommand.AttributedEvents(0, 1, null, false,
+                                            null, "attacker", "combat", "attack-172", 10))))
+                            .result());
+            assertEquals("attacker", result.page().items().getFirst()
+                    .source().orElseThrow().value());
+            assertEquals("DamageSystem.java:84", result.page().items().getFirst().metadata()
+                    .sourceLocation().orElseThrow());
         }
     }
 

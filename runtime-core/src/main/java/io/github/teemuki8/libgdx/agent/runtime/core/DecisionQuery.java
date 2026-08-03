@@ -10,6 +10,8 @@ public record DecisionQuery(
         Optional<EntityId> actor,
         Optional<EntityId> chosenCandidate,
         Optional<String> reasonCode,
+        Optional<String> sourceSubsystem,
+        Optional<String> correlationId,
         int limit) {
     /** Validates filters and limit. */
     public DecisionQuery {
@@ -19,8 +21,19 @@ public record DecisionQuery(
         chosenCandidate = Objects.requireNonNull(chosenCandidate, "chosenCandidate");
         reasonCode = Objects.requireNonNull(reasonCode, "reasonCode");
         reasonCode.ifPresent(value -> IdentifierSupport.validate(value, "reason code"));
+        sourceSubsystem = Objects.requireNonNull(sourceSubsystem, "sourceSubsystem");
+        correlationId = Objects.requireNonNull(correlationId, "correlationId");
+        sourceSubsystem.ifPresent(value -> IdentifierSupport.validate(value, "source subsystem"));
+        correlationId.ifPresent(value -> IdentifierSupport.validate(value, "correlation id"));
         if (limit <= 0) {
             throw new IllegalArgumentException("limit must be positive");
         }
+    }
+
+    /** Compatibility constructor without metadata filters. */
+    public DecisionQuery(FrameRange range, Optional<DecisionType> type, Optional<EntityId> actor,
+            Optional<EntityId> chosenCandidate, Optional<String> reasonCode, int limit) {
+        this(range, type, actor, chosenCandidate, reasonCode, Optional.empty(), Optional.empty(),
+                limit);
     }
 }

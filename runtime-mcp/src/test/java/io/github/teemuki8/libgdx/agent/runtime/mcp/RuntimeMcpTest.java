@@ -14,6 +14,8 @@ import io.github.teemuki8.libgdx.agent.runtime.core.DecisionType;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityType;
 import io.github.teemuki8.libgdx.agent.runtime.core.EventSpec;
+import io.github.teemuki8.libgdx.agent.runtime.core.FactMetadata;
+import io.github.teemuki8.libgdx.agent.runtime.core.ChangeCause;
 import io.github.teemuki8.libgdx.agent.runtime.core.Reason;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import io.github.teemuki8.libgdx.agent.runtime.core.SessionId;
@@ -152,7 +154,7 @@ final class RuntimeMcpTest {
             assertEquals(runtime.sessionId(), publication.sessionId());
             RuntimeToolCatalog catalog = new RuntimeToolCatalog(
                     new RuntimeProtocolService(registry).toolNames());
-            assertEquals(11, catalog.tools().size());
+            assertEquals(14, catalog.tools().size());
             assertEquals(false,
                     catalog.tool("runtime_command_cancel").inputSchema()
                             .get("additionalProperties"));
@@ -240,6 +242,28 @@ final class RuntimeMcpTest {
     }
 
     @Test
+    void attributionToolsUseExactClosedMetadataFilters() {
+        Fixture fixture = fixture();
+        try (PublishedRuntime publication = fixture.registry.publish(fixture.runtime);
+                RuntimeToolHandler handler =
+                        new RuntimeToolHandler(new RuntimeProtocolService(fixture.registry))) {
+            assertEquals(fixture.runtime.sessionId(), publication.sessionId());
+            for (String tool : List.of("runtime_attributed_changes",
+                    "runtime_attributed_events", "runtime_attributed_decisions")) {
+                McpSchema.CallToolResult result = handler.handle(call(tool, Map.of(
+                        "sessionId", "mcp-fixture", "sourceSubsystem", "combat",
+                        "correlationId", "attack-172"))).block(Duration.ofSeconds(5));
+                assertFalse(result.isError(), tool);
+                assertTrue(result.structuredContent().toString().contains("attack-172"), tool);
+                McpSchema.CallToolResult rejected = handler.handle(call(tool, Map.of(
+                        "sessionId", "mcp-fixture", "sourceSubsystem", "combat",
+                        "expression", "getClass()"))).block(Duration.ofSeconds(5));
+                assertTrue(rejected.isError(), tool);
+            }
+        }
+    }
+
+    @Test
     @Timeout(10)
     void stdioServerStartsAndShutsDownCleanlyAtEof() {
         RuntimeMcpServer server = RuntimeMcpServer.open(
@@ -269,13 +293,20 @@ final class RuntimeMcpTest {
         runtime.frame(1, () -> {
             runtime.emit(EventSpec.type("damage.applied")
                     .subject(EntityId.of("enemy-1"))
+                    .sourceSubsystem("combat")
+                    .sourceLocation("DamageSystem.java:84")
+                    .correlationId("attack-172")
                     .attribute("amount", RuntimeValues.integer(25)));
+            FactMetadata metadata = FactMetadata.empty().withSourceSubsystem("combat")
+                    .withCorrelationId("attack-172");
             try (DecisionScope decision = runtime.beginDecision(
-                    DecisionType.of("target-selection"), EntityId.of("tower-1"))) {
+                    DecisionType.of("target-selection"), EntityId.of("tower-1"), metadata)) {
                 decision.reject(EntityId.of("enemy-2"), Reason.of("out-of-range"));
                 decision.accept(EntityId.of("enemy-1"));
                 decision.choose(EntityId.of("enemy-1"), Reason.of("nearest-in-range"));
             }
+            runtime.causeNextChange(EntityId.of("enemy-1"), "health",
+                    ChangeCause.semantic("damage").withMetadata(metadata));
             health[0] = 75;
         });
         return new Fixture(runtime, new RuntimeRegistry());

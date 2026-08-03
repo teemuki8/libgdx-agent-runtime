@@ -40,6 +40,9 @@ This document makes lifecycle and evidence edge cases explicit.
     bounded descriptions. Resets run through the application dispatcher, start a new
     `SCENARIO_RESET` epoch, return its completed baseline frame, and never depend on reflection or
     arbitrary object serialization.
+22. Fact attribution is optional application testimony. Subsystem and correlation filters are exact;
+    source-location labels are bounded and unverified. The runtime never infers metadata, and event
+    source entities remain distinct from source subsystems.
 
 Closing during a frame is rejected. `frame` completes capture and rethrows callback failure.
 Disabled runtimes retain no providers or frames and perform no serialization.

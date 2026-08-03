@@ -8,7 +8,8 @@ public record ChangeCause(
         Kind kind,
         Optional<String> semanticCode,
         Optional<EventId> eventId,
-        Optional<DecisionId> decisionId) {
+        Optional<DecisionId> decisionId,
+        FactMetadata metadata) {
     /** Supported attribution forms. */
     public enum Kind {
         /** Snapshot comparison alone supplies no cause. */
@@ -27,6 +28,7 @@ public record ChangeCause(
         semanticCode = Objects.requireNonNull(semanticCode, "semanticCode");
         eventId = Objects.requireNonNull(eventId, "eventId");
         decisionId = Objects.requireNonNull(decisionId, "decisionId");
+        Objects.requireNonNull(metadata, "metadata");
         semanticCode.ifPresent(code -> IdentifierSupport.validate(code, "semantic cause"));
         int populated = (semanticCode.isPresent() ? 1 : 0)
                 + (eventId.isPresent() ? 1 : 0) + (decisionId.isPresent() ? 1 : 0);
@@ -35,9 +37,20 @@ public record ChangeCause(
         }
     }
 
+    /** Compatibility constructor for a cause without fact metadata. */
+    public ChangeCause(Kind kind, Optional<String> semanticCode, Optional<EventId> eventId,
+            Optional<DecisionId> decisionId) {
+        this(kind, semanticCode, eventId, decisionId, FactMetadata.empty());
+    }
+
     /** Returns an unattributed snapshot difference. */
     public static ChangeCause unknown() {
         return new ChangeCause(Kind.UNKNOWN, Optional.empty(), Optional.empty(), Optional.empty());
+    }
+
+    /** Returns a copy carrying explicit application-provided metadata. */
+    public ChangeCause withMetadata(FactMetadata value) {
+        return new ChangeCause(kind, semanticCode, eventId, decisionId, value);
     }
 
     /** Returns a game-supplied semantic cause. */

@@ -290,7 +290,8 @@ public final class RuntimeProtocolService {
         boolean hasMore = matches.size() > command.limit();
         List<EntitySnapshot> retained = matches.stream().limit(command.limit()).toList();
         FrameSnapshot result = new FrameSnapshot(
-                source.sessionId(), source.frameId(), source.monotonicTimeNanos(),
+                source.sessionId(), source.frameId(), source.executionEpochId(),
+                source.baselineKind(), source.monotonicTimeNanos(),
                 source.deltaNanos(), source.capturedAt(), retained,
                 source.changes().stream()
                         .filter(change -> retained.stream()

@@ -268,6 +268,15 @@ final class RuntimeProtocolTest {
             assertEquals(1, epochFrames.page().items().size());
             assertEquals(Optional.of(BaselineKind.SCENARIO_RESET),
                     epochFrames.page().items().getFirst().baselineKind());
+            RuntimeResponse.Result.Snapshot filtered = assertInstanceOf(
+                    RuntimeResponse.Result.Snapshot.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V1, "filtered", "fixture",
+                                    new RuntimeCommand.Snapshot(null, "enemy-1", false,
+                                            null, false, 10)))).result());
+            assertEquals(1, filtered.snapshot().executionEpochId().value());
+            assertEquals(Optional.of(BaselineKind.SCENARIO_RESET),
+                    filtered.snapshot().baselineKind());
             RuntimeResponse.Result.Capabilities capabilities = capabilities(
                     service, ProtocolVersion.V1_3, "capabilities-v1-3", "fixture");
             assertTrue(capabilities.enabledFeatures().contains("execution-epochs"));

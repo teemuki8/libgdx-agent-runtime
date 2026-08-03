@@ -1,6 +1,8 @@
 package io.github.teemuki8.libgdx.agent.runtime.libgdx;
 
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
+import io.github.teemuki8.libgdx.agent.runtime.core.ApplicationCommandDispatcher;
+import io.github.teemuki8.libgdx.agent.runtime.core.CommandDispatchLimits;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeConfiguration;
 import io.github.teemuki8.libgdx.agent.runtime.core.SessionId;
 import java.util.Objects;
@@ -19,6 +21,9 @@ public final class LibGdxAgentRuntime {
         private RuntimeConfiguration configuration = RuntimeConfiguration.developmentDefaults();
         private Thread captureThread = Thread.currentThread();
         private SessionId sessionId;
+        private ApplicationCommandDispatcher commandDispatcher;
+        private CommandDispatchLimits commandDispatchLimits =
+                CommandDispatchLimits.developmentDefaults();
 
         private Builder() {}
 
@@ -40,6 +45,18 @@ public final class LibGdxAgentRuntime {
             return this;
         }
 
+        /** Registers the application's existing render-thread dispatch bridge. */
+        public Builder commandDispatcher(ApplicationCommandDispatcher value) {
+            commandDispatcher = Objects.requireNonNull(value, "commandDispatcher");
+            return this;
+        }
+
+        /** Sets hard command queue and retention bounds. */
+        public Builder commandDispatchLimits(CommandDispatchLimits value) {
+            commandDispatchLimits = Objects.requireNonNull(value, "commandDispatchLimits");
+            return this;
+        }
+
         /** Builds an unstarted core runtime. */
         public AgentRuntime build() {
             AgentRuntime.Builder builder = AgentRuntime.builder()
@@ -48,6 +65,10 @@ public final class LibGdxAgentRuntime {
                     .clock(LibGdxTime.monotonicClock());
             if (sessionId != null) {
                 builder.sessionId(sessionId);
+            }
+            if (commandDispatcher != null) {
+                builder.commandDispatcher(commandDispatcher)
+                        .commandDispatchLimits(commandDispatchLimits);
             }
             return builder.build();
         }

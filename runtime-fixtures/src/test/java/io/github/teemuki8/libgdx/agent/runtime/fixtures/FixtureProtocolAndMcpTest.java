@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
+import io.github.teemuki8.libgdx.agent.runtime.core.CommandState;
 import io.github.teemuki8.libgdx.agent.runtime.mcp.RuntimeToolHandler;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.ProtocolJson;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.ProtocolVersion;
@@ -18,6 +19,7 @@ import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeRequest;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeResponse;
 import io.modelcontextprotocol.spec.McpSchema;
 import java.time.Duration;
+import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.IntStream;
@@ -96,6 +98,42 @@ final class FixtureProtocolAndMcpTest {
             assertTrue(capabilities.structuredContent().toString().contains("capabilityReport"));
         }
         fixture.runtime.close();
+    }
+
+    @Test
+    void applicationOwnedFixtureQueueIsObservableAndCancellableThroughMcp() {
+        ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
+        DeterministicSimulation simulation = new DeterministicSimulation();
+        AgentRuntime runtime = simulation.startRuntime(applicationQueue::addLast);
+        int[] executions = {0};
+        runtime.commands().orElseThrow().submit(
+                "fixture-command", Duration.ofSeconds(1), () -> executions[0]++);
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime);
+                RuntimeToolHandler handler =
+                        new RuntimeToolHandler(new RuntimeProtocolService(registry))) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            McpSchema.CallToolResult status = handler.handle(call(
+                    "runtime_command_status", Map.of(
+                            "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                            "commandRequestId", "fixture-command")))
+                    .block(Duration.ofSeconds(5));
+            assertNotNull(status);
+            assertFalse(status.isError());
+            assertTrue(status.structuredContent().toString().contains(CommandState.QUEUED.name()));
+
+            McpSchema.CallToolResult cancellation = handler.handle(call(
+                    "runtime_command_cancel", Map.of(
+                            "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                            "commandRequestId", "fixture-command")))
+                    .block(Duration.ofSeconds(5));
+            assertNotNull(cancellation);
+            assertFalse(cancellation.isError());
+            assertTrue(cancellation.structuredContent().toString().contains("accepted=true"));
+        }
+        applicationQueue.removeFirst().run();
+        assertEquals(0, executions[0]);
+        runtime.close();
     }
 
     private static McpSchema.CallToolRequest call(

@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.stream.Stream;
 
 /** Executes explicit protocol commands against an injected registry. */
 public final class RuntimeProtocolService {
@@ -27,15 +28,27 @@ public final class RuntimeProtocolService {
     public static final List<String> TOOLS = List.of(
             "runtime_sessions", "runtime_capabilities", "runtime_frames", "runtime_snapshot",
             "runtime_entity", "runtime_changes", "runtime_events", "runtime_decisions");
+    /** Alias naming the frozen base-tool catalog explicitly. */
+    public static final List<String> BASE_TOOLS = TOOLS;
+    private static final List<String> COMMAND_TOOLS =
+            List.of("runtime_command_status", "runtime_command_cancel");
     private static final List<String> FEATURES = List.of(
             "entities", "frames", "changes", "events", "decisions");
     private static final List<ProtocolVersion> SUPPORTED_VERSIONS =
-            List.of(ProtocolVersion.V1, ProtocolVersion.V1_1);
+            List.of(ProtocolVersion.V1, ProtocolVersion.V1_1, ProtocolVersion.V1_2);
     private final RuntimeRegistry registry;
 
     /** Creates a service over an isolated or global registry. */
     public RuntimeProtocolService(RuntimeRegistry registry) {
         this.registry = Objects.requireNonNull(registry, "registry");
+    }
+
+    /** Returns the server-start tool union backed by currently published implementations. */
+    public List<String> toolNames() {
+        boolean commandDispatch = registry.sessions().stream()
+                .anyMatch(runtime -> runtime.commands().isPresent());
+        return commandDispatch ? Stream.concat(BASE_TOOLS.stream(), COMMAND_TOOLS.stream()).toList()
+                : BASE_TOOLS;
     }
 
     /** Executes one request without exposing local exceptions or stack traces. */
@@ -44,10 +57,16 @@ public final class RuntimeProtocolService {
         if (!SUPPORTED_VERSIONS.contains(request.version())) {
             return failure(request, ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                     "protocol version is unsupported", Map.of(
-                            "supported", "1.0,1.1",
+                            "supported", "1.0,1.1,1.2",
                             "requested", request.version().major() + "." + request.version().minor()));
         }
         try {
+            if ((request.command() instanceof RuntimeCommand.CommandStatus
+                    || request.command() instanceof RuntimeCommand.CommandCancel)
+                    && !ProtocolVersion.V1_2.equals(request.version())) {
+                throw new ProtocolFailure(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
+                        "command requires protocol version 1.2", Map.of());
+            }
             return new RuntimeResponse.Success(
                     request.version(), request.requestId(), executeCommand(request));
         } catch (ProtocolFailure failure) {
@@ -87,6 +106,13 @@ public final class RuntimeProtocolService {
             case RuntimeCommand.Changes command -> changes(runtime, command);
             case RuntimeCommand.Events command -> events(runtime, command);
             case RuntimeCommand.Decisions command -> decisions(runtime, command);
+            case RuntimeCommand.CommandStatus command -> new RuntimeResponse.Result.CommandStatus(
+                    runtime.commands().orElseThrow(() -> capabilityUnavailable(runtime))
+                            .status(command.commandRequestId()));
+            case RuntimeCommand.CommandCancel command ->
+                    new RuntimeResponse.Result.CommandCancellation(
+                            runtime.commands().orElseThrow(() -> capabilityUnavailable(runtime))
+                                    .cancel(command.commandRequestId()));
             case RuntimeCommand.Sessions ignored ->
                     throw new AssertionError("sessions handled before runtime lookup");
         };
@@ -96,24 +122,26 @@ public final class RuntimeProtocolService {
             AgentRuntime runtime, ProtocolVersion version) {
         if (ProtocolVersion.V1.equals(version)) {
             return new RuntimeResponse.Result.Capabilities(
-                    ProtocolVersion.V1, TOOLS, FEATURES, runtime.configuration().limits(),
+                    ProtocolVersion.V1, BASE_TOOLS, FEATURES, runtime.configuration().limits(),
                     runtime.latestFrame().map(frame -> frame.frameId().value()), runtime.status());
         }
-        List<RuntimeCapability> details = capabilityDetails(runtime);
+        List<RuntimeCapability> details = capabilityDetails(runtime, version);
         List<String> enabled = details.stream()
                 .filter(capability -> capability.availability()
                         == RuntimeCapability.Availability.AVAILABLE)
                 .map(RuntimeCapability::id)
                 .toList();
         return new RuntimeResponse.Result.Capabilities(
-                ProtocolVersion.V1_1, TOOLS, enabled, runtime.configuration().limits(),
+                version, ProtocolVersion.V1_2.equals(version) ? toolsFor(runtime) : BASE_TOOLS,
+                enabled, runtime.configuration().limits(),
                 runtime.latestFrame().map(frame -> frame.frameId().value()), runtime.status(),
                 Optional.of(new CapabilityReport(RuntimeVersion.current(), details)));
     }
 
-    private static List<RuntimeCapability> capabilityDetails(AgentRuntime runtime) {
+    private static List<RuntimeCapability> capabilityDetails(
+            AgentRuntime runtime, ProtocolVersion version) {
         var limits = runtime.configuration().limits();
-        return List.of(
+        List<RuntimeCapability> details = new java.util.ArrayList<>(List.of(
                 capability(runtime, "changes", List.of("AgentRuntime#changes"),
                         List.of("changes"), List.of("runtime_changes"), Map.of(
                                 "queryResults", (long) limits.queryResults(),
@@ -147,7 +175,41 @@ public final class RuntimeProtocolService {
                         List.of("runtime_frames", "runtime_snapshot"), Map.of(
                                 "queryResults", (long) limits.queryResults(),
                                 "retainedFrames", (long) limits.retainedFrames()),
-                        List.of("exact", "latest", "range"), List.of()));
+                        List.of("exact", "latest", "range"), List.of())));
+        if (ProtocolVersion.V1_2.equals(version)) {
+            boolean available = runtime.commands().isPresent();
+            Map<String, Long> commandLimits = runtime.commands().map(commands -> Map.of(
+                    "queuedCommands", (long) commands.limits().queuedCommands(),
+                    "maximumTimeoutNanos", commands.limits().maximumTimeoutNanos(),
+                    "retainedRequestIds", (long) commands.limits().retainedRequestIds(),
+                    "retainedResults", (long) commands.limits().retainedResults()))
+                    .orElse(Map.of());
+            details.add(new RuntimeCapability(
+                    "command-dispatch", ProtocolVersion.V1_2,
+                    available ? RuntimeCapability.Availability.AVAILABLE
+                            : RuntimeCapability.Availability.UNAVAILABLE,
+                    available ? Optional.empty() : Optional.of(runtime.configuration().enabled()
+                            ? "dispatcher-not-registered" : "runtime-disabled"),
+                    RuntimeCapability.Access.MUTATING,
+                    List.of("AgentRuntime#commands", "CommandDispatch#status",
+                            "CommandDispatch#cancel"),
+                    List.of("commandStatus", "commandCancel"), COMMAND_TOOLS, commandLimits,
+                    List.of("application-owned", "at-most-once", "bounded"), List.of()));
+        }
+        return List.copyOf(details);
+    }
+
+    private static List<String> toolsFor(AgentRuntime runtime) {
+        return runtime.commands().isPresent()
+                ? Stream.concat(BASE_TOOLS.stream(), COMMAND_TOOLS.stream()).toList()
+                : BASE_TOOLS;
+    }
+
+    private static ProtocolFailure capabilityUnavailable(AgentRuntime runtime) {
+        return new ProtocolFailure(ProtocolErrorCode.CAPABILITY_UNAVAILABLE,
+                "application command dispatch is unavailable", Map.of(
+                        "sessionId", runtime.sessionId().value(),
+                        "capability", "command-dispatch"));
     }
 
     private static RuntimeCapability capability(

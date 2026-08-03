@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import io.github.teemuki8.libgdx.agent.runtime.core.DecisionTrace;
+import io.github.teemuki8.libgdx.agent.runtime.core.CommandLookup;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityHistory;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntitySnapshot;
 import io.github.teemuki8.libgdx.agent.runtime.core.FrameSnapshot;
@@ -52,7 +53,7 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         }
     }
 
-    /** Explicit result union for the eight commands. */
+    /** Explicit result union for base queries and registered command-dispatch operations. */
     @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "type")
     @JsonSubTypes({
         @JsonSubTypes.Type(value = Result.Sessions.class, name = "sessions"),
@@ -62,10 +63,13 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         @JsonSubTypes.Type(value = Result.Entity.class, name = "entity"),
         @JsonSubTypes.Type(value = Result.Changes.class, name = "changes"),
         @JsonSubTypes.Type(value = Result.Events.class, name = "events"),
-        @JsonSubTypes.Type(value = Result.Decisions.class, name = "decisions")
+        @JsonSubTypes.Type(value = Result.Decisions.class, name = "decisions"),
+        @JsonSubTypes.Type(value = Result.CommandStatus.class, name = "commandStatus"),
+        @JsonSubTypes.Type(value = Result.CommandCancellation.class, name = "commandCancellation")
     })
     sealed interface Result permits Result.Sessions, Result.Capabilities, Result.Frames,
-            Result.Snapshot, Result.Entity, Result.Changes, Result.Events, Result.Decisions {
+            Result.Snapshot, Result.Entity, Result.Changes, Result.Events, Result.Decisions,
+            Result.CommandStatus, Result.CommandCancellation {
         /** Published session catalog. */
         record Sessions(List<SessionInfo> sessions) implements Result {
             /** Copies sessions. */
@@ -128,6 +132,22 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
 
         /** Bounded decision results. */
         record Decisions(QueryPage<DecisionTrace> page) implements Result {}
+
+        /** Retained, expired, or unknown application command status. */
+        record CommandStatus(CommandLookup command) implements Result {
+            public CommandStatus {
+                Objects.requireNonNull(command, "command");
+            }
+        }
+
+        /** Result of a cancellation attempt. */
+        record CommandCancellation(
+                io.github.teemuki8.libgdx.agent.runtime.core.CommandCancellation cancellation)
+                implements Result {
+            public CommandCancellation {
+                Objects.requireNonNull(cancellation, "cancellation");
+            }
+        }
     }
 
     /** Minimal session metadata. */

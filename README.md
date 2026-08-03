@@ -26,7 +26,8 @@ decisions. Neither is a dependency of the other.
 
 V1 includes registered static/dynamic entities, bounded immutable values, baseline plus frame
 snapshots, automatic structural diffs, explicit events and decisions, concurrent completed-frame
-queries, a strict JSON protocol, eight stdio MCP tools, and a deterministic LWJGL3 fixture.
+queries, a strict JSON protocol, eight base stdio MCP tools, optional bounded application-command
+dispatch, and a deterministic LWJGL3 fixture.
 
 V1 excludes replay, reflection, instrumentation, mutation interception, networking, ECS adapters,
 hot reload, frame stepping, visual debugging, natural-language queries, and automatic causality.
@@ -44,6 +45,7 @@ public final class GameApplication extends ApplicationAdapter {
         runtime = LibGdxAgentRuntime.builder()
                 .captureThread(Thread.currentThread())
                 .configuration(RuntimeConfiguration.developmentDefaults())
+                .commandDispatcher(Gdx.app::postRunnable)
                 .build();
         runtime.entities().register(
                 EntityId.of(enemy.id()),
@@ -115,7 +117,7 @@ game running elsewhere. Remote process attachment is explicitly outside V1.
 | `runtime-core` | JDK-only model, capture, retention, queries | `agent-runtime-core` |
 | `runtime-libgdx` | render-thread helpers, metrics, converters | `agent-runtime-libgdx` |
 | `runtime-protocol` | strict V1 JSON and session registry | `agent-runtime-protocol` |
-| `runtime-mcp` | eight stdio MCP tools | `agent-runtime-mcp` |
+| `runtime-mcp` | eight base and registered optional stdio MCP tools | `agent-runtime-mcp` |
 | `runtime-fixtures` | deterministic LWJGL3 qualification | not published |
 
 Group: `io.github.teemuki8`. Snapshot version: `0.1.0-SNAPSHOT`.

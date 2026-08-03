@@ -6,8 +6,10 @@ public record ProtocolVersion(int major, int minor) {
     public static final ProtocolVersion V1 = new ProtocolVersion(1, 0);
     /** Extension-aware capabilities protocol version. */
     public static final ProtocolVersion V1_1 = new ProtocolVersion(1, 1);
+    /** Application-owned command dispatch protocol version. */
+    public static final ProtocolVersion V1_2 = new ProtocolVersion(1, 2);
     /** Latest implemented protocol version. */
-    public static final ProtocolVersion CURRENT = V1_1;
+    public static final ProtocolVersion CURRENT = V1_2;
 
     /** Validates version components. */
     public ProtocolVersion {

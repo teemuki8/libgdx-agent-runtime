@@ -13,11 +13,14 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
     @JsonSubTypes.Type(value = RuntimeCommand.Entity.class, name = "entity"),
     @JsonSubTypes.Type(value = RuntimeCommand.Changes.class, name = "changes"),
     @JsonSubTypes.Type(value = RuntimeCommand.Events.class, name = "events"),
-    @JsonSubTypes.Type(value = RuntimeCommand.Decisions.class, name = "decisions")
+    @JsonSubTypes.Type(value = RuntimeCommand.Decisions.class, name = "decisions"),
+    @JsonSubTypes.Type(value = RuntimeCommand.CommandStatus.class, name = "commandStatus"),
+    @JsonSubTypes.Type(value = RuntimeCommand.CommandCancel.class, name = "commandCancel")
 })
 public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeCommand.Capabilities,
         RuntimeCommand.Frames, RuntimeCommand.Snapshot, RuntimeCommand.Entity,
-        RuntimeCommand.Changes, RuntimeCommand.Events, RuntimeCommand.Decisions {
+        RuntimeCommand.Changes, RuntimeCommand.Events, RuntimeCommand.Decisions,
+        RuntimeCommand.CommandStatus, RuntimeCommand.CommandCancel {
     /** Lists published sessions. */
     record Sessions() implements RuntimeCommand {}
 
@@ -121,6 +124,20 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
             requireOptionalIdentifier(chosenCandidate, "chosenCandidate");
             requireOptionalIdentifier(reasonCode, "reasonCode");
             validateLimit(limit);
+        }
+    }
+
+    /** Reads one retained application command status. */
+    record CommandStatus(String commandRequestId) implements RuntimeCommand {
+        public CommandStatus {
+            ProtocolJson.requireIdentifier(commandRequestId, "commandRequestId");
+        }
+    }
+
+    /** Requests cancellation before application-thread dispatch. */
+    record CommandCancel(String commandRequestId) implements RuntimeCommand {
+        public CommandCancel {
+            ProtocolJson.requireIdentifier(commandRequestId, "commandRequestId");
         }
     }
 

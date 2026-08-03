@@ -31,6 +31,7 @@ public final class AgentRuntime implements AutoCloseable {
     private final MonotonicClock monotonicClock;
     private final Clock wallClock;
     private final Thread captureThread;
+    private final Optional<CommandDispatch> commands;
     private final EntityRegistry entities = new EntityRegistry(this);
     private final LinkedHashMap<EntityId, InspectableEntity> staticEntities = new LinkedHashMap<>();
     private final LinkedHashMap<String, Supplier<? extends Stream<InspectableEntity>>> sources =
@@ -58,6 +59,10 @@ public final class AgentRuntime implements AutoCloseable {
         monotonicClock = builder.monotonicClock;
         wallClock = builder.wallClock;
         captureThread = builder.captureThread;
+        commands = Optional.ofNullable(builder.commandDispatcher)
+                .filter(ignored -> configuration.enabled()).map(dispatcher ->
+                new CommandDispatch(dispatcher, builder.commandDispatchLimits,
+                        monotonicClock, captureThread));
     }
 
     /** Creates a runtime builder owned by the calling thread by default. */
@@ -83,6 +88,11 @@ public final class AgentRuntime implements AutoCloseable {
     /** Returns the explicit registration surface. */
     public EntityRegistry entities() {
         return entities;
+    }
+
+    /** Returns command dispatch only when the application explicitly configured it. */
+    public Optional<CommandDispatch> commands() {
+        return commands;
     }
 
     /**
@@ -357,6 +367,7 @@ public final class AgentRuntime implements AutoCloseable {
         pendingEvents.clear();
         pendingDecisions.clear();
         openDecision = null;
+        commands.ifPresent(CommandDispatch::close);
         status = RuntimeStatus.CLOSED;
     }
 
@@ -920,6 +931,9 @@ public final class AgentRuntime implements AutoCloseable {
         private MonotonicClock monotonicClock = MonotonicClock.system();
         private Clock wallClock = Clock.systemUTC();
         private Thread captureThread = Thread.currentThread();
+        private ApplicationCommandDispatcher commandDispatcher;
+        private CommandDispatchLimits commandDispatchLimits =
+                CommandDispatchLimits.developmentDefaults();
 
         private Builder() {}
 
@@ -950,6 +964,18 @@ public final class AgentRuntime implements AutoCloseable {
         /** Sets the sole thread allowed to mutate capture state. */
         public Builder captureThread(Thread value) {
             captureThread = Objects.requireNonNull(value, "captureThread");
+            return this;
+        }
+
+        /** Registers the application-owned bridge used by bounded mutating commands. */
+        public Builder commandDispatcher(ApplicationCommandDispatcher value) {
+            commandDispatcher = Objects.requireNonNull(value, "commandDispatcher");
+            return this;
+        }
+
+        /** Sets hard queue, outcome, request-ID, and diagnostic bounds. */
+        public Builder commandDispatchLimits(CommandDispatchLimits value) {
+            commandDispatchLimits = Objects.requireNonNull(value, "commandDispatchLimits");
             return this;
         }
 

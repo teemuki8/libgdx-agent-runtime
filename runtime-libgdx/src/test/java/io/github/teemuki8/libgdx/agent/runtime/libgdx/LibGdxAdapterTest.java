@@ -3,11 +3,13 @@ package io.github.teemuki8.libgdx.agent.runtime.libgdx;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.badlogic.gdx.math.Vector2;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutionException;
+import java.util.ArrayDeque;
 import org.junit.jupiter.api.Test;
 
 final class LibGdxAdapterTest {
@@ -29,5 +31,14 @@ final class LibGdxAdapterTest {
                     () -> executor.submit(guard::check).get());
             assertEquals(IllegalStateException.class, failure.getCause().getClass());
         }
+    }
+
+    @Test
+    void adapterForwardsExplicitApplicationCommandDispatcher() {
+        ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
+        var runtime = LibGdxAgentRuntime.builder()
+                .commandDispatcher(applicationQueue::addLast)
+                .build();
+        assertTrue(runtime.commands().isPresent());
     }
 }

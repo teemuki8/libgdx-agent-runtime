@@ -23,12 +23,16 @@ This document makes lifecycle and evidence edge cases explicit.
 14. Snapshot diffs default to `UNKNOWN`. `causeNextChange` can associate a semantic code, exact
     event ID, or exact decision ID with the next observed entity/property difference.
 15. After close, completed retained history and `CLOSED` status remain; live providers are released.
-16. Protocol `1.0` remains frozen and protocol `1.1` adds extension-aware capability metadata.
-    Any other exact version returns `PROTOCOL_VERSION_UNSUPPORTED` before command execution.
+16. Protocol `1.0` remains frozen, protocol `1.1` adds extension-aware capability metadata, and
+    protocol `1.2` adds application-command status and pre-dispatch cancellation. Any other exact
+    version returns `PROTOCOL_VERSION_UNSUPPORTED` before command execution.
 17. Capture truncations contain dimension/observed/retained/limit. Query pages separately contain
     `hasMore` and retention-range metadata.
 18. Only explicit `RuntimeValue` providers cross the boundary. No reflection, object traversal,
     arbitrary serializer, class-name input, or generic object value exists.
+19. Application commands are bounded, deduplicated while their request IDs are retained, and run
+    only through an explicitly registered application dispatcher on the capture thread. The
+    runtime creates no command thread, timer, game loop, or scheduler.
 
 Closing during a frame is rejected. `frame` completes capture and rethrows callback failure.
 Disabled runtimes retain no providers or frames and perform no serialization.

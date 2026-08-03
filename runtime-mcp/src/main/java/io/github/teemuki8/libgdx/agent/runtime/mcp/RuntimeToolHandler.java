@@ -30,14 +30,19 @@ public final class RuntimeToolHandler implements AutoCloseable {
             new TypeReference<>() {};
 
     private final RuntimeProtocolService protocol;
-    private final RuntimeToolCatalog catalog = new RuntimeToolCatalog();
+    private final RuntimeToolCatalog catalog;
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
     private final Scheduler scheduler = Schedulers.fromExecutorService(executor);
     private final AtomicLong sequence = new AtomicLong();
 
     /** Creates a handler over one protocol service. */
     public RuntimeToolHandler(RuntimeProtocolService protocol) {
+        this(protocol, new RuntimeToolCatalog(protocol.toolNames()));
+    }
+
+    RuntimeToolHandler(RuntimeProtocolService protocol, RuntimeToolCatalog catalog) {
         this.protocol = Objects.requireNonNull(protocol, "protocol");
+        this.catalog = Objects.requireNonNull(catalog, "catalog");
     }
 
     /** Validates and invokes one approved tool asynchronously. */
@@ -112,11 +117,18 @@ public final class RuntimeToolHandler implements AutoCloseable {
                     from, to, string(arguments, "decisionType"),
                     string(arguments, "actor"), string(arguments, "chosenCandidate"),
                     string(arguments, "reasonCode"), limit);
+            case "runtime_command_status" -> new RuntimeCommand.CommandStatus(
+                    string(arguments, "commandRequestId"));
+            case "runtime_command_cancel" -> new RuntimeCommand.CommandCancel(
+                    string(arguments, "commandRequestId"));
             default -> throw new IllegalArgumentException("unknown runtime tool");
         };
-        ProtocolVersion version = "runtime_capabilities".equals(toolName)
-                ? new ProtocolVersion(1, Math.toIntExact(number(arguments, "protocolMinor", 0)))
-                : ProtocolVersion.V1;
+        ProtocolVersion version = switch (toolName) {
+            case "runtime_capabilities" -> new ProtocolVersion(
+                    1, Math.toIntExact(number(arguments, "protocolMinor", 0)));
+            case "runtime_command_status", "runtime_command_cancel" -> ProtocolVersion.V1_2;
+            default -> ProtocolVersion.V1;
+        };
         return new RuntimeRequest(version,
                 "mcp-" + Long.toUnsignedString(sequence.incrementAndGet()), sessionId, command);
     }

@@ -24,6 +24,7 @@ import io.modelcontextprotocol.spec.McpSchema;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.time.Duration;
+import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -129,6 +130,54 @@ final class RuntimeMcpTest {
             assertNotNull(current);
             assertFalse(current.isError());
             assertTrue(structured(current).containsKey("capabilityReport"));
+        }
+    }
+
+    @Test
+    void registeredDispatchAddsClosedStatusAndCancellationTools() {
+        ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
+        int[] executions = {0};
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("commands"))
+                .commandDispatcher(applicationQueue::addLast)
+                .build();
+        runtime.start();
+        runtime.commands().orElseThrow().submit(
+                "action-1", Duration.ofSeconds(1), () -> executions[0]++);
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime);
+                RuntimeToolHandler handler =
+                        new RuntimeToolHandler(new RuntimeProtocolService(registry))) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            RuntimeToolCatalog catalog = new RuntimeToolCatalog(
+                    new RuntimeProtocolService(registry).toolNames());
+            assertEquals(10, catalog.tools().size());
+            assertEquals(false,
+                    catalog.tool("runtime_command_cancel").inputSchema()
+                            .get("additionalProperties"));
+
+            McpSchema.CallToolResult status = handler.handle(call(
+                    "runtime_command_status", Map.of(
+                            "sessionId", "commands", "commandRequestId", "action-1")))
+                    .block(Duration.ofSeconds(5));
+            assertFalse(status.isError());
+            assertEquals("QUEUED", ((Map<?, ?>) structured(status).get("command")).get("status")
+                    instanceof Map<?, ?> commandStatus ? commandStatus.get("state") : null);
+
+            McpSchema.CallToolResult cancelled = handler.handle(call(
+                    "runtime_command_cancel", Map.of(
+                            "sessionId", "commands", "commandRequestId", "action-1")))
+                    .block(Duration.ofSeconds(5));
+            assertFalse(cancelled.isError());
+            McpSchema.CallToolResult unknownField = handler.handle(call(
+                    "runtime_command_status", Map.of(
+                            "sessionId", "commands", "commandRequestId", "action-1",
+                            "expression", "java.lang.Runtime")))
+                    .block(Duration.ofSeconds(5));
+            assertTrue(unknownField.isError());
+            assertEquals("INVALID_QUERY", structured(unknownField).get("code"));
+            applicationQueue.removeFirst().run();
+            assertEquals(0, executions[0]);
         }
     }
 

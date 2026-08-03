@@ -127,6 +127,20 @@ public final class RuntimeToolHandler implements AutoCloseable {
             case "runtime_reset" -> new RuntimeCommand.Reset(
                     string(arguments, "scenarioId"), string(arguments, "resetRequestId"),
                     number(arguments, "timeoutNanos", -1));
+            case "runtime_attributed_changes" -> new RuntimeCommand.AttributedChanges(
+                    from, to, string(arguments, "entityId"), string(arguments, "entityType"),
+                    string(arguments, "property"), string(arguments, "sourceSubsystem"),
+                    string(arguments, "correlationId"), limit);
+            case "runtime_attributed_events" -> new RuntimeCommand.AttributedEvents(
+                    from, to, string(arguments, "eventType"), bool(arguments, "eventTypePrefix"),
+                    string(arguments, "subject"), string(arguments, "source"),
+                    string(arguments, "sourceSubsystem"), string(arguments, "correlationId"),
+                    limit);
+            case "runtime_attributed_decisions" -> new RuntimeCommand.AttributedDecisions(
+                    from, to, string(arguments, "decisionType"), string(arguments, "actor"),
+                    string(arguments, "chosenCandidate"), string(arguments, "reasonCode"),
+                    string(arguments, "sourceSubsystem"), string(arguments, "correlationId"),
+                    limit);
             default -> throw new IllegalArgumentException("unknown runtime tool");
         };
         ProtocolVersion version = switch (toolName) {
@@ -135,6 +149,8 @@ public final class RuntimeToolHandler implements AutoCloseable {
             case "runtime_command_status", "runtime_command_cancel" -> ProtocolVersion.V1_2;
             case "runtime_epoch_frames" -> ProtocolVersion.V1_3;
             case "runtime_scenarios", "runtime_reset" -> ProtocolVersion.V1_4;
+            case "runtime_attributed_changes", "runtime_attributed_events",
+                    "runtime_attributed_decisions" -> ProtocolVersion.V1_5;
             default -> ProtocolVersion.V1;
         };
         return new RuntimeRequest(version,

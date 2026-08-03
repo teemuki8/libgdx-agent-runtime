@@ -10,6 +10,7 @@ public final class EventSpec {
     private final EventType type;
     private EntityId subject;
     private EntityId source;
+    private FactMetadata metadata = FactMetadata.empty();
     private final List<RuntimeValue.Field> attributes = new ArrayList<>();
 
     private EventSpec(EventType type) {
@@ -30,6 +31,24 @@ public final class EventSpec {
     /** Sets the optional source. */
     public EventSpec source(EntityId value) {
         source = Objects.requireNonNull(value, "source");
+        return this;
+    }
+
+    /** Sets the explicit application-provided source subsystem. */
+    public EventSpec sourceSubsystem(String value) {
+        metadata = metadata.withSourceSubsystem(value);
+        return this;
+    }
+
+    /** Sets an unverified, application-provided source-location label. */
+    public EventSpec sourceLocation(String value) {
+        metadata = metadata.withSourceLocation(value);
+        return this;
+    }
+
+    /** Sets an explicit correlation identifier without implying inferred causality. */
+    public EventSpec correlationId(String value) {
+        metadata = metadata.withCorrelationId(value);
         return this;
     }
 
@@ -56,5 +75,9 @@ public final class EventSpec {
 
     List<RuntimeValue.Field> attributeList() {
         return List.copyOf(attributes);
+    }
+
+    FactMetadata metadata() {
+        return metadata;
     }
 }

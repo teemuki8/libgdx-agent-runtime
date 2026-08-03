@@ -29,7 +29,7 @@ public final class RuntimeToolCatalog {
                         object(Map.of(), List.of())),
                 tool("runtime_capabilities",
                         "Report capabilities; protocolMinor defaults to frozen V1.0",
-                        sessionInput(Map.of("protocolMinor", integer(0, 4)), List.of())),
+                        sessionInput(Map.of("protocolMinor", integer(0, 5)), List.of())),
                 tool("runtime_frames",
                         "List frame summaries; fromFrame defaults to 0, toFrame to max, limit to 100",
                         queryInput(Map.of(), List.of())),
@@ -97,6 +97,29 @@ public final class RuntimeToolCatalog {
                             "resetRequestId", string(),
                             "timeoutNanos", integer(1, Long.MAX_VALUE)),
                             List.of("scenarioId", "resetRequestId", "timeoutNanos"))));
+        }
+        if (supported.contains("runtime_attributed_changes")) {
+            selected.add(tool("runtime_attributed_changes",
+                    "Query changes with exact explicit subsystem or correlation filters",
+                    queryInput(Map.of(
+                            "entityId", string(), "entityType", string(), "property", string(),
+                            "sourceSubsystem", string(), "correlationId", string()), List.of())));
+        }
+        if (supported.contains("runtime_attributed_events")) {
+            selected.add(tool("runtime_attributed_events",
+                    "Query events with explicit metadata; source remains an entity ID",
+                    queryInput(Map.of(
+                            "eventType", string(), "eventTypePrefix", bool(),
+                            "subject", string(), "source", string(),
+                            "sourceSubsystem", string(), "correlationId", string()), List.of())));
+        }
+        if (supported.contains("runtime_attributed_decisions")) {
+            selected.add(tool("runtime_attributed_decisions",
+                    "Query decisions with exact explicit subsystem or correlation filters",
+                    queryInput(Map.of(
+                            "decisionType", string(), "actor", string(),
+                            "chosenCandidate", string(), "reasonCode", string(),
+                            "sourceSubsystem", string(), "correlationId", string()), List.of())));
         }
         selected.removeIf(tool -> !supported.contains(tool.name()));
         tools = List.copyOf(selected);

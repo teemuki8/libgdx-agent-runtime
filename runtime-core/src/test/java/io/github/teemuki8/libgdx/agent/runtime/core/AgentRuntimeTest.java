@@ -167,6 +167,50 @@ final class AgentRuntimeTest {
     }
 
     @Test
+    void recordsAndExactlyFiltersExplicitFactMetadata() {
+        MutableEnemy enemy = new MutableEnemy("enemy", 100, 0, 0);
+        AgentRuntime runtime = runtime(RuntimeLimits.developmentDefaults());
+        runtime.entities().register(EntityId.of(enemy.id), EntityType.of("enemy"),
+                () -> "Enemy", inspector -> inspector.property("health", enemy::health));
+        runtime.start();
+        FactMetadata metadata = FactMetadata.empty()
+                .withSourceSubsystem("combat")
+                .withSourceLocation("DamageSystem.java:84")
+                .withCorrelationId("attack-172");
+
+        runtime.frame(1, () -> {
+            runtime.emit(EventSpec.type("damage.applied")
+                    .source(EntityId.of("attacker"))
+                    .sourceSubsystem("combat")
+                    .sourceLocation("DamageSystem.java:84")
+                    .correlationId("attack-172"));
+            try (DecisionScope decision = runtime.beginDecision(
+                    DecisionType.of("attack"), EntityId.of("attacker"), metadata)) {
+                assertTrue(decision.id().isPresent());
+                runtime.causeNextChange(EntityId.of("enemy"), "health",
+                        ChangeCause.semantic("damage").withMetadata(metadata));
+                enemy.health = 75;
+            }
+        });
+
+        FrameSnapshot frame = runtime.latestFrame().orElseThrow();
+        assertEquals("combat", frame.events().getFirst().metadata()
+                .sourceSubsystem().orElseThrow());
+        assertEquals("attacker", frame.events().getFirst().source().orElseThrow().value());
+        assertEquals("attack-172", frame.decisions().getFirst().metadata()
+                .correlationId().orElseThrow());
+        assertEquals(1, runtime.changes(new ChangeQuery(FrameRange.of(0, 1), Optional.empty(),
+                Optional.empty(), Optional.empty(), Optional.of("combat"),
+                Optional.of("attack-172"), 10)).items().size());
+        assertEquals(1, runtime.events(new EventQuery(FrameRange.of(0, 1), Optional.empty(), false,
+                Optional.empty(), Optional.empty(), Optional.of("combat"),
+                Optional.of("attack-172"), 10)).items().size());
+        assertEquals(1, runtime.decisions(new DecisionQuery(FrameRange.of(0, 1),
+                Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(),
+                Optional.of("combat"), Optional.of("attack-172"), 10)).items().size());
+    }
+
+    @Test
     void callbackFailureRetainsFrameAndAbortedDecisionThenRethrows() {
         AgentRuntime runtime = runtime(RuntimeLimits.developmentDefaults());
         runtime.start();

@@ -255,12 +255,19 @@ public final class AgentRuntime implements AutoCloseable {
         List<RuntimeValue.Field> attributes = limitFields(
                 event.attributeList(), limits.attributesPerItem(), "event.attributes", truncations);
         pendingEvents.add(new RuntimeEvent(id, activeFrame, event.eventType(),
-                event.optionalSubject(), event.optionalSource(), attributes, truncations));
+                event.optionalSubject(), event.optionalSource(), event.metadata(), attributes,
+                truncations));
         return Optional.of(id);
     }
 
     /** Opens one non-nested decision trace in the current frame. */
     public DecisionScope beginDecision(DecisionType type, EntityId actor) {
+        return beginDecision(type, actor, FactMetadata.empty());
+    }
+
+    /** Opens one non-nested decision with explicit application-provided fact metadata. */
+    public DecisionScope beginDecision(
+            DecisionType type, EntityId actor, FactMetadata metadata) {
         if (!configuration.enabled()) {
             return DISABLED_DECISION;
         }
@@ -270,7 +277,8 @@ public final class AgentRuntime implements AutoCloseable {
             throw lifecycle("nested decisions are not supported in V1");
         }
         MutableDecision decision =
-                new MutableDecision(new DecisionId(++nextDecision), activeFrame, type, actor);
+                new MutableDecision(new DecisionId(++nextDecision), activeFrame, type, actor,
+                        metadata);
         openDecision = decision;
         pendingDecisions.add(decision);
         return decision;
@@ -329,6 +337,8 @@ public final class AgentRuntime implements AutoCloseable {
                     .filter(change -> query.property()
                             .map(name -> change.property().map(name::equals).orElse(false))
                             .orElse(true))
+                    .filter(change -> matchesMetadata(change.cause().metadata(),
+                            query.sourceSubsystem(), query.correlationId()))
                     .toList();
             return page(values, query.range(), query.limit());
         }
@@ -349,6 +359,8 @@ public final class AgentRuntime implements AutoCloseable {
                     .filter(event -> query.source()
                             .map(source -> event.source().map(source::equals).orElse(false))
                             .orElse(true))
+                    .filter(event -> matchesMetadata(event.metadata(),
+                            query.sourceSubsystem(), query.correlationId()))
                     .toList();
             return page(values, query.range(), query.limit());
         }
@@ -369,6 +381,8 @@ public final class AgentRuntime implements AutoCloseable {
                                     .map(candidate::equals).orElse(false))
                             .orElse(true))
                     .filter(trace -> matchesReason(trace, query.reasonCode()))
+                    .filter(trace -> matchesMetadata(trace.metadata(),
+                            query.sourceSubsystem(), query.correlationId()))
                     .toList();
             return page(values, query.range(), query.limit());
         }
@@ -847,6 +861,14 @@ public final class AgentRuntime implements AutoCloseable {
                         candidate -> candidate.reason().code().equals(code))).orElse(true);
     }
 
+    private static boolean matchesMetadata(FactMetadata metadata,
+            Optional<String> subsystem, Optional<String> correlationId) {
+        return subsystem.map(value -> metadata.sourceSubsystem().map(value::equals).orElse(false))
+                .orElse(true)
+                && correlationId.map(value -> metadata.correlationId()
+                        .map(value::equals).orElse(false)).orElse(true);
+    }
+
     @SuppressWarnings("unchecked")
     private static <T extends Throwable> void throwUnchecked(Throwable failure) throws T {
         throw (T) failure;
@@ -885,6 +907,7 @@ public final class AgentRuntime implements AutoCloseable {
         private final FrameId frameId;
         private final DecisionType type;
         private final EntityId actor;
+        private final FactMetadata metadata;
         private final List<DecisionCandidate> candidates = new ArrayList<>();
         private final List<Truncation> truncations = new ArrayList<>();
         private EntityId chosen;
@@ -892,11 +915,13 @@ public final class AgentRuntime implements AutoCloseable {
         private DecisionTrace.Completion completion = DecisionTrace.Completion.ABORTED;
         private boolean closed;
 
-        MutableDecision(DecisionId id, FrameId frameId, DecisionType type, EntityId actor) {
+        MutableDecision(DecisionId id, FrameId frameId, DecisionType type, EntityId actor,
+                FactMetadata metadata) {
             this.id = id;
             this.frameId = frameId;
             this.type = Objects.requireNonNull(type, "type");
             this.actor = Objects.requireNonNull(actor, "actor");
+            this.metadata = Objects.requireNonNull(metadata, "metadata");
         }
 
         @Override
@@ -949,7 +974,7 @@ public final class AgentRuntime implements AutoCloseable {
                     ? DecisionTrace.Completion.ABORTED : completion;
             return new DecisionTrace(id, frameId, type, actor, candidates,
                     Optional.ofNullable(chosen), Optional.ofNullable(choiceReason),
-                    actual, truncations);
+                    metadata, actual, truncations);
         }
 
         private void add(EntityId candidate, DecisionCandidate.Status status, Reason reason,

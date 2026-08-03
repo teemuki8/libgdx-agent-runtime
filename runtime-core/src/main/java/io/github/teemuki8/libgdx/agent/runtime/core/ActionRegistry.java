@@ -45,6 +45,7 @@ public final class ActionRegistry {
         correlationId.ifPresent(value -> IdentifierSupport.validate(value, "correlation id"));
         CommandDispatch dispatch = runtime.commands().orElseThrow(() ->
                 new IllegalStateException("semantic actions require application command dispatch"));
+        requireValidTimeout(timeout, dispatch.limits().maximumTimeoutNanos());
         ActionSpec spec;
         RequestEvidence evidence;
         boolean existing;
@@ -124,6 +125,22 @@ public final class ActionRegistry {
             case ENTITY_ID -> value instanceof RuntimeValue.StringValue text
                     && validEntityId(text.value());
         };
+    }
+
+    private static void requireValidTimeout(Duration timeout, long maximumNanos) {
+        Objects.requireNonNull(timeout, "timeout");
+        if (timeout.isNegative() || timeout.isZero()) {
+            throw new IllegalArgumentException("timeout must be positive");
+        }
+        final long nanos;
+        try {
+            nanos = timeout.toNanos();
+        } catch (ArithmeticException failure) {
+            throw new IllegalArgumentException("timeout exceeds the supported range", failure);
+        }
+        if (nanos > maximumNanos) {
+            throw new IllegalArgumentException("timeout exceeds the configured limit");
+        }
     }
 
     private static boolean validEntityId(String value) {

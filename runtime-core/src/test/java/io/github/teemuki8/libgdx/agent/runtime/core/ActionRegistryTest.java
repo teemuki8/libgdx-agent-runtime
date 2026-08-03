@@ -80,4 +80,23 @@ final class ActionRegistryTest {
         assertTrue(queue.isEmpty());
         assertEquals(0, executions.get());
     }
+
+    @Test
+    void invalidTimeoutDoesNotPoisonAnInvocationRequestId() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        AgentRuntime runtime = AgentRuntime.builder().clock(() -> 1)
+                .commandDispatcher(queue::addLast).build();
+        runtime.actions().register(ActionSpec.builder("ping")
+                .handler(ignored -> {}).build());
+        runtime.start();
+        RuntimeValue.ObjectValue parameters = RuntimeValues.object();
+
+        assertThrows(IllegalArgumentException.class, () -> runtime.actions().invoke(
+                "ping", "retryable", parameters, Optional.empty(), Duration.ZERO));
+        ActionInvocation retry = runtime.actions().invoke(
+                "ping", "retryable", parameters, Optional.empty(), Duration.ofNanos(100));
+
+        assertEquals(CommandState.QUEUED, retry.command().status().orElseThrow().state());
+        assertEquals(1, queue.size());
+    }
 }

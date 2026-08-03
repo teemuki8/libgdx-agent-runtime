@@ -1,6 +1,7 @@
 package io.github.teemuki8.libgdx.agent.runtime.protocol;
 
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
+import io.github.teemuki8.libgdx.agent.runtime.core.ActionDescriptor;
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntimeException;
 import io.github.teemuki8.libgdx.agent.runtime.core.ChangeQuery;
 import io.github.teemuki8.libgdx.agent.runtime.core.DecisionQuery;
@@ -40,11 +41,13 @@ public final class RuntimeProtocolService {
     private static final List<String> ATTRIBUTION_TOOLS = List.of(
             "runtime_attributed_changes", "runtime_attributed_events",
             "runtime_attributed_decisions");
+    private static final List<String> ACTION_TOOLS = List.of("runtime_actions", "runtime_action");
     private static final List<String> FEATURES = List.of(
             "entities", "frames", "changes", "events", "decisions");
     private static final List<ProtocolVersion> SUPPORTED_VERSIONS =
             List.of(ProtocolVersion.V1, ProtocolVersion.V1_1, ProtocolVersion.V1_2,
-                    ProtocolVersion.V1_3, ProtocolVersion.V1_4, ProtocolVersion.V1_5);
+                    ProtocolVersion.V1_3, ProtocolVersion.V1_4, ProtocolVersion.V1_5,
+                    ProtocolVersion.V1_6);
     private final RuntimeRegistry registry;
 
     /** Creates a service over an isolated or global registry. */
@@ -64,7 +67,25 @@ public final class RuntimeProtocolService {
         }
         boolean scenarios = registry.sessions().stream()
                 .anyMatch(runtime -> !runtime.scenarios().list().isEmpty());
-        return scenarios ? Stream.concat(tools, SCENARIO_TOOLS.stream()).toList() : tools.toList();
+        if (scenarios) {
+            tools = Stream.concat(tools, SCENARIO_TOOLS.stream());
+        }
+        boolean actions = registry.sessions().stream()
+                .anyMatch(runtime -> !runtime.actions().list().isEmpty());
+        return actions ? Stream.concat(tools, ACTION_TOOLS.stream()).toList() : tools.toList();
+    }
+
+    /** Returns registered action schemas in deterministic session and action order. */
+    public List<ActionDescriptor> actionCatalog() {
+        java.util.LinkedHashMap<String, ActionDescriptor> catalog = new java.util.LinkedHashMap<>();
+        registry.sessions().forEach(runtime -> runtime.actions().list().forEach(descriptor -> {
+            ActionDescriptor previous = catalog.putIfAbsent(descriptor.id(), descriptor);
+            if (previous != null && !previous.equals(descriptor)) {
+                throw new IllegalStateException(
+                        "published sessions use conflicting schemas for one action id");
+            }
+        }));
+        return List.copyOf(catalog.values());
     }
 
     /** Executes one request without exposing local exceptions or stack traces. */
@@ -73,7 +94,7 @@ public final class RuntimeProtocolService {
         if (!SUPPORTED_VERSIONS.contains(request.version())) {
             return failure(request, ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                     "protocol version is unsupported", Map.of(
-                            "supported", "1.0,1.1,1.2,1.3,1.4,1.5",
+                            "supported", "1.0,1.1,1.2,1.3,1.4,1.5,1.6",
                             "requested", request.version().major() + "." + request.version().minor()));
         }
         try {
@@ -86,9 +107,16 @@ public final class RuntimeProtocolService {
             if (request.command() instanceof RuntimeCommand.EpochFrames
                     && !(ProtocolVersion.V1_3.equals(request.version())
                     || ProtocolVersion.V1_4.equals(request.version())
-                    || ProtocolVersion.V1_5.equals(request.version()))) {
+                    || ProtocolVersion.V1_5.equals(request.version())
+                    || ProtocolVersion.V1_6.equals(request.version()))) {
                 throw new ProtocolFailure(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                         "command requires protocol version 1.3", Map.of());
+            }
+            if ((request.command() instanceof RuntimeCommand.Actions
+                    || request.command() instanceof RuntimeCommand.Action)
+                    && !ProtocolVersion.V1_6.equals(request.version())) {
+                throw new ProtocolFailure(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
+                        "command requires protocol version 1.6", Map.of());
             }
             if ((request.command() instanceof RuntimeCommand.AttributedChanges
                     || request.command() instanceof RuntimeCommand.AttributedEvents
@@ -156,6 +184,9 @@ public final class RuntimeProtocolService {
             case RuntimeCommand.AttributedChanges command -> attributedChanges(runtime, command);
             case RuntimeCommand.AttributedEvents command -> attributedEvents(runtime, command);
             case RuntimeCommand.AttributedDecisions command -> attributedDecisions(runtime, command);
+            case RuntimeCommand.Actions ignored ->
+                    new RuntimeResponse.Result.Actions(runtime.actions().list());
+            case RuntimeCommand.Action command -> action(runtime, command);
             case RuntimeCommand.Sessions ignored ->
                     throw new AssertionError("sessions handled before runtime lookup");
         };
@@ -220,7 +251,8 @@ public final class RuntimeProtocolService {
                                 "retainedFrames", (long) limits.retainedFrames()),
                         List.of("exact", "latest", "range"), List.of())));
         if (ProtocolVersion.V1_2.equals(version) || ProtocolVersion.V1_3.equals(version)
-                || ProtocolVersion.V1_4.equals(version) || ProtocolVersion.V1_5.equals(version)) {
+                || ProtocolVersion.V1_4.equals(version) || ProtocolVersion.V1_5.equals(version)
+                || ProtocolVersion.V1_6.equals(version)) {
             boolean available = runtime.commands().isPresent();
             Map<String, Long> commandLimits = runtime.commands().map(commands -> Map.of(
                     "queuedCommands", (long) commands.limits().queuedCommands(),
@@ -241,7 +273,7 @@ public final class RuntimeProtocolService {
                     List.of("application-owned", "at-most-once", "bounded"), List.of()));
         }
         if (ProtocolVersion.V1_3.equals(version) || ProtocolVersion.V1_4.equals(version)
-                || ProtocolVersion.V1_5.equals(version)) {
+                || ProtocolVersion.V1_5.equals(version) || ProtocolVersion.V1_6.equals(version)) {
             details.add(new RuntimeCapability(
                     "execution-epochs", ProtocolVersion.V1_3,
                     runtime.configuration().enabled()
@@ -257,7 +289,8 @@ public final class RuntimeProtocolService {
                             "retainedFrames", (long) limits.retainedFrames()),
                     List.of("baseline", "epoch-filter"), List.of("frames")));
         }
-        if (ProtocolVersion.V1_4.equals(version) || ProtocolVersion.V1_5.equals(version)) {
+        if (ProtocolVersion.V1_4.equals(version) || ProtocolVersion.V1_5.equals(version)
+                || ProtocolVersion.V1_6.equals(version)) {
             boolean registered = !runtime.scenarios().list().isEmpty();
             boolean available = registered && runtime.commands().isPresent();
             details.add(new RuntimeCapability(
@@ -278,7 +311,7 @@ public final class RuntimeProtocolService {
                             "reset-parameters-unsupported", "seed-control-unsupported"),
                     List.of("command-dispatch", "execution-epochs")));
         }
-        if (ProtocolVersion.V1_5.equals(version)) {
+        if (ProtocolVersion.V1_5.equals(version) || ProtocolVersion.V1_6.equals(version)) {
             details.add(new RuntimeCapability(
                     "explicit-fact-attribution", ProtocolVersion.V1_5,
                     runtime.configuration().enabled()
@@ -299,26 +332,54 @@ public final class RuntimeProtocolService {
                     List.of("explicit", "exact-filter", "unverified-source-label"),
                     List.of("changes", "events", "decisions")));
         }
+        if (ProtocolVersion.V1_6.equals(version)) {
+            boolean registered = !runtime.actions().list().isEmpty();
+            boolean available = registered && runtime.commands().isPresent();
+            details.add(new RuntimeCapability(
+                    "semantic-actions", ProtocolVersion.V1_6,
+                    available ? RuntimeCapability.Availability.AVAILABLE
+                            : RuntimeCapability.Availability.UNAVAILABLE,
+                    available ? Optional.empty() : Optional.of(registered
+                            ? "dispatcher-not-registered" : "action-not-registered"),
+                    RuntimeCapability.Access.MUTATING,
+                    List.of("AgentRuntime#actions", "ActionRegistry#register",
+                            "ActionRegistry#invoke"), List.of("actions", "action"), ACTION_TOOLS,
+                    runtime.actions().limits().registeredActions() > 0 ? Map.of(
+                            "registeredActions",
+                            (long) runtime.actions().limits().registeredActions(),
+                            "parametersPerAction",
+                            (long) runtime.actions().limits().parametersPerAction(),
+                            "retainedInvocations",
+                            (long) runtime.actions().limits().retainedInvocations(),
+                            "stringLength", (long) runtime.actions().limits().stringLength())
+                            : Map.of(),
+                    List.of("application-owned", "closed-schema", "at-most-once"),
+                    List.of("command-dispatch", "explicit-fact-attribution")));
+        }
         return List.copyOf(details);
     }
 
     private static List<String> toolsFor(AgentRuntime runtime, ProtocolVersion version) {
         Stream<String> tools = BASE_TOOLS.stream();
         if (ProtocolVersion.V1_3.equals(version) || ProtocolVersion.V1_4.equals(version)
-                || ProtocolVersion.V1_5.equals(version)) {
+                || ProtocolVersion.V1_5.equals(version) || ProtocolVersion.V1_6.equals(version)) {
             tools = Stream.concat(tools, EPOCH_TOOLS.stream());
         }
         if (runtime.commands().isPresent() && (ProtocolVersion.V1_2.equals(version)
                 || ProtocolVersion.V1_3.equals(version) || ProtocolVersion.V1_4.equals(version)
-                || ProtocolVersion.V1_5.equals(version))) {
+                || ProtocolVersion.V1_5.equals(version) || ProtocolVersion.V1_6.equals(version))) {
             tools = Stream.concat(tools, COMMAND_TOOLS.stream());
         }
-        if ((ProtocolVersion.V1_4.equals(version) || ProtocolVersion.V1_5.equals(version))
+        if ((ProtocolVersion.V1_4.equals(version) || ProtocolVersion.V1_5.equals(version)
+                || ProtocolVersion.V1_6.equals(version))
                 && !runtime.scenarios().list().isEmpty()) {
             tools = Stream.concat(tools, SCENARIO_TOOLS.stream());
         }
-        return ProtocolVersion.V1_5.equals(version)
-                ? Stream.concat(tools, ATTRIBUTION_TOOLS.stream()).toList() : tools.toList();
+        if (ProtocolVersion.V1_5.equals(version) || ProtocolVersion.V1_6.equals(version)) {
+            tools = Stream.concat(tools, ATTRIBUTION_TOOLS.stream());
+        }
+        return ProtocolVersion.V1_6.equals(version) && !runtime.actions().list().isEmpty()
+                ? Stream.concat(tools, ACTION_TOOLS.stream()).toList() : tools.toList();
     }
 
     private static RuntimeResponse.Result epochFrames(
@@ -350,6 +411,34 @@ public final class RuntimeProtocolService {
         } catch (IllegalArgumentException failure) {
             throw new ProtocolFailure(ProtocolErrorCode.INVALID_QUERY,
                     failure.getMessage(), Map.of("scenarioId", command.scenarioId()));
+        }
+    }
+
+    private static RuntimeResponse.Result action(
+            AgentRuntime runtime, RuntimeCommand.Action command) {
+        if (runtime.commands().isEmpty()) {
+            throw capabilityUnavailable(runtime);
+        }
+        long maximum = runtime.commands().orElseThrow().limits().maximumTimeoutNanos();
+        if (command.timeoutNanos() > maximum) {
+            throw new ProtocolFailure(ProtocolErrorCode.LIMIT_EXCEEDED,
+                    "action timeout exceeds the configured limit",
+                    Map.of("maximumTimeoutNanos", Long.toString(maximum)));
+        }
+        try {
+            return new RuntimeResponse.Result.Action(runtime.actions().invoke(
+                    command.actionId(), command.actionRequestId(), command.parameters(),
+                    optional(command.correlationId()), Duration.ofNanos(command.timeoutNanos())));
+        } catch (AgentRuntimeException failure) {
+            if (failure.code() == io.github.teemuki8.libgdx.agent.runtime.core.RuntimeErrorCode
+                    .LIMIT_EXCEEDED) {
+                throw new ProtocolFailure(ProtocolErrorCode.LIMIT_EXCEEDED,
+                        failure.getMessage(), Map.of());
+            }
+            throw failure;
+        } catch (IllegalArgumentException failure) {
+            throw new ProtocolFailure(ProtocolErrorCode.INVALID_QUERY,
+                    failure.getMessage(), Map.of("actionId", command.actionId()));
         }
     }
 

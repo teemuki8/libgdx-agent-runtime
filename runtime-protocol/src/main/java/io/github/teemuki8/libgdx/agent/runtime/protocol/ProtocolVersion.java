@@ -14,8 +14,10 @@ public record ProtocolVersion(int major, int minor) {
     public static final ProtocolVersion V1_4 = new ProtocolVersion(1, 4);
     /** Explicit fact-attribution and metadata-query protocol version. */
     public static final ProtocolVersion V1_5 = new ProtocolVersion(1, 5);
+    /** Explicit typed semantic-action protocol version. */
+    public static final ProtocolVersion V1_6 = new ProtocolVersion(1, 6);
     /** Latest implemented protocol version. */
-    public static final ProtocolVersion CURRENT = V1_5;
+    public static final ProtocolVersion CURRENT = V1_6;
 
     /** Validates version components. */
     public ProtocolVersion {

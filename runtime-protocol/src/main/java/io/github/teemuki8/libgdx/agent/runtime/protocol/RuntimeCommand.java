@@ -21,14 +21,17 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
     @JsonSubTypes.Type(value = RuntimeCommand.Reset.class, name = "reset"),
     @JsonSubTypes.Type(value = RuntimeCommand.AttributedChanges.class, name = "attributedChanges"),
     @JsonSubTypes.Type(value = RuntimeCommand.AttributedEvents.class, name = "attributedEvents"),
-    @JsonSubTypes.Type(value = RuntimeCommand.AttributedDecisions.class, name = "attributedDecisions")
+    @JsonSubTypes.Type(value = RuntimeCommand.AttributedDecisions.class, name = "attributedDecisions"),
+    @JsonSubTypes.Type(value = RuntimeCommand.Actions.class, name = "actions"),
+    @JsonSubTypes.Type(value = RuntimeCommand.Action.class, name = "action")
 })
 public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeCommand.Capabilities,
         RuntimeCommand.Frames, RuntimeCommand.Snapshot, RuntimeCommand.Entity,
         RuntimeCommand.Changes, RuntimeCommand.Events, RuntimeCommand.Decisions,
         RuntimeCommand.CommandStatus, RuntimeCommand.CommandCancel, RuntimeCommand.EpochFrames,
         RuntimeCommand.Scenarios, RuntimeCommand.Reset, RuntimeCommand.AttributedChanges,
-        RuntimeCommand.AttributedEvents, RuntimeCommand.AttributedDecisions {
+        RuntimeCommand.AttributedEvents, RuntimeCommand.AttributedDecisions,
+        RuntimeCommand.Actions, RuntimeCommand.Action {
     /** Lists published sessions. */
     record Sessions() implements RuntimeCommand {}
 
@@ -217,6 +220,24 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
             requireOptionalIdentifier(sourceSubsystem, "sourceSubsystem");
             requireOptionalIdentifier(correlationId, "correlationId");
             validateLimit(limit);
+        }
+    }
+
+    /** Lists explicitly registered typed semantic actions. */
+    record Actions() implements RuntimeCommand {}
+
+    /** Submits or polls one idempotently correlated semantic action. */
+    record Action(String actionId, String actionRequestId,
+            io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue.ObjectValue parameters,
+            String correlationId, long timeoutNanos) implements RuntimeCommand {
+        public Action {
+            ProtocolJson.requireIdentifier(actionId, "actionId");
+            ProtocolJson.requireIdentifier(actionRequestId, "actionRequestId");
+            java.util.Objects.requireNonNull(parameters, "parameters");
+            requireOptionalIdentifier(correlationId, "correlationId");
+            if (timeoutNanos <= 0) {
+                throw new IllegalArgumentException("timeoutNanos must be positive");
+            }
         }
     }
 

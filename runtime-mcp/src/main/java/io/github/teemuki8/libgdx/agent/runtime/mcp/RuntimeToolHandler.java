@@ -8,6 +8,10 @@ import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeCommand;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeProtocolService;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeRequest;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeResponse;
+import io.github.teemuki8.libgdx.agent.runtime.core.ActionDescriptor;
+import io.github.teemuki8.libgdx.agent.runtime.core.ActionParameter;
+import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue;
+import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import io.modelcontextprotocol.json.McpJsonDefaults;
 import io.modelcontextprotocol.spec.McpSchema;
 import java.util.LinkedHashMap;
@@ -37,7 +41,7 @@ public final class RuntimeToolHandler implements AutoCloseable {
 
     /** Creates a handler over one protocol service. */
     public RuntimeToolHandler(RuntimeProtocolService protocol) {
-        this(protocol, new RuntimeToolCatalog(protocol.toolNames()));
+        this(protocol, new RuntimeToolCatalog(protocol.toolNames(), protocol.actionCatalog()));
     }
 
     RuntimeToolHandler(RuntimeProtocolService protocol, RuntimeToolCatalog catalog) {
@@ -141,6 +145,11 @@ public final class RuntimeToolHandler implements AutoCloseable {
                     string(arguments, "chosenCandidate"), string(arguments, "reasonCode"),
                     string(arguments, "sourceSubsystem"), string(arguments, "correlationId"),
                     limit);
+            case "runtime_actions" -> new RuntimeCommand.Actions();
+            case "runtime_action" -> new RuntimeCommand.Action(
+                    string(arguments, "action"), string(arguments, "actionRequestId"),
+                    actionParameters(string(arguments, "action"), arguments.get("parameters")),
+                    string(arguments, "correlationId"), number(arguments, "timeoutNanos", -1));
             default -> throw new IllegalArgumentException("unknown runtime tool");
         };
         ProtocolVersion version = switch (toolName) {
@@ -151,6 +160,7 @@ public final class RuntimeToolHandler implements AutoCloseable {
             case "runtime_scenarios", "runtime_reset" -> ProtocolVersion.V1_4;
             case "runtime_attributed_changes", "runtime_attributed_events",
                     "runtime_attributed_decisions" -> ProtocolVersion.V1_5;
+            case "runtime_actions", "runtime_action" -> ProtocolVersion.V1_6;
             default -> ProtocolVersion.V1;
         };
         return new RuntimeRequest(version,
@@ -175,6 +185,46 @@ public final class RuntimeToolHandler implements AutoCloseable {
     private static boolean bool(Map<String, Object> values, String key) {
         Object value = values.get(key);
         return value != null && (Boolean) value;
+    }
+
+    private RuntimeValue.ObjectValue actionParameters(String actionId, Object raw) {
+        if (!(raw instanceof Map<?, ?> values)) {
+            throw new IllegalArgumentException("action parameters must be an object");
+        }
+        ActionDescriptor descriptor = catalog.action(actionId);
+        Map<String, ActionParameter> schema = descriptor.parameters().stream().collect(
+                java.util.stream.Collectors.toMap(ActionParameter::name, value -> value));
+        java.util.ArrayList<RuntimeValue.Field> fields = new java.util.ArrayList<>();
+        for (Map.Entry<?, ?> entry : values.entrySet()) {
+            if (!(entry.getKey() instanceof String name)) {
+                throw new IllegalArgumentException("action parameter name must be a string");
+            }
+            ActionParameter parameter = schema.get(name);
+            if (parameter == null) {
+                throw new IllegalArgumentException("unknown action parameter");
+            }
+            fields.add(RuntimeValues.field(name, actionValue(parameter, entry.getValue())));
+        }
+        return new RuntimeValue.ObjectValue(fields);
+    }
+
+    private static RuntimeValue actionValue(ActionParameter parameter, Object raw) {
+        return switch (parameter.type()) {
+            case BOOLEAN -> raw instanceof Boolean value ? RuntimeValues.bool(value) : wrongType();
+            case INTEGER -> raw instanceof Byte || raw instanceof Short || raw instanceof Integer
+                    || raw instanceof Long ? RuntimeValues.integer(((Number) raw).longValue())
+                    : wrongType();
+            case DECIMAL -> raw instanceof Number value
+                    ? RuntimeValues.decimal(value.toString()) : wrongType();
+            case STRING, ENTITY_ID -> raw instanceof String value
+                    ? RuntimeValues.string(value) : wrongType();
+            case ENUM -> raw instanceof String value
+                    ? RuntimeValues.enumValue(value) : wrongType();
+        };
+    }
+
+    private static RuntimeValue wrongType() {
+        throw new IllegalArgumentException("action parameter has the wrong type");
     }
 
     private static McpSchema.CallToolResult error(String code, String message) {

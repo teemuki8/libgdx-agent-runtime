@@ -123,6 +123,10 @@ public final class RuntimeToolHandler implements AutoCloseable {
                     string(arguments, "commandRequestId"));
             case "runtime_epoch_frames" -> new RuntimeCommand.EpochFrames(
                     number(arguments, "executionEpochId", -1), limit);
+            case "runtime_scenarios" -> new RuntimeCommand.Scenarios();
+            case "runtime_reset" -> new RuntimeCommand.Reset(
+                    string(arguments, "scenarioId"), string(arguments, "resetRequestId"),
+                    number(arguments, "timeoutNanos", -1));
             default -> throw new IllegalArgumentException("unknown runtime tool");
         };
         ProtocolVersion version = switch (toolName) {
@@ -130,6 +134,7 @@ public final class RuntimeToolHandler implements AutoCloseable {
                     1, Math.toIntExact(number(arguments, "protocolMinor", 0)));
             case "runtime_command_status", "runtime_command_cancel" -> ProtocolVersion.V1_2;
             case "runtime_epoch_frames" -> ProtocolVersion.V1_3;
+            case "runtime_scenarios", "runtime_reset" -> ProtocolVersion.V1_4;
             default -> ProtocolVersion.V1;
         };
         return new RuntimeRequest(version,

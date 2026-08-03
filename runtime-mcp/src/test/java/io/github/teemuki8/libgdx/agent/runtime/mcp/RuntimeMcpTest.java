@@ -183,6 +183,40 @@ final class RuntimeMcpTest {
     }
 
     @Test
+    void registeredScenariosAddClosedCatalogAndResetTools() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("scenarios"))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .build();
+        runtime.scenarios().register("basic-combat", "Known state", () -> {});
+        runtime.start();
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime);
+                RuntimeToolHandler handler =
+                        new RuntimeToolHandler(new RuntimeProtocolService(registry))) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            McpSchema.CallToolResult list = handler.handle(call(
+                    "runtime_scenarios", Map.of("sessionId", "scenarios")))
+                    .block(Duration.ofSeconds(5));
+            assertFalse(list.isError());
+            McpSchema.CallToolResult reset = handler.handle(call(
+                    "runtime_reset", Map.of("sessionId", "scenarios",
+                            "scenarioId", "basic-combat", "resetRequestId", "reset-1",
+                            "timeoutNanos", 1_000)))
+                    .block(Duration.ofSeconds(5));
+            assertFalse(reset.isError());
+            McpSchema.CallToolResult rejected = handler.handle(call(
+                    "runtime_reset", Map.of("sessionId", "scenarios",
+                            "scenarioId", "basic-combat", "resetRequestId", "reset-2",
+                            "timeoutNanos", 1_000, "script", "System.exit(0)")))
+                    .block(Duration.ofSeconds(5));
+            assertTrue(rejected.isError());
+        }
+    }
+
+    @Test
     void executionEpochToolUsesClosedProtocolThirteenSchema() {
         Fixture fixture = fixture();
         fixture.runtime.startEpoch(BaselineKind.CHECKPOINT_RESTORE);

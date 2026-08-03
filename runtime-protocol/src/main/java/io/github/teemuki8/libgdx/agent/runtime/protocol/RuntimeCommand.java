@@ -16,12 +16,15 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
     @JsonSubTypes.Type(value = RuntimeCommand.Decisions.class, name = "decisions"),
     @JsonSubTypes.Type(value = RuntimeCommand.CommandStatus.class, name = "commandStatus"),
     @JsonSubTypes.Type(value = RuntimeCommand.CommandCancel.class, name = "commandCancel"),
-    @JsonSubTypes.Type(value = RuntimeCommand.EpochFrames.class, name = "epochFrames")
+    @JsonSubTypes.Type(value = RuntimeCommand.EpochFrames.class, name = "epochFrames"),
+    @JsonSubTypes.Type(value = RuntimeCommand.Scenarios.class, name = "scenarios"),
+    @JsonSubTypes.Type(value = RuntimeCommand.Reset.class, name = "reset")
 })
 public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeCommand.Capabilities,
         RuntimeCommand.Frames, RuntimeCommand.Snapshot, RuntimeCommand.Entity,
         RuntimeCommand.Changes, RuntimeCommand.Events, RuntimeCommand.Decisions,
-        RuntimeCommand.CommandStatus, RuntimeCommand.CommandCancel, RuntimeCommand.EpochFrames {
+        RuntimeCommand.CommandStatus, RuntimeCommand.CommandCancel, RuntimeCommand.EpochFrames,
+        RuntimeCommand.Scenarios, RuntimeCommand.Reset {
     /** Lists published sessions. */
     record Sessions() implements RuntimeCommand {}
 
@@ -149,6 +152,21 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
                 throw new IllegalArgumentException("executionEpochId must be non-negative");
             }
             validateLimit(limit);
+        }
+    }
+
+    /** Lists explicitly registered resettable scenarios. */
+    record Scenarios() implements RuntimeCommand {}
+
+    /** Submits or polls one idempotently correlated scenario reset. */
+    record Reset(String scenarioId, String resetRequestId, long timeoutNanos)
+            implements RuntimeCommand {
+        public Reset {
+            ProtocolJson.requireIdentifier(scenarioId, "scenarioId");
+            ProtocolJson.requireIdentifier(resetRequestId, "resetRequestId");
+            if (timeoutNanos <= 0) {
+                throw new IllegalArgumentException("timeoutNanos must be positive");
+            }
         }
     }
 

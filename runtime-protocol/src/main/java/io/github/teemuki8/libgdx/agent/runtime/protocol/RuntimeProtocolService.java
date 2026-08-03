@@ -22,6 +22,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Stream;
+import java.time.Duration;
 
 /** Executes explicit protocol commands against an injected registry. */
 public final class RuntimeProtocolService {
@@ -34,11 +35,13 @@ public final class RuntimeProtocolService {
     private static final List<String> COMMAND_TOOLS =
             List.of("runtime_command_status", "runtime_command_cancel");
     private static final List<String> EPOCH_TOOLS = List.of("runtime_epoch_frames");
+    private static final List<String> SCENARIO_TOOLS =
+            List.of("runtime_scenarios", "runtime_reset");
     private static final List<String> FEATURES = List.of(
             "entities", "frames", "changes", "events", "decisions");
     private static final List<ProtocolVersion> SUPPORTED_VERSIONS =
             List.of(ProtocolVersion.V1, ProtocolVersion.V1_1, ProtocolVersion.V1_2,
-                    ProtocolVersion.V1_3);
+                    ProtocolVersion.V1_3, ProtocolVersion.V1_4);
     private final RuntimeRegistry registry;
 
     /** Creates a service over an isolated or global registry. */
@@ -51,8 +54,12 @@ public final class RuntimeProtocolService {
         boolean commandDispatch = registry.sessions().stream()
                 .anyMatch(runtime -> runtime.commands().isPresent());
         Stream<String> tools = Stream.concat(BASE_TOOLS.stream(), EPOCH_TOOLS.stream());
-        return commandDispatch ? Stream.concat(tools, COMMAND_TOOLS.stream()).toList()
-                : tools.toList();
+        if (commandDispatch) {
+            tools = Stream.concat(tools, COMMAND_TOOLS.stream());
+        }
+        boolean scenarios = registry.sessions().stream()
+                .anyMatch(runtime -> !runtime.scenarios().list().isEmpty());
+        return scenarios ? Stream.concat(tools, SCENARIO_TOOLS.stream()).toList() : tools.toList();
     }
 
     /** Executes one request without exposing local exceptions or stack traces. */
@@ -61,7 +68,7 @@ public final class RuntimeProtocolService {
         if (!SUPPORTED_VERSIONS.contains(request.version())) {
             return failure(request, ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                     "protocol version is unsupported", Map.of(
-                            "supported", "1.0,1.1,1.2,1.3",
+                            "supported", "1.0,1.1,1.2,1.3,1.4",
                             "requested", request.version().major() + "." + request.version().minor()));
         }
         try {
@@ -72,9 +79,16 @@ public final class RuntimeProtocolService {
                         "command requires protocol version 1.2", Map.of());
             }
             if (request.command() instanceof RuntimeCommand.EpochFrames
-                    && !ProtocolVersion.V1_3.equals(request.version())) {
+                    && !(ProtocolVersion.V1_3.equals(request.version())
+                    || ProtocolVersion.V1_4.equals(request.version()))) {
                 throw new ProtocolFailure(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                         "command requires protocol version 1.3", Map.of());
+            }
+            if ((request.command() instanceof RuntimeCommand.Scenarios
+                    || request.command() instanceof RuntimeCommand.Reset)
+                    && !ProtocolVersion.V1_4.equals(request.version())) {
+                throw new ProtocolFailure(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
+                        "command requires protocol version 1.4", Map.of());
             }
             return new RuntimeResponse.Success(
                     request.version(), request.requestId(), executeCommand(request));
@@ -123,6 +137,9 @@ public final class RuntimeProtocolService {
                             runtime.commands().orElseThrow(() -> capabilityUnavailable(runtime))
                                     .cancel(command.commandRequestId()));
             case RuntimeCommand.EpochFrames command -> epochFrames(runtime, command);
+            case RuntimeCommand.Scenarios ignored ->
+                    new RuntimeResponse.Result.Scenarios(runtime.scenarios().list());
+            case RuntimeCommand.Reset command -> reset(runtime, command);
             case RuntimeCommand.Sessions ignored ->
                     throw new AssertionError("sessions handled before runtime lookup");
         };
@@ -186,7 +203,8 @@ public final class RuntimeProtocolService {
                                 "queryResults", (long) limits.queryResults(),
                                 "retainedFrames", (long) limits.retainedFrames()),
                         List.of("exact", "latest", "range"), List.of())));
-        if (ProtocolVersion.V1_2.equals(version) || ProtocolVersion.V1_3.equals(version)) {
+        if (ProtocolVersion.V1_2.equals(version) || ProtocolVersion.V1_3.equals(version)
+                || ProtocolVersion.V1_4.equals(version)) {
             boolean available = runtime.commands().isPresent();
             Map<String, Long> commandLimits = runtime.commands().map(commands -> Map.of(
                     "queuedCommands", (long) commands.limits().queuedCommands(),
@@ -206,7 +224,7 @@ public final class RuntimeProtocolService {
                     List.of("commandStatus", "commandCancel"), COMMAND_TOOLS, commandLimits,
                     List.of("application-owned", "at-most-once", "bounded"), List.of()));
         }
-        if (ProtocolVersion.V1_3.equals(version)) {
+        if (ProtocolVersion.V1_3.equals(version) || ProtocolVersion.V1_4.equals(version)) {
             details.add(new RuntimeCapability(
                     "execution-epochs", ProtocolVersion.V1_3,
                     runtime.configuration().enabled()
@@ -222,17 +240,41 @@ public final class RuntimeProtocolService {
                             "retainedFrames", (long) limits.retainedFrames()),
                     List.of("baseline", "epoch-filter"), List.of("frames")));
         }
+        if (ProtocolVersion.V1_4.equals(version)) {
+            boolean registered = !runtime.scenarios().list().isEmpty();
+            boolean available = registered && runtime.commands().isPresent();
+            details.add(new RuntimeCapability(
+                    "resettable-scenarios", ProtocolVersion.V1_4,
+                    available ? RuntimeCapability.Availability.AVAILABLE
+                            : RuntimeCapability.Availability.UNAVAILABLE,
+                    available ? Optional.empty() : Optional.of(registered
+                            ? "dispatcher-not-registered" : "scenario-not-registered"),
+                    RuntimeCapability.Access.MUTATING,
+                    List.of("AgentRuntime#scenarios", "ScenarioRegistry#register",
+                            "ScenarioRegistry#reset"),
+                    List.of("scenarios", "reset"), SCENARIO_TOOLS, Map.of(
+                            "registeredScenarios",
+                            (long) runtime.scenarios().limits().registeredScenarios(),
+                            "retainedResetResults",
+                            (long) runtime.scenarios().limits().retainedResetResults()),
+                    List.of("application-owned", "explicit-registration", "bounded",
+                            "reset-parameters-unsupported", "seed-control-unsupported"),
+                    List.of("command-dispatch", "execution-epochs")));
+        }
         return List.copyOf(details);
     }
 
     private static List<String> toolsFor(AgentRuntime runtime, ProtocolVersion version) {
         Stream<String> tools = BASE_TOOLS.stream();
-        if (ProtocolVersion.V1_3.equals(version)) {
+        if (ProtocolVersion.V1_3.equals(version) || ProtocolVersion.V1_4.equals(version)) {
             tools = Stream.concat(tools, EPOCH_TOOLS.stream());
         }
-        return runtime.commands().isPresent() && (ProtocolVersion.V1_2.equals(version)
-                || ProtocolVersion.V1_3.equals(version))
-                ? Stream.concat(tools, COMMAND_TOOLS.stream()).toList() : tools.toList();
+        if (runtime.commands().isPresent() && (ProtocolVersion.V1_2.equals(version)
+                || ProtocolVersion.V1_3.equals(version) || ProtocolVersion.V1_4.equals(version))) {
+            tools = Stream.concat(tools, COMMAND_TOOLS.stream());
+        }
+        return ProtocolVersion.V1_4.equals(version) && !runtime.scenarios().list().isEmpty()
+                ? Stream.concat(tools, SCENARIO_TOOLS.stream()).toList() : tools.toList();
     }
 
     private static RuntimeResponse.Result epochFrames(
@@ -244,6 +286,27 @@ public final class RuntimeProtocolService {
                             "executionEpochId", Long.toString(command.executionEpochId())));
         }
         return new RuntimeResponse.Result.EpochFrames(runtime.frames(epochId, command.limit()));
+    }
+
+    private static RuntimeResponse.Result reset(
+            AgentRuntime runtime, RuntimeCommand.Reset command) {
+        if (runtime.commands().isEmpty()) {
+            throw capabilityUnavailable(runtime);
+        }
+        long maximum = runtime.commands().orElseThrow().limits().maximumTimeoutNanos();
+        if (command.timeoutNanos() > maximum) {
+            throw new ProtocolFailure(ProtocolErrorCode.LIMIT_EXCEEDED,
+                    "reset timeout exceeds the configured limit",
+                    Map.of("maximumTimeoutNanos", Long.toString(maximum)));
+        }
+        try {
+            return new RuntimeResponse.Result.Reset(runtime.scenarios().reset(
+                    command.scenarioId(), command.resetRequestId(),
+                    Duration.ofNanos(command.timeoutNanos())));
+        } catch (IllegalArgumentException failure) {
+            throw new ProtocolFailure(ProtocolErrorCode.INVALID_QUERY,
+                    failure.getMessage(), Map.of("scenarioId", command.scenarioId()));
+        }
     }
 
     private static ProtocolFailure capabilityUnavailable(AgentRuntime runtime) {

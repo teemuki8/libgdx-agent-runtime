@@ -56,6 +56,7 @@ public final class ScenarioRegistry {
         boolean existing;
         CommandDispatch dispatch = runtime.commands().orElseThrow(() ->
                 new IllegalStateException("scenario reset requires application command dispatch"));
+        requireValidTimeout(timeout, dispatch.limits().maximumTimeoutNanos());
         synchronized (this) {
             entry = entries.get(scenarioId);
             if (entry == null) {
@@ -100,6 +101,22 @@ public final class ScenarioRegistry {
 
     public ScenarioLimits limits() {
         return limits;
+    }
+
+    private static void requireValidTimeout(Duration timeout, long maximumNanos) {
+        Objects.requireNonNull(timeout, "timeout");
+        if (timeout.isNegative() || timeout.isZero()) {
+            throw new IllegalArgumentException("timeout must be positive");
+        }
+        final long nanos;
+        try {
+            nanos = timeout.toNanos();
+        } catch (ArithmeticException failure) {
+            throw new IllegalArgumentException("timeout exceeds the supported range", failure);
+        }
+        if (nanos > maximumNanos) {
+            throw new IllegalArgumentException("timeout exceeds the configured limit");
+        }
     }
 
     private <V> void trim(LinkedHashMap<String, V> values) {

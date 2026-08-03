@@ -98,4 +98,21 @@ final class ScenarioRegistryTest {
         assertEquals(1, resets.get());
         assertTrue(queue.isEmpty());
     }
+
+    @Test
+    void invalidTimeoutDoesNotPoisonARequestId() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        AgentRuntime runtime = AgentRuntime.builder().clock(() -> 1)
+                .commandDispatcher(queue::addLast).build();
+        runtime.scenarios().register("one", () -> {});
+        runtime.start();
+
+        assertThrows(IllegalArgumentException.class, () -> runtime.scenarios().reset(
+                "one", "retryable", Duration.ZERO));
+        ScenarioReset retry = runtime.scenarios().reset(
+                "one", "retryable", Duration.ofNanos(100));
+
+        assertEquals(CommandState.QUEUED, retry.command().status().orElseThrow().state());
+        assertEquals(1, queue.size());
+    }
 }

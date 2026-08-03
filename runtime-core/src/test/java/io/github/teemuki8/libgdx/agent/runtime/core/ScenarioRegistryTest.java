@@ -75,4 +75,27 @@ final class ScenarioRegistryTest {
         assertTrue(reset.baselineFrameId().isEmpty());
         runtime.endFrame();
     }
+
+    @Test
+    void retainedScenarioEvidenceNeverRedispatchesAnExpiredCommand() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        AtomicInteger resets = new AtomicInteger();
+        AgentRuntime runtime = AgentRuntime.builder().clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .commandDispatchLimits(new CommandDispatchLimits(2, 1, 1, 1_000, 100))
+                .scenarioLimits(new ScenarioLimits(2, 2)).build();
+        runtime.scenarios().register("one", resets::incrementAndGet);
+        runtime.start();
+        runtime.scenarios().reset("one", "first", Duration.ofNanos(100));
+        queue.removeFirst().run();
+        runtime.commands().orElseThrow().submit("second", 100, () -> {});
+        queue.removeFirst().run();
+
+        ScenarioReset retry = runtime.scenarios().reset(
+                "one", "first", Duration.ofNanos(100));
+
+        assertEquals(CommandLookup.Kind.EXPIRED, retry.command().kind());
+        assertEquals(1, resets.get());
+        assertTrue(queue.isEmpty());
+    }
 }

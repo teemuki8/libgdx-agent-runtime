@@ -53,6 +53,7 @@ public final class ScenarioRegistry {
     /** Resets a registered scenario through application command dispatch. */
     public ScenarioReset reset(String scenarioId, String requestId, Duration timeout) {
         Entry entry;
+        boolean existing;
         CommandDispatch dispatch = runtime.commands().orElseThrow(() ->
                 new IllegalStateException("scenario reset requires application command dispatch"));
         synchronized (this) {
@@ -61,6 +62,7 @@ public final class ScenarioRegistry {
                 throw new IllegalArgumentException("unknown scenario id");
             }
             String previous = requests.get(requestId);
+            existing = previous != null;
             if (previous != null && !previous.equals(scenarioId)) {
                 throw new IllegalArgumentException("request id is already bound to another scenario");
             }
@@ -70,6 +72,15 @@ public final class ScenarioRegistry {
             }
             requests.putIfAbsent(requestId, scenarioId);
             trim(requests);
+        }
+        if (existing) {
+            Baseline baseline;
+            synchronized (this) {
+                baseline = completed.get(requestId);
+            }
+            return new ScenarioReset(scenarioId, dispatch.status(requestId),
+                    Optional.ofNullable(baseline).map(Baseline::epoch),
+                    Optional.ofNullable(baseline).map(Baseline::frame));
         }
         CommandLookup lookup = dispatch.submit(requestId, timeout, () -> {
             FrameId frame = runtime.executeScenarioReset(entry.reset());

@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
 import io.github.teemuki8.libgdx.agent.runtime.core.CommandState;
+import io.github.teemuki8.libgdx.agent.runtime.core.BaselineKind;
 import io.github.teemuki8.libgdx.agent.runtime.mcp.RuntimeToolHandler;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.ProtocolJson;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.ProtocolVersion;
@@ -133,6 +134,34 @@ final class FixtureProtocolAndMcpTest {
         }
         applicationQueue.removeFirst().run();
         assertEquals(0, executions[0]);
+        runtime.close();
+    }
+
+    @Test
+    void fixtureExposesResetBaselineEpochThroughProtocolAndMcp() {
+        DeterministicSimulation simulation = new DeterministicSimulation();
+        AgentRuntime runtime = simulation.startRuntime();
+        runtime.startEpoch(BaselineKind.SCENARIO_RESET);
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime);
+                RuntimeToolHandler handler =
+                        new RuntimeToolHandler(new RuntimeProtocolService(registry))) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            RuntimeResponse.Result.EpochFrames protocol = assertInstanceOf(
+                    RuntimeResponse.Result.EpochFrames.class,
+                    assertInstanceOf(RuntimeResponse.Success.class,
+                            new RuntimeProtocolService(registry).execute(new RuntimeRequest(
+                                    ProtocolVersion.V1_3, "epoch-fixture",
+                                    DeterministicSimulation.SESSION_ID.value(),
+                                    new RuntimeCommand.EpochFrames(1, 10)))).result());
+            assertEquals(0, protocol.page().items().getFirst().changeCount());
+            McpSchema.CallToolResult mcp = handler.handle(call("runtime_epoch_frames", Map.of(
+                    "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                    "executionEpochId", 1))).block(Duration.ofSeconds(5));
+            assertNotNull(mcp);
+            assertFalse(mcp.isError());
+            assertTrue(mcp.structuredContent().toString().contains("SCENARIO_RESET"));
+        }
         runtime.close();
     }
 

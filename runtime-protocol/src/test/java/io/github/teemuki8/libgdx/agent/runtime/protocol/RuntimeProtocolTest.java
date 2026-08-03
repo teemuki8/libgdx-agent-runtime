@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
+import io.github.teemuki8.libgdx.agent.runtime.core.BaselineKind;
 import io.github.teemuki8.libgdx.agent.runtime.core.CommandState;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityType;
@@ -89,7 +90,7 @@ final class RuntimeProtocolTest {
                 service.execute(new RuntimeRequest(
                         new ProtocolVersion(2, 0), "v", null, new RuntimeCommand.Sessions())));
         assertEquals(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED, version.error().code());
-        assertEquals("1.0,1.1,1.2", version.error().details().get("supported"));
+        assertEquals("1.0,1.1,1.2,1.3", version.error().details().get("supported"));
 
         RuntimeResponse.Failure missing = assertInstanceOf(RuntimeResponse.Failure.class,
                 service.execute(new RuntimeRequest(ProtocolVersion.V1, "s", "missing",
@@ -248,6 +249,34 @@ final class RuntimeProtocolTest {
                     .findFirst().orElseThrow();
             assertEquals(RuntimeCapability.Availability.UNAVAILABLE, dispatch.availability());
             assertEquals("dispatcher-not-registered", dispatch.unavailableReason().orElseThrow());
+        }
+    }
+
+    @Test
+    void executionEpochFramesRoundTripWithoutChangingEarlierVersions() {
+        AgentRuntime runtime = verticalRuntime();
+        runtime.startEpoch(BaselineKind.SCENARIO_RESET);
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime)) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            RuntimeProtocolService service = new RuntimeProtocolService(registry);
+            RuntimeResponse.Result.EpochFrames epochFrames = assertInstanceOf(
+                    RuntimeResponse.Result.EpochFrames.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V1_3, "epoch", "fixture",
+                                    new RuntimeCommand.EpochFrames(1, 10)))).result());
+            assertEquals(1, epochFrames.page().items().size());
+            assertEquals(Optional.of(BaselineKind.SCENARIO_RESET),
+                    epochFrames.page().items().getFirst().baselineKind());
+            RuntimeResponse.Result.Capabilities capabilities = capabilities(
+                    service, ProtocolVersion.V1_3, "capabilities-v1-3", "fixture");
+            assertTrue(capabilities.enabledFeatures().contains("execution-epochs"));
+            assertFalse(capabilities(service, ProtocolVersion.V1_2,
+                    "capabilities-v1-2-frozen", "fixture").supportedTools()
+                    .contains("runtime_epoch_frames"));
+            RuntimeResponse decoded = ProtocolJson.decodeResponse(ProtocolJson.encode(
+                    new RuntimeResponse.Success(ProtocolVersion.V1_3, "epoch", epochFrames)));
+            assertEquals(ProtocolVersion.V1_3, decoded.version());
         }
     }
 

@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
+import io.github.teemuki8.libgdx.agent.runtime.core.BaselineKind;
 import io.github.teemuki8.libgdx.agent.runtime.core.DecisionScope;
 import io.github.teemuki8.libgdx.agent.runtime.core.DecisionType;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
@@ -151,7 +152,7 @@ final class RuntimeMcpTest {
             assertEquals(runtime.sessionId(), publication.sessionId());
             RuntimeToolCatalog catalog = new RuntimeToolCatalog(
                     new RuntimeProtocolService(registry).toolNames());
-            assertEquals(10, catalog.tools().size());
+            assertEquals(11, catalog.tools().size());
             assertEquals(false,
                     catalog.tool("runtime_command_cancel").inputSchema()
                             .get("additionalProperties"));
@@ -178,6 +179,29 @@ final class RuntimeMcpTest {
             assertEquals("INVALID_QUERY", structured(unknownField).get("code"));
             applicationQueue.removeFirst().run();
             assertEquals(0, executions[0]);
+        }
+    }
+
+    @Test
+    void executionEpochToolUsesClosedProtocolThirteenSchema() {
+        Fixture fixture = fixture();
+        fixture.runtime.startEpoch(BaselineKind.CHECKPOINT_RESTORE);
+        try (PublishedRuntime publication = fixture.registry.publish(fixture.runtime);
+                RuntimeToolHandler handler =
+                        new RuntimeToolHandler(new RuntimeProtocolService(fixture.registry))) {
+            assertEquals(fixture.runtime.sessionId(), publication.sessionId());
+            McpSchema.CallToolResult result = handler.handle(call(
+                    "runtime_epoch_frames", Map.of(
+                            "sessionId", "mcp-fixture", "executionEpochId", 1)))
+                    .block(Duration.ofSeconds(5));
+            assertFalse(result.isError());
+            assertTrue(result.structuredContent().toString().contains("CHECKPOINT_RESTORE"));
+            McpSchema.CallToolResult rejected = handler.handle(call(
+                    "runtime_epoch_frames", Map.of(
+                            "sessionId", "mcp-fixture", "executionEpochId", 1,
+                            "expression", "Runtime.getRuntime()")))
+                    .block(Duration.ofSeconds(5));
+            assertTrue(rejected.isError());
         }
     }
 

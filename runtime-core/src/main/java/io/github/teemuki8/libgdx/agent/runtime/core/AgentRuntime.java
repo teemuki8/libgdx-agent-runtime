@@ -45,6 +45,8 @@ public final class AgentRuntime implements AutoCloseable {
     private RuntimeStatus status = RuntimeStatus.CREATED;
     private FrameSnapshot previousFrame;
     private FrameId activeFrame;
+    private volatile ExecutionEpochId currentEpoch = new ExecutionEpochId(0);
+    private Optional<BaselineKind> activeBaseline = Optional.empty();
     private long activeDeltaNanos;
     private long nextFrame;
     private long nextEvent;
@@ -113,6 +115,7 @@ public final class AgentRuntime implements AutoCloseable {
         }
         status = RuntimeStatus.RUNNING;
         activeFrame = new FrameId(0);
+        activeBaseline = Optional.of(BaselineKind.INITIAL);
         activeDeltaNanos = 0;
         endFrameInternal();
         nextFrame = 1;
@@ -132,6 +135,7 @@ public final class AgentRuntime implements AutoCloseable {
             throw lifecycle("a frame is already open");
         }
         activeFrame = new FrameId(nextFrame++);
+        activeBaseline = Optional.empty();
         activeDeltaNanos = deltaNanos;
         callbackFailed = false;
     }
@@ -147,6 +151,49 @@ public final class AgentRuntime implements AutoCloseable {
             throw lifecycle("endFrame requires an open frame");
         }
         endFrameInternal();
+    }
+
+    /** Captures a discontinuity baseline as the first frame of a new execution epoch. */
+    public FrameId startEpoch(BaselineKind baselineKind) {
+        requireCaptureThread();
+        requireRunning();
+        Objects.requireNonNull(baselineKind, "baselineKind");
+        if (baselineKind == BaselineKind.INITIAL) {
+            throw new IllegalArgumentException("INITIAL is reserved for frame zero");
+        }
+        if (activeFrame != null) {
+            throw lifecycle("an epoch cannot start while a frame is open");
+        }
+        currentEpoch = new ExecutionEpochId(Math.addExact(currentEpoch.value(), 1));
+        activeFrame = new FrameId(nextFrame++);
+        activeDeltaNanos = 0;
+        activeBaseline = Optional.of(baselineKind);
+        FrameId baselineFrame = activeFrame;
+        endFrameInternal();
+        return baselineFrame;
+    }
+
+    /** Returns the current execution epoch. */
+    public synchronized ExecutionEpochId currentEpoch() {
+        return currentEpoch;
+    }
+
+    /** Returns bounded retained frame summaries for one execution epoch. */
+    public EpochFramePage frames(ExecutionEpochId epochId, int limit) {
+        Objects.requireNonNull(epochId, "epochId");
+        validateQueryLimit(limit);
+        synchronized (historyLock) {
+            List<FrameSnapshot> matching = history.stream()
+                    .filter(frame -> frame.executionEpochId().equals(epochId)).toList();
+            boolean hasMore = matching.size() > limit;
+            List<FrameSummary> items = matching.stream().limit(limit).map(FrameSummary::from).toList();
+            boolean partiallyEvicted = epochId.compareTo(currentEpoch) <= 0
+                    && (matching.isEmpty() ? epochId.compareTo(currentEpoch) < 0
+                            : matching.getFirst().baselineKind().isEmpty());
+            return new EpochFramePage(epochId, items, hasMore, partiallyEvicted,
+                    Optional.ofNullable(history.peekFirst()).map(FrameSnapshot::frameId),
+                    Optional.ofNullable(history.peekLast()).map(FrameSnapshot::frameId));
+        }
     }
 
     /** Runs application work inside an exception-safe capture frame. */
@@ -421,15 +468,18 @@ public final class AgentRuntime implements AutoCloseable {
 
         CaptureResult capture = captureEntities();
         frameTruncations.addAll(capture.truncations());
-        List<PropertyChange> changes = diff(previousFrame, capture.entities(), activeFrame);
+        List<PropertyChange> changes = activeBaseline.isPresent()
+                ? List.of() : diff(previousFrame, capture.entities(), activeFrame);
         FrameSnapshot completed = new FrameSnapshot(
-                sessionId, activeFrame, requireMonotonicTime(), activeDeltaNanos,
+                sessionId, activeFrame, currentEpoch, activeBaseline,
+                requireMonotonicTime(), activeDeltaNanos,
                 Instant.now(wallClock), capture.entities(), changes, events, decisions,
                 new SnapshotStats(capture.observed(), capture.entities().size(),
                         capture.diagnostics(), frameTruncations));
         retain(completed);
         previousFrame = completed;
         activeFrame = null;
+        activeBaseline = Optional.empty();
         pendingEvents.clear();
         pendingDecisions.clear();
         pendingCauses.clear();

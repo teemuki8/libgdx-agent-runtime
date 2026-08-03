@@ -33,6 +33,9 @@ This document makes lifecycle and evidence edge cases explicit.
 19. Application commands are bounded, deduplicated while their request IDs are retained, and run
     only through an explicitly registered application dispatcher on the capture thread. The
     runtime creates no command thread, timer, game loop, or scheduler.
+20. Every frame identifies an execution epoch. Frame zero is the `INITIAL` baseline of epoch zero;
+    successful reset/restore baselines increment the epoch and frame ID without diffing across the
+    discontinuity. Protocol `1.3` exposes bounded epoch-filtered frame queries.
 
 Closing during a frame is rejected. `frame` completes capture and rethrows callback failure.
 Disabled runtimes retain no providers or frames and perform no serialization.

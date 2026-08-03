@@ -247,6 +247,36 @@ final class AgentRuntimeTest {
     }
 
     @Test
+    void newExecutionEpochCapturesBaselineWithoutCrossEpochDiffs() {
+        long[] health = {100};
+        AgentRuntime runtime = runtime(new RuntimeLimits(2, 10, 10, 10, 10, 10, 10, 100,
+                10, 5, 100));
+        runtime.entities().register(EntityId.of("enemy"), EntityType.of("enemy"),
+                () -> "Enemy", inspector -> inspector.property("health", () -> health[0]));
+        runtime.start();
+        health[0] = 75;
+        runtime.frame(1, () -> {});
+        assertFalse(runtime.latestFrame().orElseThrow().changes().isEmpty());
+
+        health[0] = 100;
+        FrameId baseline = runtime.startEpoch(BaselineKind.SCENARIO_RESET);
+
+        FrameSnapshot frame = runtime.latestFrame().orElseThrow();
+        assertEquals(new FrameId(2), baseline);
+        assertEquals(new ExecutionEpochId(1), frame.executionEpochId());
+        assertEquals(Optional.of(BaselineKind.SCENARIO_RESET), frame.baselineKind());
+        assertTrue(frame.changes().isEmpty());
+        assertEquals(new ExecutionEpochId(0),
+                runtime.frame(new FrameId(1)).orElseThrow().executionEpochId());
+        assertTrue(runtime.frames(new ExecutionEpochId(0), 10)
+                .requestedEpochPartiallyEvicted());
+        assertFalse(runtime.frames(new ExecutionEpochId(1), 10)
+                .requestedEpochPartiallyEvicted());
+        assertThrows(IllegalArgumentException.class,
+                () -> runtime.startEpoch(BaselineKind.INITIAL));
+    }
+
+    @Test
     void truncatesEvidenceExplicitlyAndBoundsEventRetention() {
         RuntimeLimits limits = new RuntimeLimits(10, 2, 1, 1, 1, 1, 1, 4, 1, 2, 10);
         AgentRuntime runtime = runtime(limits);

@@ -6,6 +6,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import io.github.teemuki8.libgdx.agent.runtime.core.ActionDescriptor;
+import io.github.teemuki8.libgdx.agent.runtime.core.ActionParameter;
+import io.github.teemuki8.libgdx.agent.runtime.core.ActionParameterType;
 
 /** Immutable catalog of the closed base tools and registered optional tools. */
 public final class RuntimeToolCatalog {
@@ -13,23 +16,34 @@ public final class RuntimeToolCatalog {
     private static final int MAX_RESULTS = 1_000;
     private final List<McpSchema.Tool> tools;
     private final Map<String, McpSchema.Tool> byName;
+    private final Map<String, ActionDescriptor> actions;
 
     /** Builds the fixed catalog. */
     public RuntimeToolCatalog() {
         this(Set.copyOf(io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeProtocolService
-                .BASE_TOOLS));
+                .BASE_TOOLS), List.of());
     }
 
     /** Builds a server-start catalog from the protocol's deterministic supported-tool union. */
     public RuntimeToolCatalog(java.util.Collection<String> supportedTools) {
+        this(supportedTools, List.of());
+    }
+
+    /** Builds a server-start catalog including explicit closed action schemas. */
+    public RuntimeToolCatalog(java.util.Collection<String> supportedTools,
+            java.util.Collection<ActionDescriptor> actionDescriptors) {
         Set<String> supported = Set.copyOf(supportedTools);
+        LinkedHashMap<String, ActionDescriptor> actionIndex = new LinkedHashMap<>();
+        actionDescriptors.forEach(descriptor -> actionIndex.merge(descriptor.id(), descriptor,
+                (first, second) -> first.equals(second) ? first : first));
+        actions = Map.copyOf(actionIndex);
         ArrayList<McpSchema.Tool> selected = new ArrayList<>(List.of(
                 tool("runtime_sessions",
                         "List published runtime sessions; no arguments",
                         object(Map.of(), List.of())),
                 tool("runtime_capabilities",
                         "Report capabilities; protocolMinor defaults to frozen V1.0",
-                        sessionInput(Map.of("protocolMinor", integer(0, 5)), List.of())),
+                        sessionInput(Map.of("protocolMinor", integer(0, 6)), List.of())),
                 tool("runtime_frames",
                         "List frame summaries; fromFrame defaults to 0, toFrame to max, limit to 100",
                         queryInput(Map.of(), List.of())),
@@ -121,6 +135,16 @@ public final class RuntimeToolCatalog {
                             "chosenCandidate", string(), "reasonCode", string(),
                             "sourceSubsystem", string(), "correlationId", string()), List.of())));
         }
+        if (supported.contains("runtime_actions")) {
+            selected.add(tool("runtime_actions",
+                    "List explicitly registered typed semantic actions",
+                    sessionInput(Map.of(), List.of())));
+        }
+        if (supported.contains("runtime_action")) {
+            selected.add(tool("runtime_action",
+                    "Submit or poll one registered semantic action",
+                    actionInput(actionIndex.values())));
+        }
         selected.removeIf(tool -> !supported.contains(tool.name()));
         tools = List.copyOf(selected);
         LinkedHashMap<String, McpSchema.Tool> index = new LinkedHashMap<>();
@@ -145,6 +169,15 @@ public final class RuntimeToolCatalog {
             throw new IllegalArgumentException("unknown runtime tool");
         }
         return tool;
+    }
+
+    /** Resolves one action schema captured when the server started. */
+    public ActionDescriptor action(String id) {
+        ActionDescriptor descriptor = actions.get(id);
+        if (descriptor == null) {
+            throw new IllegalArgumentException("unknown semantic action");
+        }
+        return descriptor;
     }
 
     private static McpSchema.Tool tool(
@@ -183,6 +216,45 @@ public final class RuntimeToolCatalog {
         }
         schema.put("additionalProperties", false);
         return Map.copyOf(schema);
+    }
+
+    private static Map<String, Object> actionInput(
+            java.util.Collection<ActionDescriptor> descriptors) {
+        LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
+        properties.put("sessionId", string());
+        properties.put("action", Map.of("type", "string", "enum",
+                descriptors.stream().map(ActionDescriptor::id).sorted().toList()));
+        properties.put("actionRequestId", string());
+        properties.put("correlationId", string());
+        properties.put("timeoutNanos", integer(1, Long.MAX_VALUE));
+        List<Map<String, Object>> schemas = descriptors.stream()
+                .map(RuntimeToolCatalog::parameterObject).distinct().toList();
+        properties.put("parameters", schemas.size() == 1 ? schemas.getFirst()
+                : Map.of("anyOf", schemas));
+        return object(properties,
+                List.of("sessionId", "action", "actionRequestId", "parameters", "timeoutNanos"));
+    }
+
+    private static Map<String, Object> parameterObject(ActionDescriptor descriptor) {
+        LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
+        ArrayList<String> required = new ArrayList<>();
+        for (ActionParameter parameter : descriptor.parameters()) {
+            properties.put(parameter.name(), parameterSchema(parameter.type()));
+            if (parameter.required()) {
+                required.add(parameter.name());
+            }
+        }
+        return object(properties, required);
+    }
+
+    private static Map<String, Object> parameterSchema(ActionParameterType type) {
+        return switch (type) {
+            case BOOLEAN -> bool();
+            case INTEGER -> integer(Long.MIN_VALUE, Long.MAX_VALUE);
+            case DECIMAL -> Map.of("type", "number");
+            case STRING -> Map.of("type", "string", "maxLength", 16_384);
+            case ENUM, ENTITY_ID -> string();
+        };
     }
 
     private static Map<String, Object> string() {

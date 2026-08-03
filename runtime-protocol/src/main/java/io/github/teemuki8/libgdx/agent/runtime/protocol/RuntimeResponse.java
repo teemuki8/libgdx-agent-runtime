@@ -17,6 +17,8 @@ import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeLimits;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeStatus;
 import io.github.teemuki8.libgdx.agent.runtime.core.ScenarioDescriptor;
 import io.github.teemuki8.libgdx.agent.runtime.core.ScenarioReset;
+import io.github.teemuki8.libgdx.agent.runtime.core.ActionDescriptor;
+import io.github.teemuki8.libgdx.agent.runtime.core.ActionInvocation;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -71,12 +73,14 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         @JsonSubTypes.Type(value = Result.CommandCancellation.class, name = "commandCancellation"),
         @JsonSubTypes.Type(value = Result.EpochFrames.class, name = "epochFrames"),
         @JsonSubTypes.Type(value = Result.Scenarios.class, name = "scenarios"),
-        @JsonSubTypes.Type(value = Result.Reset.class, name = "reset")
+        @JsonSubTypes.Type(value = Result.Reset.class, name = "reset"),
+        @JsonSubTypes.Type(value = Result.Actions.class, name = "actions"),
+        @JsonSubTypes.Type(value = Result.Action.class, name = "action")
     })
     sealed interface Result permits Result.Sessions, Result.Capabilities, Result.Frames,
             Result.Snapshot, Result.Entity, Result.Changes, Result.Events, Result.Decisions,
             Result.CommandStatus, Result.CommandCancellation, Result.EpochFrames,
-            Result.Scenarios, Result.Reset {
+            Result.Scenarios, Result.Reset, Result.Actions, Result.Action {
         /** Published session catalog. */
         record Sessions(List<SessionInfo> sessions) implements Result {
             /** Copies sessions. */
@@ -177,6 +181,23 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         record Reset(ScenarioReset reset) implements Result {
             public Reset {
                 Objects.requireNonNull(reset, "reset");
+            }
+        }
+
+        /** Stable action metadata and closed parameter schemas. */
+        record Actions(List<ActionDescriptor> actions) implements Result {
+            public Actions {
+                actions = List.copyOf(actions);
+                if (actions.size() > ProtocolJson.MAX_RESULT_ITEMS) {
+                    throw new IllegalArgumentException("too many protocol actions");
+                }
+            }
+        }
+
+        /** Correlated semantic-action outcome and frame evidence. */
+        record Action(ActionInvocation invocation) implements Result {
+            public Action {
+                Objects.requireNonNull(invocation, "invocation");
             }
         }
     }

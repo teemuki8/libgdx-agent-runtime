@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
+import io.github.teemuki8.libgdx.agent.runtime.core.ActionSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.BaselineKind;
 import io.github.teemuki8.libgdx.agent.runtime.core.DecisionScope;
 import io.github.teemuki8.libgdx.agent.runtime.core.DecisionType;
@@ -260,6 +261,55 @@ final class RuntimeMcpTest {
                         "expression", "getClass()"))).block(Duration.ofSeconds(5));
                 assertTrue(rejected.isError(), tool);
             }
+        }
+    }
+
+    @Test
+    void semanticActionToolUsesRegisteredClosedNaturalJsonSchema() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        int[] executions = {0};
+        AgentRuntime runtime = AgentRuntime.builder().sessionId(SessionId.of("actions"))
+                .clock(() -> 1).commandDispatcher(queue::addLast).build();
+        runtime.actions().register(ActionSpec.builder("player.attack")
+                .description("Attack one target").requiredEntityId("targetEntity")
+                .handler(parameters -> {
+                    assertEquals("enemy-1",
+                            parameters.requiredEntityId("targetEntity").value());
+                    executions[0]++;
+                    runtime.frame(1, () -> {});
+                }).build());
+        runtime.start();
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime);
+                RuntimeToolHandler handler =
+                        new RuntimeToolHandler(new RuntimeProtocolService(registry))) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            McpSchema.CallToolResult catalog = handler.handle(call(
+                    "runtime_actions", Map.of("sessionId", "actions")))
+                    .block(Duration.ofSeconds(5));
+            assertFalse(catalog.isError());
+            Map<String, Object> request = Map.of(
+                    "sessionId", "actions", "action", "player.attack",
+                    "actionRequestId", "attack-1", "correlationId", "attack-172",
+                    "timeoutNanos", 1_000,
+                    "parameters", Map.of("targetEntity", "enemy-1"));
+            McpSchema.CallToolResult queued = handler.handle(call("runtime_action", request))
+                    .block(Duration.ofSeconds(5));
+            assertFalse(queued.isError());
+            queue.removeFirst().run();
+            McpSchema.CallToolResult completed = handler.handle(call("runtime_action", request))
+                    .block(Duration.ofSeconds(5));
+            assertFalse(completed.isError());
+            assertTrue(completed.structuredContent().toString().contains("completedFrameId"));
+            assertEquals(1, executions[0]);
+
+            McpSchema.CallToolResult unknown = handler.handle(call("runtime_action", Map.of(
+                    "sessionId", "actions", "action", "player.attack",
+                    "actionRequestId", "attack-2", "timeoutNanos", 1_000,
+                    "parameters", Map.of("targetEntity", "enemy-1", "script", "run()"))))
+                    .block(Duration.ofSeconds(5));
+            assertTrue(unknown.isError());
+            assertEquals(1, executions[0]);
         }
     }
 

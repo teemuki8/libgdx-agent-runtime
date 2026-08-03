@@ -33,6 +33,7 @@ public final class AgentRuntime implements AutoCloseable {
     private final Thread captureThread;
     private final Optional<CommandDispatch> commands;
     private final ScenarioRegistry scenarios;
+    private final ActionRegistry actions;
     private final EntityRegistry entities = new EntityRegistry(this);
     private final LinkedHashMap<EntityId, InspectableEntity> staticEntities = new LinkedHashMap<>();
     private final LinkedHashMap<String, Supplier<? extends Stream<InspectableEntity>>> sources =
@@ -67,6 +68,7 @@ public final class AgentRuntime implements AutoCloseable {
                 new CommandDispatch(dispatcher, builder.commandDispatchLimits,
                         monotonicClock, captureThread));
         scenarios = new ScenarioRegistry(this, builder.scenarioLimits);
+        actions = new ActionRegistry(this, builder.actionLimits);
     }
 
     /** Creates a runtime builder owned by the calling thread by default. */
@@ -102,6 +104,11 @@ public final class AgentRuntime implements AutoCloseable {
     /** Returns the explicit registry for application-owned resettable scenarios. */
     public ScenarioRegistry scenarios() {
         return scenarios;
+    }
+
+    /** Returns the explicit registry for bounded typed semantic actions. */
+    public ActionRegistry actions() {
+        return actions;
     }
 
     /**
@@ -776,6 +783,10 @@ public final class AgentRuntime implements AutoCloseable {
         requireMutableRegistration();
     }
 
+    void requireActionRegistration() {
+        requireMutableRegistration();
+    }
+
     FrameId executeScenarioReset(Runnable reset) {
         requireCaptureThread();
         requireRunning();
@@ -1031,6 +1042,7 @@ public final class AgentRuntime implements AutoCloseable {
         private CommandDispatchLimits commandDispatchLimits =
                 CommandDispatchLimits.developmentDefaults();
         private ScenarioLimits scenarioLimits = ScenarioLimits.developmentDefaults();
+        private ActionLimits actionLimits = ActionLimits.developmentDefaults();
 
         private Builder() {}
 
@@ -1079,6 +1091,12 @@ public final class AgentRuntime implements AutoCloseable {
         /** Configures hard bounds for application-registered scenarios. */
         public Builder scenarioLimits(ScenarioLimits value) {
             scenarioLimits = Objects.requireNonNull(value, "value");
+            return this;
+        }
+
+        /** Configures hard bounds for application-registered semantic actions. */
+        public Builder actionLimits(ActionLimits value) {
+            actionLimits = Objects.requireNonNull(value, "value");
             return this;
         }
 

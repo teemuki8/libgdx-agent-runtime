@@ -35,7 +35,8 @@ public final class RuntimeMcpServer implements AutoCloseable {
     private RuntimeMcpServer(
             RuntimeProtocolService protocol, InputStream input, OutputStream output) {
         transport = new StdioProvider(input, output);
-        RuntimeToolCatalog catalog = new RuntimeToolCatalog(protocol.toolNames());
+        RuntimeToolCatalog catalog = new RuntimeToolCatalog(
+                protocol.toolNames(), protocol.actionCatalog());
         handler = new RuntimeToolHandler(protocol, catalog);
         McpServer.AsyncSpecification<?> specification = McpServer.async(transport)
                 .serverInfo("libgdx-agent-runtime", RuntimeVersion.current())

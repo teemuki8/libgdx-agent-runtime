@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
+import io.github.teemuki8.libgdx.agent.runtime.core.ActionSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.BaselineKind;
 import io.github.teemuki8.libgdx.agent.runtime.core.CommandState;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
@@ -90,7 +91,7 @@ final class RuntimeProtocolTest {
                 service.execute(new RuntimeRequest(
                         new ProtocolVersion(2, 0), "v", null, new RuntimeCommand.Sessions())));
         assertEquals(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED, version.error().code());
-        assertEquals("1.0,1.1,1.2,1.3,1.4,1.5", version.error().details().get("supported"));
+        assertEquals("1.0,1.1,1.2,1.3,1.4,1.5,1.6", version.error().details().get("supported"));
 
         RuntimeResponse.Failure missing = assertInstanceOf(RuntimeResponse.Failure.class,
                 service.execute(new RuntimeRequest(ProtocolVersion.V1, "s", "missing",
@@ -443,6 +444,58 @@ final class RuntimeProtocolTest {
                     .source().orElseThrow().value());
             assertEquals("DamageSystem.java:84", result.page().items().getFirst().metadata()
                     .sourceLocation().orElseThrow());
+        }
+    }
+
+    @Test
+    void semanticActionCatalogAndInvocationRoundTripWithFrameEvidence() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        String[] target = {null};
+        AgentRuntime runtime = AgentRuntime.builder().sessionId(SessionId.of("actions"))
+                .clock(() -> 1).commandDispatcher(queue::addLast).build();
+        runtime.actions().register(ActionSpec.builder("player.attack")
+                .description("Attack one target")
+                .requiredEntityId("targetEntity")
+                .handler(parameters -> {
+                    target[0] = parameters.requiredEntityId("targetEntity").value();
+                    runtime.frame(1, () -> {});
+                }).build());
+        runtime.start();
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime)) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            RuntimeProtocolService service = new RuntimeProtocolService(registry);
+            RuntimeResponse.Result.Actions catalog = assertInstanceOf(
+                    RuntimeResponse.Result.Actions.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V1_6, "catalog", "actions",
+                                    new RuntimeCommand.Actions()))).result());
+            assertEquals("targetEntity",
+                    catalog.actions().getFirst().parameters().getFirst().name());
+
+            RuntimeCommand.Action command = new RuntimeCommand.Action("player.attack", "attack-1",
+                    RuntimeValues.object(RuntimeValues.field(
+                            "targetEntity", RuntimeValues.string("enemy-1"))),
+                    "attack-172", 1_000);
+            RuntimeCommand.Action decoded = assertInstanceOf(RuntimeCommand.Action.class,
+                    ProtocolJson.decodeRequest(ProtocolJson.encode(new RuntimeRequest(
+                            ProtocolVersion.V1_6, "roundtrip", "actions", command))).command());
+            RuntimeResponse.Result.Action queued = assertInstanceOf(
+                    RuntimeResponse.Result.Action.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V1_6, "invoke", "actions",
+                                    decoded))).result());
+            assertEquals(CommandState.QUEUED,
+                    queued.invocation().command().status().orElseThrow().state());
+            queue.removeFirst().run();
+            RuntimeResponse.Result.Action completed = assertInstanceOf(
+                    RuntimeResponse.Result.Action.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V1_6, "poll", "actions",
+                                    command))).result());
+            assertEquals("enemy-1", target[0]);
+            assertEquals(1, completed.invocation().completedFrameId().orElseThrow().value());
+            assertEquals("attack-172", completed.invocation().correlationId().orElseThrow());
         }
     }
 

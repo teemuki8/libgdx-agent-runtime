@@ -43,6 +43,9 @@ This document makes lifecycle and evidence edge cases explicit.
 22. Fact attribution is optional application testimony. Subsystem and correlation filters are exact;
     source-location labels are bounded and unverified. The runtime never infers metadata, and event
     source entities remain distinct from source subsystems.
+23. Semantic actions have explicitly registered closed scalar schemas and application-owned handlers.
+    Inputs are validated before capture-thread dispatch; retained retries do not re-execute, results
+    carry bounded command/frame evidence, and effects are correlated only by explicit testimony.
 
 Closing during a frame is rejected. `frame` completes capture and rethrows callback failure.
 Disabled runtimes retain no providers or frames and perform no serialization.

@@ -9,5 +9,8 @@ public record CommandCancellation(boolean accepted, CommandLookup command) {
         if (accepted && command.kind() != CommandLookup.Kind.FOUND) {
             throw new IllegalArgumentException("accepted cancellation requires retained status");
         }
+        if (accepted && command.status().orElseThrow().state() != CommandState.CANCELLED) {
+            throw new IllegalArgumentException("accepted cancellation requires cancelled status");
+        }
     }
 }

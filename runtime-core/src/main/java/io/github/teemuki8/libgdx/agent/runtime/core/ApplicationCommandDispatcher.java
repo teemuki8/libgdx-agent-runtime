@@ -8,6 +8,9 @@ package io.github.teemuki8.libgdx.agent.runtime.core;
  */
 @FunctionalInterface
 public interface ApplicationCommandDispatcher {
-    /** Enqueues one runtime-owned task for execution on the configured capture thread. */
+    /**
+     * Enqueues one runtime-owned task for execution on the configured capture thread.
+     * Implementations must preserve invocation order.
+     */
     void dispatch(Runnable task);
 }

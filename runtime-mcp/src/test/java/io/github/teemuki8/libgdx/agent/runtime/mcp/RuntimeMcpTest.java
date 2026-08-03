@@ -169,6 +169,13 @@ final class RuntimeMcpTest {
                             "sessionId", "commands", "commandRequestId", "action-1")))
                     .block(Duration.ofSeconds(5));
             assertFalse(cancelled.isError());
+            McpSchema.CallToolResult unknownField = handler.handle(call(
+                    "runtime_command_status", Map.of(
+                            "sessionId", "commands", "commandRequestId", "action-1",
+                            "expression", "java.lang.Runtime")))
+                    .block(Duration.ofSeconds(5));
+            assertTrue(unknownField.isError());
+            assertEquals("INVALID_QUERY", structured(unknownField).get("code"));
             applicationQueue.removeFirst().run();
             assertEquals(0, executions[0]);
         }

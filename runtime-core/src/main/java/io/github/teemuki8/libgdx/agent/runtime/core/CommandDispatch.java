@@ -20,10 +20,12 @@ public final class CommandDispatch {
     private final MonotonicClock clock;
     private final Thread captureThread;
     private final Map<String, Entry> retained = new LinkedHashMap<>();
+    private final ArrayDeque<Entry> pendingDispatch = new ArrayDeque<>();
     private final ArrayDeque<String> terminalOrder = new ArrayDeque<>();
     private final ArrayDeque<String> expiredOrder = new ArrayDeque<>();
     private final Map<String, Boolean> expired = new LinkedHashMap<>();
     private int outstandingDispatches;
+    private boolean scheduling;
     private boolean closed;
 
     CommandDispatch(ApplicationCommandDispatcher dispatcher, CommandDispatchLimits limits,
@@ -49,10 +51,17 @@ public final class CommandDispatch {
         if (timeout.isNegative() || timeout.isZero()) {
             throw new IllegalArgumentException("timeout must be positive");
         }
+        long timeoutNanos;
+        try {
+            timeoutNanos = timeout.toNanos();
+        } catch (ArithmeticException failure) {
+            throw new IllegalArgumentException("timeout exceeds the supported range", failure);
+        }
+        requireBoundedTimeout(timeoutNanos);
         long now = now();
         long deadline;
         try {
-            deadline = Math.addExact(now, timeout.toNanos());
+            deadline = Math.addExact(now, timeoutNanos);
         } catch (ArithmeticException failure) {
             throw new IllegalArgumentException("timeout exceeds the supported range", failure);
         }
@@ -64,6 +73,12 @@ public final class CommandDispatch {
         IdentifierSupport.validate(requestId, "requestId");
         Objects.requireNonNull(command, "command");
         long now = now();
+        if (deadlineNanos < 0) {
+            throw new IllegalArgumentException("deadlineNanos must be non-negative");
+        }
+        if (deadlineNanos > now) {
+            requireBoundedTimeout(deadlineNanos - now);
+        }
         Entry entry;
         synchronized (this) {
             CommandLookup duplicate = lookupWithoutExpiry(requestId, now);
@@ -87,23 +102,10 @@ public final class CommandDispatch {
             }
             entry = new Entry(requestId, now, deadlineNanos, command);
             retained.put(requestId, entry);
+            pendingDispatch.addLast(entry);
             outstandingDispatches++;
         }
-        try {
-            dispatcher.dispatch(() -> execute(entry));
-        } catch (RuntimeException failure) {
-            synchronized (this) {
-                if (!entry.dispatchConsumed) {
-                    entry.dispatchConsumed = true;
-                    outstandingDispatches--;
-                    if (entry.state == CommandState.QUEUED) {
-                        finish(entry, CommandState.REJECTED, now(), true,
-                                diagnostic("dispatcher rejected command", failure));
-                    }
-                }
-                return CommandLookup.found(snapshot(entry, now()));
-            }
-        }
+        schedulePending();
         return status(requestId);
     }
 
@@ -142,6 +144,7 @@ public final class CommandDispatch {
     }
 
     private void execute(Entry entry) {
+        Runnable command;
         synchronized (this) {
             if (entry.dispatchConsumed) {
                 return;
@@ -164,9 +167,10 @@ public final class CommandDispatch {
             }
             entry.state = CommandState.EXECUTING;
             entry.startedAtNanos = now;
+            command = entry.command;
         }
         try {
-            entry.command.run();
+            command.run();
             synchronized (this) {
                 finish(entry, CommandState.SUCCEEDED, now(), true, null);
             }
@@ -175,6 +179,65 @@ public final class CommandDispatch {
                 finish(entry, CommandState.FAILED, now(), true,
                         diagnostic("command failed", failure));
             }
+        }
+    }
+
+    private void schedulePending() {
+        synchronized (this) {
+            if (scheduling) {
+                return;
+            }
+            scheduling = true;
+        }
+        while (true) {
+            Entry entry;
+            synchronized (this) {
+                entry = pendingDispatch.pollFirst();
+                if (entry == null) {
+                    scheduling = false;
+                    return;
+                }
+                if (entry.state != CommandState.QUEUED) {
+                    consumeDispatch(entry);
+                    continue;
+                }
+            }
+            try {
+                dispatcher.dispatch(() -> execute(entry));
+            } catch (RuntimeException failure) {
+                synchronized (this) {
+                    consumeDispatch(entry);
+                    if (entry.state == CommandState.QUEUED) {
+                        finish(entry, CommandState.REJECTED, now(), true,
+                                diagnostic("dispatcher rejected command", failure));
+                    }
+                }
+            } catch (Error failure) {
+                synchronized (this) {
+                    consumeDispatch(entry);
+                    if (entry.state == CommandState.QUEUED) {
+                        finish(entry, CommandState.FAILED, now(), true,
+                                diagnostic("dispatcher failed", failure));
+                    }
+                    Entry pending;
+                    while ((pending = pendingDispatch.pollFirst()) != null) {
+                        consumeDispatch(pending);
+                        if (pending.state == CommandState.QUEUED) {
+                            finish(pending, CommandState.REJECTED, now(), true,
+                                    "dispatcher unavailable after failure");
+                        }
+                    }
+                    scheduling = false;
+                }
+                throw failure;
+            }
+        }
+    }
+
+    private void consumeDispatch(Entry entry) {
+        if (!entry.dispatchConsumed) {
+            entry.dispatchConsumed = true;
+            outstandingDispatches--;
         }
     }
 
@@ -218,6 +281,7 @@ public final class CommandDispatch {
         entry.completedAtNanos = now;
         entry.outcomeKnown = outcomeKnown;
         entry.diagnostic = limit(diagnostic);
+        entry.command = null;
         terminalOrder.addLast(entry.requestId);
         while (terminalOrder.size() > limits.retainedResults()) {
             String removed = terminalOrder.removeFirst();
@@ -259,6 +323,13 @@ public final class CommandDispatch {
         return value;
     }
 
+    private void requireBoundedTimeout(long timeoutNanos) {
+        if (timeoutNanos > limits.maximumTimeoutNanos()) {
+            throw new IllegalArgumentException("timeout exceeds configured maximum of "
+                    + limits.maximumTimeoutNanos() + " nanoseconds");
+        }
+    }
+
     private static long deadline(long now, long requested) {
         return Math.max(now, requested);
     }
@@ -271,7 +342,7 @@ public final class CommandDispatch {
         private final String requestId;
         private final long submittedAtNanos;
         private final long deadlineNanos;
-        private final Runnable command;
+        private Runnable command;
         private CommandState state = CommandState.QUEUED;
         private Long startedAtNanos;
         private Long completedAtNanos;

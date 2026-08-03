@@ -194,6 +194,10 @@ final class RuntimeProtocolTest {
                                     new RuntimeCommand.CommandStatus("reset-1")))).result());
             assertEquals(CommandState.QUEUED,
                     status.command().status().orElseThrow().state());
+            assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                    new RuntimeRequest(ProtocolVersion.V1, "paused-snapshot", "commands",
+                            new RuntimeCommand.Snapshot(
+                                    null, null, false, null, false, 10))));
 
             RuntimeResponse.Result.CommandCancellation cancellation = assertInstanceOf(
                     RuntimeResponse.Result.CommandCancellation.class,
@@ -213,6 +217,14 @@ final class RuntimeProtocolTest {
                     .anyMatch(capability -> capability.id().equals("command-dispatch")
                             && capability.availability()
                                     == RuntimeCapability.Availability.AVAILABLE));
+
+            RuntimeResponse.Result.CommandStatus unknown = assertInstanceOf(
+                    RuntimeResponse.Result.CommandStatus.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V1_2, "unknown-status", "commands",
+                                    new RuntimeCommand.CommandStatus("not-submitted")))).result());
+            assertEquals(io.github.teemuki8.libgdx.agent.runtime.core.CommandLookup.Kind.UNKNOWN,
+                    unknown.command().kind());
         }
     }
 

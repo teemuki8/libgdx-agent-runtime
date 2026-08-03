@@ -54,9 +54,10 @@ runtime = LibGdxAgentRuntime.builder()
 ```
 
 The runtime creates no command worker, scheduler, timer, or game loop. It bounds queued commands,
-terminal results, expired request IDs, and diagnostic text. Duplicate request IDs are not executed
-again while retained. `runtime_command_cancel` succeeds only in `QUEUED`; after dispatch it reports
-the current state without claiming cancellation. A deadline observed after execution starts reports
+maximum timeout, terminal results, expired request IDs, and diagnostic text. Concurrent submissions
+reach the application dispatcher in acceptance order. Duplicate request IDs are not executed again
+while retained. `runtime_command_cancel` succeeds only in `QUEUED`; after dispatch it reports the
+current state without claiming cancellation. A deadline observed after execution starts reports
 `TIMED_OUT` with `outcomeKnown: false` until execution completes. Status queries never wait for the
 application loop and therefore remain available while that loop is paused.
 

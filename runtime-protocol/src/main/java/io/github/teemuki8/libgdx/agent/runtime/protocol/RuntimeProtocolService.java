@@ -180,6 +180,7 @@ public final class RuntimeProtocolService {
             boolean available = runtime.commands().isPresent();
             Map<String, Long> commandLimits = runtime.commands().map(commands -> Map.of(
                     "queuedCommands", (long) commands.limits().queuedCommands(),
+                    "maximumTimeoutNanos", commands.limits().maximumTimeoutNanos(),
                     "retainedRequestIds", (long) commands.limits().retainedRequestIds(),
                     "retainedResults", (long) commands.limits().retainedResults()))
                     .orElse(Map.of());

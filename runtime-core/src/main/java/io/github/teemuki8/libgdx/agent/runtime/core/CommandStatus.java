@@ -23,5 +23,18 @@ public record CommandStatus(
         startedAtNanos = Objects.requireNonNull(startedAtNanos, "startedAtNanos");
         completedAtNanos = Objects.requireNonNull(completedAtNanos, "completedAtNanos");
         diagnostic = Objects.requireNonNull(diagnostic, "diagnostic");
+        startedAtNanos.ifPresent(value -> requireTime(value, "startedAtNanos"));
+        completedAtNanos.ifPresent(value -> requireTime(value, "completedAtNanos"));
+        diagnostic.ifPresent(value -> {
+            if (value.length() > CommandDispatchLimits.MAX_DIAGNOSTIC_LENGTH) {
+                throw new IllegalArgumentException("diagnostic exceeds the public size bound");
+            }
+        });
+    }
+
+    private static void requireTime(long value, String name) {
+        if (value < 0) {
+            throw new IllegalArgumentException(name + " must be non-negative");
+        }
     }
 }

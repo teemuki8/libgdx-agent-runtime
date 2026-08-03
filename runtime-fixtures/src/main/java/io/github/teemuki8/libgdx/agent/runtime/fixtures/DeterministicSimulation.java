@@ -1,6 +1,7 @@
 package io.github.teemuki8.libgdx.agent.runtime.fixtures;
 
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
+import io.github.teemuki8.libgdx.agent.runtime.core.ApplicationCommandDispatcher;
 import io.github.teemuki8.libgdx.agent.runtime.core.DecisionScope;
 import io.github.teemuki8.libgdx.agent.runtime.core.DecisionType;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
@@ -31,10 +32,18 @@ public final class DeterministicSimulation {
 
     /** Creates, instruments, and starts a runtime on the calling thread. */
     public AgentRuntime startRuntime() {
-        AgentRuntime runtime = LibGdxAgentRuntime.builder()
+        return startRuntime(null);
+    }
+
+    /** Creates and starts a runtime with an explicit application command bridge. */
+    public AgentRuntime startRuntime(ApplicationCommandDispatcher dispatcher) {
+        LibGdxAgentRuntime.Builder builder = LibGdxAgentRuntime.builder()
                 .captureThread(Thread.currentThread())
-                .sessionId(SESSION_ID)
-                .build();
+                .sessionId(SESSION_ID);
+        if (dispatcher != null) {
+            builder.commandDispatcher(dispatcher);
+        }
+        AgentRuntime runtime = builder.build();
         register(runtime, player);
         register(runtime, tower1);
         register(runtime, tower2);

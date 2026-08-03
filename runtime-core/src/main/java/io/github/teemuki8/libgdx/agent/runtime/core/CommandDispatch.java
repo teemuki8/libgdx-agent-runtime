@@ -23,7 +23,7 @@ public final class CommandDispatch {
     private final ArrayDeque<String> terminalOrder = new ArrayDeque<>();
     private final ArrayDeque<String> expiredOrder = new ArrayDeque<>();
     private final Map<String, Boolean> expired = new LinkedHashMap<>();
-    private int queued;
+    private int outstandingDispatches;
     private boolean closed;
 
     CommandDispatch(ApplicationCommandDispatcher dispatcher, CommandDispatchLimits limits,
@@ -80,23 +80,26 @@ public final class CommandDispatch {
                         "deadline elapsed before queueing");
                 return CommandLookup.found(snapshot(entry, now));
             }
-            if (queued >= limits.queuedCommands()) {
+            if (outstandingDispatches >= limits.queuedCommands()) {
                 entry = terminal(requestId, CommandState.REJECTED, now, deadlineNanos, true,
                         "command queue limit reached");
                 return CommandLookup.found(snapshot(entry, now));
             }
             entry = new Entry(requestId, now, deadlineNanos, command);
             retained.put(requestId, entry);
-            queued++;
+            outstandingDispatches++;
         }
         try {
             dispatcher.dispatch(() -> execute(entry));
         } catch (RuntimeException failure) {
             synchronized (this) {
-                if (entry.state == CommandState.QUEUED) {
-                    queued--;
-                    finish(entry, CommandState.REJECTED, now(), true,
-                            diagnostic("dispatcher rejected command", failure));
+                if (!entry.dispatchConsumed) {
+                    entry.dispatchConsumed = true;
+                    outstandingDispatches--;
+                    if (entry.state == CommandState.QUEUED) {
+                        finish(entry, CommandState.REJECTED, now(), true,
+                                diagnostic("dispatcher rejected command", failure));
+                    }
                 }
                 return CommandLookup.found(snapshot(entry, now()));
             }
@@ -122,7 +125,6 @@ public final class CommandDispatch {
         if (entry.state != CommandState.QUEUED) {
             return new CommandCancellation(false, lookup);
         }
-        queued--;
         finish(entry, CommandState.CANCELLED, now, true, "cancelled before dispatch");
         return new CommandCancellation(true, CommandLookup.found(snapshot(entry, now)));
     }
@@ -134,7 +136,6 @@ public final class CommandDispatch {
                 .filter(entry -> entry.state == CommandState.QUEUED)
                 .toList()
                 .forEach(entry -> {
-                    queued--;
                     finish(entry, CommandState.REJECTED, now, true,
                             "runtime closed before dispatch");
                 });
@@ -142,23 +143,25 @@ public final class CommandDispatch {
 
     private void execute(Entry entry) {
         synchronized (this) {
+            if (entry.dispatchConsumed) {
+                return;
+            }
+            entry.dispatchConsumed = true;
+            outstandingDispatches--;
             if (entry.state != CommandState.QUEUED) {
                 return;
             }
             long now = now();
             if (now >= entry.deadlineNanos) {
-                queued--;
                 finish(entry, CommandState.TIMED_OUT, now, true,
                         "deadline elapsed before dispatch");
                 return;
             }
             if (Thread.currentThread() != captureThread) {
-                queued--;
                 finish(entry, CommandState.FAILED, now, true,
                         "dispatcher executed command outside the capture thread");
                 return;
             }
-            queued--;
             entry.state = CommandState.EXECUTING;
             entry.startedAtNanos = now;
         }
@@ -179,7 +182,6 @@ public final class CommandDispatch {
         Entry entry = retained.get(requestId);
         if (entry != null) {
             if (entry.state == CommandState.QUEUED && now >= entry.deadlineNanos) {
-                queued--;
                 finish(entry, CommandState.TIMED_OUT, now, true,
                         "deadline elapsed before dispatch");
             }
@@ -274,6 +276,7 @@ public final class CommandDispatch {
         private Long startedAtNanos;
         private Long completedAtNanos;
         private boolean outcomeKnown;
+        private boolean dispatchConsumed;
         private String diagnostic;
 
         Entry(String requestId, long submittedAtNanos, long deadlineNanos, Runnable command) {

@@ -6,5 +6,8 @@ import java.util.Objects;
 public record CommandCancellation(boolean accepted, CommandLookup command) {
     public CommandCancellation {
         Objects.requireNonNull(command, "command");
+        if (accepted && command.kind() != CommandLookup.Kind.FOUND) {
+            throw new IllegalArgumentException("accepted cancellation requires retained status");
+        }
     }
 }

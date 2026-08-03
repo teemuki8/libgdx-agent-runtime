@@ -108,6 +108,22 @@ final class CommandDispatchTest {
                 .build().commands().isEmpty());
     }
 
+    @Test
+    void cancelledApplicationQueueEntryRetainsItsBoundedSlotUntilDrained() {
+        ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
+        CommandDispatch commands = runtime(applicationQueue, new AtomicLong(1),
+                new CommandDispatchLimits(1, 2, 2, 100)).commands().orElseThrow();
+        commands.submit("one", 100, () -> {});
+        assertTrue(commands.cancel("one").accepted());
+
+        assertEquals(CommandState.REJECTED,
+                commands.submit("two", 100, () -> {}).status().orElseThrow().state());
+        assertEquals(1, applicationQueue.size());
+        applicationQueue.removeFirst().run();
+        assertEquals(CommandState.QUEUED,
+                commands.submit("three", 100, () -> {}).status().orElseThrow().state());
+    }
+
     private static AgentRuntime runtime(ArrayDeque<Runnable> applicationQueue,
             AtomicLong clock, CommandDispatchLimits limits) {
         return AgentRuntime.builder()

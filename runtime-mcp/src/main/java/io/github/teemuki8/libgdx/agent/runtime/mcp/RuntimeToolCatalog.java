@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** Immutable catalog of the eight closed, bounded V1 MCP tools. */
+/** Immutable catalog of the closed base tools and registered optional tools. */
 public final class RuntimeToolCatalog {
     private static final int MAX_IDENTIFIER = 256;
     private static final int MAX_RESULTS = 1_000;
@@ -16,13 +16,20 @@ public final class RuntimeToolCatalog {
 
     /** Builds the fixed catalog. */
     public RuntimeToolCatalog() {
-        tools = List.of(
+        this(Set.copyOf(io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeProtocolService
+                .BASE_TOOLS));
+    }
+
+    /** Builds a server-start catalog from the protocol's deterministic supported-tool union. */
+    public RuntimeToolCatalog(java.util.Collection<String> supportedTools) {
+        Set<String> supported = Set.copyOf(supportedTools);
+        ArrayList<McpSchema.Tool> selected = new ArrayList<>(List.of(
                 tool("runtime_sessions",
                         "List published runtime sessions; no arguments",
                         object(Map.of(), List.of())),
                 tool("runtime_capabilities",
                         "Report capabilities; protocolMinor defaults to frozen V1.0",
-                        sessionInput(Map.of("protocolMinor", integer(0, 1)), List.of())),
+                        sessionInput(Map.of("protocolMinor", integer(0, 2)), List.of())),
                 tool("runtime_frames",
                         "List frame summaries; fromFrame defaults to 0, toFrame to max, limit to 100",
                         queryInput(Map.of(), List.of())),
@@ -56,7 +63,21 @@ public final class RuntimeToolCatalog {
                                 "decisionType", string(),
                                 "actor", string(),
                                 "chosenCandidate", string(),
-                                "reasonCode", string()), List.of())));
+                                "reasonCode", string()), List.of()))));
+        if (supported.contains("runtime_command_status")) {
+            selected.add(tool("runtime_command_status",
+                    "Read retained, expired, or unknown application command status",
+                    sessionInput(Map.of("commandRequestId", string()),
+                            List.of("commandRequestId"))));
+        }
+        if (supported.contains("runtime_command_cancel")) {
+            selected.add(tool("runtime_command_cancel",
+                    "Cancel an application command only before capture-thread dispatch",
+                    sessionInput(Map.of("commandRequestId", string()),
+                            List.of("commandRequestId"))));
+        }
+        selected.removeIf(tool -> !supported.contains(tool.name()));
+        tools = List.copyOf(selected);
         LinkedHashMap<String, McpSchema.Tool> index = new LinkedHashMap<>();
         tools.forEach(tool -> index.put(tool.name(), tool));
         byName = Map.copyOf(index);

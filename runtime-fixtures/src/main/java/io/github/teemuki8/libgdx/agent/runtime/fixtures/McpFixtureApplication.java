@@ -37,7 +37,7 @@ public final class McpFixtureApplication extends ApplicationAdapter {
     }
 
     @Override public void create() {
-        runtime = simulation.startRuntime();
+        runtime = simulation.startRuntime(Gdx.app::postRunnable);
         publication = registry.publish(runtime);
         server = RuntimeMcpServer.open(
                 new RuntimeProtocolService(registry), System.in, System.out);

@@ -9,13 +9,18 @@ strict closed input schemas (`additionalProperties: false`), and a maximum reque
 | Tool | Required fields | Optional fields |
 | --- | --- | --- |
 | `runtime_sessions` | none | none |
-| `runtime_capabilities` | `sessionId` | `protocolMinor` (`0` or `1`, default `0`) |
+| `runtime_capabilities` | `sessionId` | `protocolMinor` (`0`, `1`, or `2`; default `0`) |
 | `runtime_frames` | `sessionId` | `fromFrame`, `toFrame`, `limit` |
 | `runtime_snapshot` | `sessionId` | `frameId`, `entityId`, `entityIdPrefix`, `entityType`, `entityTypePrefix`, `limit` |
 | `runtime_entity` | `sessionId`, `entityId` | `fromFrame`, `toFrame`, `limit` |
 | `runtime_changes` | `sessionId` | range, `entityId`, `entityType`, `property`, `limit` |
 | `runtime_events` | `sessionId` | range, `eventType`, `eventTypePrefix`, `subject`, `source`, `limit` |
 | `runtime_decisions` | `sessionId` | range, `decisionType`, `actor`, `chosenCandidate`, `reasonCode`, `limit` |
+| `runtime_command_status`* | `sessionId`, `commandRequestId` | none |
+| `runtime_command_cancel`* | `sessionId`, `commandRequestId` | none |
+
+\* Command tools are included in the server-start catalog only when at least one published runtime
+has explicitly registered application command dispatch. They use protocol 1.2.
 
 Every identifier is a nonblank string of at most 256 UTF-16 code units. Frame fields are
 non-negative integers. Prefix matching is available only where the schema has an explicit prefix
@@ -23,9 +28,9 @@ boolean; there are no regular expressions or generic expressions.
 
 ## Protocol and capabilities
 
-Protocol 1.0 retains the exact original capabilities result. Set `protocolMinor` to `1` only on
-`runtime_capabilities` to request the extension-aware 1.1 result. Other MCP tools continue to use
-1.0 until a later version adds concrete optional commands.
+Protocol 1.0 retains the exact original capabilities result. Set `protocolMinor` to `1` or `2` only
+on `runtime_capabilities` to request extension metadata. The read-only MCP tools continue to use
+1.0. Command status and cancellation use protocol 1.2.
 
 The 1.1 result adds `capabilityReport`, containing the runtime artifact version and stable capability
 descriptors ordered by ID. Each descriptor reports availability, an unavailable reason when needed,
@@ -33,9 +38,27 @@ read-only or mutating access, Java APIs, protocol commands, MCP tools, effective
 dependencies. A disabled runtime reports the known inspection capabilities as unavailable with
 reason `runtime-disabled`; it does not claim that capture is enabled.
 
-Future optional tools are fixed when an MCP server starts and must be backed by concrete registered
+Optional tools are fixed when an MCP server starts and must be backed by concrete registered
 implementations. A server-wide tool that is unavailable for one selected session returns
 `CAPABILITY_UNAVAILABLE`. Applications cannot publish arbitrary capability strings.
+
+## Application command dispatch
+
+Applications opt in by connecting the runtime to their existing capture/render-thread queue:
+
+```java
+runtime = LibGdxAgentRuntime.builder()
+        .captureThread(Thread.currentThread())
+        .commandDispatcher(Gdx.app::postRunnable)
+        .build();
+```
+
+The runtime creates no command worker, scheduler, timer, or game loop. It bounds queued commands,
+terminal results, expired request IDs, and diagnostic text. Duplicate request IDs are not executed
+again while retained. `runtime_command_cancel` succeeds only in `QUEUED`; after dispatch it reports
+the current state without claiming cancellation. A deadline observed after execution starts reports
+`TIMED_OUT` with `outcomeKnown: false` until execution completes. Status queries never wait for the
+application loop and therefore remain available while that loop is paused.
 
 ## Result metadata
 

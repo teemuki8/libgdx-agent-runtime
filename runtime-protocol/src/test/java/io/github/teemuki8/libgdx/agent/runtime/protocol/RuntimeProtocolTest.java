@@ -8,12 +8,15 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
+import io.github.teemuki8.libgdx.agent.runtime.core.CommandState;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityType;
 import io.github.teemuki8.libgdx.agent.runtime.core.EventSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import io.github.teemuki8.libgdx.agent.runtime.core.SessionId;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -86,7 +89,7 @@ final class RuntimeProtocolTest {
                 service.execute(new RuntimeRequest(
                         new ProtocolVersion(2, 0), "v", null, new RuntimeCommand.Sessions())));
         assertEquals(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED, version.error().code());
-        assertEquals("1.0,1.1", version.error().details().get("supported"));
+        assertEquals("1.0,1.1,1.2", version.error().details().get("supported"));
 
         RuntimeResponse.Failure missing = assertInstanceOf(RuntimeResponse.Failure.class,
                 service.execute(new RuntimeRequest(ProtocolVersion.V1, "s", "missing",
@@ -165,6 +168,74 @@ final class RuntimeProtocolTest {
                                     == RuntimeCapability.Availability.UNAVAILABLE
                             && capability.unavailableReason().orElseThrow()
                                     .equals("runtime-disabled")));
+        }
+    }
+
+    @Test
+    void commandStatusAndCancellationUseRegisteredDispatchWithoutRunningTheTask() {
+        ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
+        int[] executions = {0};
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("commands"))
+                .commandDispatcher(applicationQueue::addLast)
+                .build();
+        runtime.start();
+        runtime.commands().orElseThrow().submit(
+                "reset-1", Duration.ofSeconds(1), () -> executions[0]++);
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime)) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            RuntimeProtocolService service = new RuntimeProtocolService(registry);
+            assertTrue(service.toolNames().contains("runtime_command_status"));
+            RuntimeResponse.Result.CommandStatus status = assertInstanceOf(
+                    RuntimeResponse.Result.CommandStatus.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V1_2, "status", "commands",
+                                    new RuntimeCommand.CommandStatus("reset-1")))).result());
+            assertEquals(CommandState.QUEUED,
+                    status.command().status().orElseThrow().state());
+
+            RuntimeResponse.Result.CommandCancellation cancellation = assertInstanceOf(
+                    RuntimeResponse.Result.CommandCancellation.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V1_2, "cancel", "commands",
+                                    new RuntimeCommand.CommandCancel("reset-1")))).result());
+            assertTrue(cancellation.cancellation().accepted());
+            applicationQueue.removeFirst().run();
+            assertEquals(0, executions[0]);
+
+            RuntimeResponse.Result.Capabilities capabilities = capabilities(
+                    service, ProtocolVersion.V1_2, "capabilities-commands", "commands");
+            assertFalse(capabilities(service, ProtocolVersion.V1_1,
+                    "capabilities-commands-v1-1", "commands").supportedTools()
+                    .contains("runtime_command_status"));
+            assertTrue(capabilities.capabilityReport().orElseThrow().capabilities().stream()
+                    .anyMatch(capability -> capability.id().equals("command-dispatch")
+                            && capability.availability()
+                                    == RuntimeCapability.Availability.AVAILABLE));
+        }
+    }
+
+    @Test
+    void unregisteredCommandDispatchIsDiscoverableAndUnavailable() {
+        AgentRuntime runtime = verticalRuntime();
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime)) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            RuntimeProtocolService service = new RuntimeProtocolService(registry);
+            assertFalse(service.toolNames().contains("runtime_command_status"));
+            RuntimeResponse.Failure failure = assertInstanceOf(RuntimeResponse.Failure.class,
+                    service.execute(new RuntimeRequest(ProtocolVersion.V1_2, "status", "fixture",
+                            new RuntimeCommand.CommandStatus("unknown"))));
+            assertEquals(ProtocolErrorCode.CAPABILITY_UNAVAILABLE, failure.error().code());
+            RuntimeResponse.Result.Capabilities capabilities = capabilities(
+                    service, ProtocolVersion.V1_2, "capabilities-v1-2", "fixture");
+            RuntimeCapability dispatch = capabilities.capabilityReport().orElseThrow()
+                    .capabilities().stream()
+                    .filter(capability -> capability.id().equals("command-dispatch"))
+                    .findFirst().orElseThrow();
+            assertEquals(RuntimeCapability.Availability.UNAVAILABLE, dispatch.availability());
+            assertEquals("dispatcher-not-registered", dispatch.unavailableReason().orElseThrow());
         }
     }
 

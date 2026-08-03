@@ -6,14 +6,16 @@ public record CommandDispatchLimits(
         int retainedResults,
         int retainedRequestIds,
         int diagnosticLength) {
-    private static final int MAX_BOUND = 100_000;
+    /** Absolute public bound for diagnostic text. */
+    public static final int MAX_DIAGNOSTIC_LENGTH = 16_384;
+    private static final int MAX_COUNT = 100_000;
 
     /** Validates all bounds. */
     public CommandDispatchLimits {
-        requireBound(queuedCommands, "queuedCommands");
-        requireBound(retainedResults, "retainedResults");
-        requireBound(retainedRequestIds, "retainedRequestIds");
-        requireBound(diagnosticLength, "diagnosticLength");
+        requireBound(queuedCommands, MAX_COUNT, "queuedCommands");
+        requireBound(retainedResults, MAX_COUNT, "retainedResults");
+        requireBound(retainedRequestIds, MAX_COUNT, "retainedRequestIds");
+        requireBound(diagnosticLength, MAX_DIAGNOSTIC_LENGTH, "diagnosticLength");
     }
 
     /** Conservative development defaults. */
@@ -21,9 +23,9 @@ public record CommandDispatchLimits(
         return new CommandDispatchLimits(256, 1_000, 1_000, 512);
     }
 
-    private static void requireBound(int value, String name) {
-        if (value <= 0 || value > MAX_BOUND) {
-            throw new IllegalArgumentException(name + " must be between 1 and " + MAX_BOUND);
+    private static void requireBound(int value, int maximum, String name) {
+        if (value <= 0 || value > maximum) {
+            throw new IllegalArgumentException(name + " must be between 1 and " + maximum);
         }
     }
 }

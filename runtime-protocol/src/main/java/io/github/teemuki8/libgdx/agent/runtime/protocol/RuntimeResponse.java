@@ -1,5 +1,6 @@
 package io.github.teemuki8.libgdx.agent.runtime.protocol;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import io.github.teemuki8.libgdx.agent.runtime.core.DecisionTrace;
@@ -83,14 +84,30 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
                 List<String> enabledFeatures,
                 RuntimeLimits limits,
                 Optional<Long> currentFrame,
-                RuntimeStatus runtimeStatus) implements Result {
+                RuntimeStatus runtimeStatus,
+                @JsonInclude(JsonInclude.Include.NON_ABSENT)
+                Optional<CapabilityReport> capabilityReport) implements Result {
+            /** Creates a frozen V1.0 capabilities result. */
+            public Capabilities(
+                    ProtocolVersion protocolVersion,
+                    List<String> supportedTools,
+                    List<String> enabledFeatures,
+                    RuntimeLimits limits,
+                    Optional<Long> currentFrame,
+                    RuntimeStatus runtimeStatus) {
+                this(protocolVersion, supportedTools, enabledFeatures, limits, currentFrame,
+                        runtimeStatus, Optional.empty());
+            }
+
             /** Copies values. */
             public Capabilities {
+                Objects.requireNonNull(protocolVersion, "protocolVersion");
                 supportedTools = List.copyOf(supportedTools);
                 enabledFeatures = List.copyOf(enabledFeatures);
                 Objects.requireNonNull(limits, "limits");
                 currentFrame = Objects.requireNonNull(currentFrame, "currentFrame");
                 Objects.requireNonNull(runtimeStatus, "runtimeStatus");
+                capabilityReport = Objects.requireNonNull(capabilityReport, "capabilityReport");
             }
         }
 

@@ -18,6 +18,7 @@ import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeRequest;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeResponse;
 import io.modelcontextprotocol.spec.McpSchema;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
@@ -41,6 +42,19 @@ final class FixtureProtocolAndMcpTest {
             assertEquals(1, result.page().items().size());
             assertEquals(25, ((io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue.IntegerValue)
                     result.page().items().getFirst().attributes().getFirst().value()).value());
+
+            RuntimeResponse capabilityResponse = new RuntimeProtocolService(fixture.registry)
+                    .execute(new RuntimeRequest(ProtocolVersion.V1_1, "fixture-capabilities",
+                            DeterministicSimulation.SESSION_ID.value(),
+                            new RuntimeCommand.Capabilities()));
+            RuntimeResponse.Result.Capabilities capabilities = assertInstanceOf(
+                    RuntimeResponse.Result.Capabilities.class,
+                    assertInstanceOf(RuntimeResponse.Success.class,
+                            ProtocolJson.decodeResponse(ProtocolJson.encode(capabilityResponse)))
+                            .result());
+            assertEquals(List.of("changes", "decisions", "entities", "events", "frames"),
+                    capabilities.capabilityReport().orElseThrow().capabilities().stream()
+                            .map(capability -> capability.id()).toList());
         }
         fixture.runtime.close();
     }
@@ -72,6 +86,14 @@ final class FixtureProtocolAndMcpTest {
             assertNotNull(decisions);
             assertFalse(decisions.isError());
             assertTrue(decisions.structuredContent().toString().contains("out-of-range"));
+
+            McpSchema.CallToolResult capabilities = handler.handle(call(
+                    "runtime_capabilities", Map.of(
+                            "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                            "protocolMinor", 1))).block(Duration.ofSeconds(5));
+            assertNotNull(capabilities);
+            assertFalse(capabilities.isError());
+            assertTrue(capabilities.structuredContent().toString().contains("capabilityReport"));
         }
         fixture.runtime.close();
     }

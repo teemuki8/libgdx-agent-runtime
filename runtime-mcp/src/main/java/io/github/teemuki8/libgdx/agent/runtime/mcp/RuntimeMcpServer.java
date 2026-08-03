@@ -1,6 +1,7 @@
 package io.github.teemuki8.libgdx.agent.runtime.mcp;
 
 import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeProtocolService;
+import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeVersion;
 import io.modelcontextprotocol.json.McpJsonDefaults;
 import io.modelcontextprotocol.json.McpJsonMapper;
 import io.modelcontextprotocol.json.TypeRef;
@@ -37,7 +38,7 @@ public final class RuntimeMcpServer implements AutoCloseable {
         handler = new RuntimeToolHandler(protocol);
         RuntimeToolCatalog catalog = new RuntimeToolCatalog();
         McpServer.AsyncSpecification<?> specification = McpServer.async(transport)
-                .serverInfo("libgdx-agent-runtime", "0.1.0")
+                .serverInfo("libgdx-agent-runtime", RuntimeVersion.current())
                 .capabilities(McpSchema.ServerCapabilities.builder().tools(false).build())
                 .validateToolInputs(false)
                 .requestTimeout(Duration.ofSeconds(30));

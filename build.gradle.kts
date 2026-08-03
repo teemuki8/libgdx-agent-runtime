@@ -86,6 +86,10 @@ subprojects {
         isReproducibleFileOrder = true
     }
 
+    tasks.withType<Jar>().configureEach {
+        manifest.attributes["Implementation-Version"] = project.version
+    }
+
     if (name in publishedModules) {
         apply(plugin = "maven-publish")
         apply(plugin = "signing")

@@ -43,6 +43,9 @@ final class RuntimeMcpTest {
             assertEquals(false, tool.inputSchema().get("additionalProperties"));
             assertNotNull(tool.description());
         });
+        McpSchema.Tool capabilities = catalog.tool("runtime_capabilities");
+        Map<?, ?> properties = (Map<?, ?>) capabilities.inputSchema().get("properties");
+        assertTrue(properties.containsKey("protocolMinor"));
     }
 
     @Test
@@ -102,6 +105,30 @@ final class RuntimeMcpTest {
                     .block(Duration.ofSeconds(5));
             assertTrue(excessive.isError());
             assertEquals("INVALID_QUERY", structured(excessive).get("code"));
+        }
+    }
+
+    @Test
+    void capabilitiesPreserveV1ByDefaultAndOptIntoExtensionMetadata() {
+        Fixture fixture = fixture();
+        try (PublishedRuntime publication = fixture.registry.publish(fixture.runtime);
+                RuntimeToolHandler handler =
+                        new RuntimeToolHandler(new RuntimeProtocolService(fixture.registry))) {
+            assertEquals(fixture.runtime.sessionId(), publication.sessionId());
+            McpSchema.CallToolResult v1 = handler.handle(call(
+                    "runtime_capabilities", Map.of("sessionId", "mcp-fixture")))
+                    .block(Duration.ofSeconds(5));
+            assertNotNull(v1);
+            assertFalse(v1.isError());
+            assertFalse(structured(v1).containsKey("capabilityReport"));
+
+            McpSchema.CallToolResult current = handler.handle(call(
+                    "runtime_capabilities", Map.of(
+                            "sessionId", "mcp-fixture", "protocolMinor", 1)))
+                    .block(Duration.ofSeconds(5));
+            assertNotNull(current);
+            assertFalse(current.isError());
+            assertTrue(structured(current).containsKey("capabilityReport"));
         }
     }
 

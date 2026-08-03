@@ -14,6 +14,8 @@ import io.github.teemuki8.libgdx.agent.runtime.core.EventSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import io.github.teemuki8.libgdx.agent.runtime.core.SessionId;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
@@ -84,6 +86,7 @@ final class RuntimeProtocolTest {
                 service.execute(new RuntimeRequest(
                         new ProtocolVersion(2, 0), "v", null, new RuntimeCommand.Sessions())));
         assertEquals(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED, version.error().code());
+        assertEquals("1.0,1.1", version.error().details().get("supported"));
 
         RuntimeResponse.Failure missing = assertInstanceOf(RuntimeResponse.Failure.class,
                 service.execute(new RuntimeRequest(ProtocolVersion.V1, "s", "missing",
@@ -104,6 +107,92 @@ final class RuntimeProtocolTest {
                             new RuntimeCommand.Entity("missing", 0, 1, 10))));
             assertEquals(ProtocolErrorCode.ENTITY_NOT_FOUND, entity.error().code());
         }
+    }
+
+    @Test
+    void reportsExtensionAwareCapabilitiesWithoutChangingV1Shape() {
+        AgentRuntime runtime = verticalRuntime();
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime)) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            RuntimeProtocolService service = new RuntimeProtocolService(registry);
+            RuntimeResponse.Result.Capabilities v1 = capabilities(
+                    service, ProtocolVersion.V1, "capabilities-v1", "fixture");
+            assertTrue(v1.capabilityReport().isEmpty());
+            RuntimeResponse.Success v1Response = new RuntimeResponse.Success(
+                    ProtocolVersion.V1, "capabilities-v1", v1);
+            String v1Json = new String(ProtocolJson.encode(v1Response), StandardCharsets.UTF_8);
+            assertFalse(v1Json.contains("capabilityReport"));
+            RuntimeResponse.Result.Capabilities decodedV1 = assertInstanceOf(
+                    RuntimeResponse.Result.Capabilities.class,
+                    assertInstanceOf(RuntimeResponse.Success.class,
+                            ProtocolJson.decodeResponse(ProtocolJson.encode(v1Response))).result());
+            assertTrue(decodedV1.capabilityReport().isEmpty());
+
+            RuntimeResponse.Result.Capabilities current = capabilities(
+                    service, ProtocolVersion.V1_1, "capabilities-v1-1", "fixture");
+            CapabilityReport report = current.capabilityReport().orElseThrow();
+            assertFalse(report.runtimeVersion().isBlank());
+            assertEquals(List.of("changes", "decisions", "entities", "events", "frames"),
+                    report.capabilities().stream().map(RuntimeCapability::id).toList());
+            assertTrue(report.capabilities().stream().allMatch(capability ->
+                    capability.availability() == RuntimeCapability.Availability.AVAILABLE));
+            RuntimeResponse decoded = ProtocolJson.decodeResponse(ProtocolJson.encode(
+                    new RuntimeResponse.Success(ProtocolVersion.V1_1,
+                            "capabilities-v1-1", current)));
+            assertEquals(ProtocolVersion.V1_1, decoded.version());
+        }
+    }
+
+    @Test
+    void reportsDisabledCapabilitiesAsUnavailable() {
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("disabled"))
+                .configuration(io.github.teemuki8.libgdx.agent.runtime.core.RuntimeConfiguration
+                        .disabled())
+                .build();
+        runtime.start();
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime)) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            RuntimeResponse.Result.Capabilities capabilities = capabilities(
+                    new RuntimeProtocolService(registry), ProtocolVersion.V1_1,
+                    "disabled-capabilities", "disabled");
+            assertTrue(capabilities.enabledFeatures().isEmpty());
+            assertTrue(capabilities.capabilityReport().orElseThrow().capabilities().stream()
+                    .allMatch(capability ->
+                            capability.availability()
+                                    == RuntimeCapability.Availability.UNAVAILABLE
+                            && capability.unavailableReason().orElseThrow()
+                                    .equals("runtime-disabled")));
+        }
+    }
+
+    @Test
+    void capabilityMetadataIsBoundedValidatedAndDeterministicallyOrdered() {
+        RuntimeCapability capability = new RuntimeCapability(
+                "test", ProtocolVersion.V1,
+                RuntimeCapability.Availability.AVAILABLE, Optional.empty(),
+                RuntimeCapability.Access.READ_ONLY,
+                List.of("Api#z", "Api#a"), List.of("z", "a"), List.of("tool-z", "tool-a"),
+                Map.of("z", 2L, "a", 1L), List.of("z", "a"), List.of("frames"));
+        assertEquals(List.of("Api#a", "Api#z"), capability.javaApis());
+        assertEquals(List.of("a", "z"), capability.protocolCommands());
+        assertEquals(List.of("a", "z"), capability.modes());
+        assertEquals(List.of("a", "z"), capability.limits().keySet().stream().toList());
+
+        assertThrows(IllegalArgumentException.class, () -> new RuntimeCapability(
+                "test", ProtocolVersion.V1,
+                RuntimeCapability.Availability.AVAILABLE, Optional.of("disabled"),
+                RuntimeCapability.Access.READ_ONLY, List.of(), List.of(), List.of(), Map.of(),
+                List.of(), List.of()));
+        assertThrows(IllegalArgumentException.class, () -> new RuntimeCapability(
+                "test", ProtocolVersion.V1,
+                RuntimeCapability.Availability.AVAILABLE, Optional.empty(),
+                RuntimeCapability.Access.READ_ONLY, List.of("duplicate", "duplicate"),
+                List.of(), List.of(), Map.of(), List.of(), List.of()));
+        assertThrows(IllegalArgumentException.class, () -> new CapabilityReport(
+                "development", List.of(capability, capability)));
     }
 
     @Test
@@ -184,5 +273,15 @@ final class RuntimeProtocolTest {
             health[0] = 75;
         });
         return runtime;
+    }
+
+    private static RuntimeResponse.Result.Capabilities capabilities(
+            RuntimeProtocolService service, ProtocolVersion version,
+            String requestId, String sessionId) {
+        RuntimeResponse.Success response = assertInstanceOf(RuntimeResponse.Success.class,
+                service.execute(new RuntimeRequest(version, requestId, sessionId,
+                        new RuntimeCommand.Capabilities())));
+        assertEquals(version, response.version());
+        return assertInstanceOf(RuntimeResponse.Result.Capabilities.class, response.result());
     }
 }

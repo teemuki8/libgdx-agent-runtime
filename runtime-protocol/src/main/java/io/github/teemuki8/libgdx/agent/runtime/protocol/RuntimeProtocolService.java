@@ -29,6 +29,8 @@ public final class RuntimeProtocolService {
             "runtime_entity", "runtime_changes", "runtime_events", "runtime_decisions");
     private static final List<String> FEATURES = List.of(
             "entities", "frames", "changes", "events", "decisions");
+    private static final List<ProtocolVersion> SUPPORTED_VERSIONS =
+            List.of(ProtocolVersion.V1, ProtocolVersion.V1_1);
     private final RuntimeRegistry registry;
 
     /** Creates a service over an isolated or global registry. */
@@ -39,15 +41,15 @@ public final class RuntimeProtocolService {
     /** Executes one request without exposing local exceptions or stack traces. */
     public RuntimeResponse execute(RuntimeRequest request) {
         Objects.requireNonNull(request, "request");
-        if (!ProtocolVersion.V1.equals(request.version())) {
+        if (!SUPPORTED_VERSIONS.contains(request.version())) {
             return failure(request, ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                     "protocol version is unsupported", Map.of(
-                            "supported", "1.0",
+                            "supported", "1.0,1.1",
                             "requested", request.version().major() + "." + request.version().minor()));
         }
         try {
             return new RuntimeResponse.Success(
-                    ProtocolVersion.V1, request.requestId(), executeCommand(request));
+                    request.version(), request.requestId(), executeCommand(request));
         } catch (ProtocolFailure failure) {
             return failure(request, failure.code, failure.getMessage(), failure.details);
         } catch (AgentRuntimeException failure) {
@@ -77,7 +79,7 @@ public final class RuntimeProtocolService {
                         ProtocolErrorCode.SESSION_NOT_FOUND, "runtime session was not found",
                         Map.of("sessionId", request.sessionId())));
         return switch (request.command()) {
-            case RuntimeCommand.Capabilities ignored -> capabilities(runtime);
+            case RuntimeCommand.Capabilities ignored -> capabilities(runtime, request.version());
             case RuntimeCommand.Frames command -> new RuntimeResponse.Result.Frames(
                     runtime.frames(range(command.fromFrame(), command.toFrame()), command.limit()));
             case RuntimeCommand.Snapshot command -> snapshot(runtime, command);
@@ -90,10 +92,81 @@ public final class RuntimeProtocolService {
         };
     }
 
-    private static RuntimeResponse.Result capabilities(AgentRuntime runtime) {
+    private static RuntimeResponse.Result capabilities(
+            AgentRuntime runtime, ProtocolVersion version) {
+        if (ProtocolVersion.V1.equals(version)) {
+            return new RuntimeResponse.Result.Capabilities(
+                    ProtocolVersion.V1, TOOLS, FEATURES, runtime.configuration().limits(),
+                    runtime.latestFrame().map(frame -> frame.frameId().value()), runtime.status());
+        }
+        List<RuntimeCapability> details = capabilityDetails(runtime);
+        List<String> enabled = details.stream()
+                .filter(capability -> capability.availability()
+                        == RuntimeCapability.Availability.AVAILABLE)
+                .map(RuntimeCapability::id)
+                .toList();
         return new RuntimeResponse.Result.Capabilities(
-                ProtocolVersion.V1, TOOLS, FEATURES, runtime.configuration().limits(),
-                runtime.latestFrame().map(frame -> frame.frameId().value()), runtime.status());
+                ProtocolVersion.V1_1, TOOLS, enabled, runtime.configuration().limits(),
+                runtime.latestFrame().map(frame -> frame.frameId().value()), runtime.status(),
+                Optional.of(new CapabilityReport(RuntimeVersion.current(), details)));
+    }
+
+    private static List<RuntimeCapability> capabilityDetails(AgentRuntime runtime) {
+        var limits = runtime.configuration().limits();
+        return List.of(
+                capability(runtime, "changes", List.of("AgentRuntime#changes"),
+                        List.of("changes"), List.of("runtime_changes"), Map.of(
+                                "queryResults", (long) limits.queryResults(),
+                                "retainedFrames", (long) limits.retainedFrames()),
+                        List.of("exact-property-filter"), List.of("frames")),
+                capability(runtime, "decisions", List.of("AgentRuntime#decisions"),
+                        List.of("decisions"), List.of("runtime_decisions"), Map.of(
+                                "candidatesPerDecision", (long) limits.candidatesPerDecision(),
+                                "decisionsPerFrame", (long) limits.decisionsPerFrame(),
+                                "queryResults", (long) limits.queryResults()),
+                        List.of("exact-filter"), List.of("frames")),
+                capability(runtime, "entities", List.of(
+                                "AgentRuntime#entities", "AgentRuntime#entity",
+                                "AgentRuntime#entityHistory"),
+                        List.of("entity", "snapshot"),
+                        List.of("runtime_entity", "runtime_snapshot"), Map.of(
+                                "entitiesPerSnapshot", (long) limits.entitiesPerSnapshot(),
+                                "propertiesPerEntity", (long) limits.propertiesPerEntity(),
+                                "queryResults", (long) limits.queryResults()),
+                        List.of("exact", "history", "prefix"), List.of("frames")),
+                capability(runtime, "events", List.of("AgentRuntime#events"),
+                        List.of("events"), List.of("runtime_events"), Map.of(
+                                "attributesPerItem", (long) limits.attributesPerItem(),
+                                "queryResults", (long) limits.queryResults(),
+                                "retainedEvents", (long) limits.retainedEvents()),
+                        List.of("exact-filter", "type-prefix-filter"), List.of("frames")),
+                capability(runtime, "frames", List.of(
+                                "AgentRuntime#frame", "AgentRuntime#frames",
+                                "AgentRuntime#latestFrame"),
+                        List.of("frames", "snapshot"),
+                        List.of("runtime_frames", "runtime_snapshot"), Map.of(
+                                "queryResults", (long) limits.queryResults(),
+                                "retainedFrames", (long) limits.retainedFrames()),
+                        List.of("exact", "latest", "range"), List.of()));
+    }
+
+    private static RuntimeCapability capability(
+            AgentRuntime runtime,
+            String id,
+            List<String> javaApis,
+            List<String> commands,
+            List<String> tools,
+            Map<String, Long> limits,
+            List<String> modes,
+            List<String> requirements) {
+        boolean available = runtime.configuration().enabled();
+        return new RuntimeCapability(
+                id, ProtocolVersion.V1,
+                available ? RuntimeCapability.Availability.AVAILABLE
+                        : RuntimeCapability.Availability.UNAVAILABLE,
+                available ? Optional.empty() : Optional.of("runtime-disabled"),
+                RuntimeCapability.Access.READ_ONLY, javaApis, commands, tools, limits, modes,
+                requirements);
     }
 
     private static RuntimeResponse.Result snapshot(
@@ -194,8 +267,10 @@ public final class RuntimeProtocolService {
 
     private static RuntimeResponse failure(RuntimeRequest request, ProtocolErrorCode code,
             String message, Map<String, String> details) {
+        ProtocolVersion responseVersion = SUPPORTED_VERSIONS.contains(request.version())
+                ? request.version() : ProtocolVersion.CURRENT;
         return new RuntimeResponse.Failure(
-                ProtocolVersion.V1, request.requestId(), new ProtocolError(code, message, details));
+                responseVersion, request.requestId(), new ProtocolError(code, message, details));
     }
 
     @SuppressWarnings("serial")

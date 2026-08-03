@@ -1,15 +1,15 @@
 # Agent tools
 
-All tools use protocol V1, deterministic ascending frame/sequence ordering, strict closed input
-schemas (`additionalProperties: false`), and a maximum requested `limit` of 1000. Query defaults are
-`fromFrame: 0`, `toFrame: 9223372036854775807`, and `limit: 100`.
+All tools use frozen protocol 1.0 by default, deterministic ascending frame/sequence ordering,
+strict closed input schemas (`additionalProperties: false`), and a maximum requested `limit` of
+1000. Query defaults are `fromFrame: 0`, `toFrame: 9223372036854775807`, and `limit: 100`.
 
 ## Tools
 
 | Tool | Required fields | Optional fields |
 | --- | --- | --- |
 | `runtime_sessions` | none | none |
-| `runtime_capabilities` | `sessionId` | none |
+| `runtime_capabilities` | `sessionId` | `protocolMinor` (`0` or `1`, default `0`) |
 | `runtime_frames` | `sessionId` | `fromFrame`, `toFrame`, `limit` |
 | `runtime_snapshot` | `sessionId` | `frameId`, `entityId`, `entityIdPrefix`, `entityType`, `entityTypePrefix`, `limit` |
 | `runtime_entity` | `sessionId`, `entityId` | `fromFrame`, `toFrame`, `limit` |
@@ -20,6 +20,22 @@ schemas (`additionalProperties: false`), and a maximum requested `limit` of 1000
 Every identifier is a nonblank string of at most 256 UTF-16 code units. Frame fields are
 non-negative integers. Prefix matching is available only where the schema has an explicit prefix
 boolean; there are no regular expressions or generic expressions.
+
+## Protocol and capabilities
+
+Protocol 1.0 retains the exact original capabilities result. Set `protocolMinor` to `1` only on
+`runtime_capabilities` to request the extension-aware 1.1 result. Other MCP tools continue to use
+1.0 until a later version adds concrete optional commands.
+
+The 1.1 result adds `capabilityReport`, containing the runtime artifact version and stable capability
+descriptors ordered by ID. Each descriptor reports availability, an unavailable reason when needed,
+read-only or mutating access, Java APIs, protocol commands, MCP tools, effective limits, modes, and
+dependencies. A disabled runtime reports the known inspection capabilities as unavailable with
+reason `runtime-disabled`; it does not claim that capture is enabled.
+
+Future optional tools are fixed when an MCP server starts and must be backed by concrete registered
+implementations. A server-wide tool that is unavailable for one selected session returns
+`CAPABILITY_UNAVAILABLE`. Applications cannot publish arbitrary capability strings.
 
 ## Result metadata
 
@@ -75,8 +91,8 @@ Representative structured result:
 
 Errors use `SESSION_NOT_FOUND`, `FRAME_NOT_FOUND`, `ENTITY_NOT_FOUND`, `INVALID_QUERY`,
 `INVALID_RANGE`, `LIMIT_EXCEEDED`, `RUNTIME_CLOSED`, `CAPTURE_NOT_AVAILABLE`,
-`PROTOCOL_VERSION_UNSUPPORTED`, or `INTERNAL_ERROR`. MCP returns these in a structured error with
-`isError: true`.
+`CAPABILITY_UNAVAILABLE`, `PROTOCOL_VERSION_UNSUPPORTED`, or `INTERNAL_ERROR`. MCP returns these in
+a structured error with `isError: true`.
 
 Raw requests are limited to 1 MiB, encoded responses to 8 MiB, JSON depth to 32, normal JSON strings
 to 16384 code units, and query counts to both the protocol maximum and the runtime's configured

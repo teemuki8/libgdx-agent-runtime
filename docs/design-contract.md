@@ -23,8 +23,8 @@ This document makes lifecycle and evidence edge cases explicit.
 14. Snapshot diffs default to `UNKNOWN`. `causeNextChange` can associate a semantic code, exact
     event ID, or exact decision ID with the next observed entity/property difference.
 15. After close, completed retained history and `CLOSED` status remain; live providers are released.
-16. Any protocol version other than exactly `1.0` returns
-    `PROTOCOL_VERSION_UNSUPPORTED` before command execution.
+16. Protocol `1.0` remains frozen and protocol `1.1` adds extension-aware capability metadata.
+    Any other exact version returns `PROTOCOL_VERSION_UNSUPPORTED` before command execution.
 17. Capture truncations contain dimension/observed/retained/limit. Query pages separately contain
     `hasMore` and retention-range metadata.
 18. Only explicit `RuntimeValue` providers cross the boundary. No reflection, object traversal,

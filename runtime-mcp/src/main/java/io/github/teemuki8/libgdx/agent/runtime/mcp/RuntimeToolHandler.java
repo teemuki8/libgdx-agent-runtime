@@ -114,7 +114,10 @@ public final class RuntimeToolHandler implements AutoCloseable {
                     string(arguments, "reasonCode"), limit);
             default -> throw new IllegalArgumentException("unknown runtime tool");
         };
-        return new RuntimeRequest(ProtocolVersion.V1,
+        ProtocolVersion version = "runtime_capabilities".equals(toolName)
+                ? new ProtocolVersion(1, Math.toIntExact(number(arguments, "protocolMinor", 0)))
+                : ProtocolVersion.V1;
+        return new RuntimeRequest(version,
                 "mcp-" + Long.toUnsignedString(sequence.incrementAndGet()), sessionId, command);
     }
 

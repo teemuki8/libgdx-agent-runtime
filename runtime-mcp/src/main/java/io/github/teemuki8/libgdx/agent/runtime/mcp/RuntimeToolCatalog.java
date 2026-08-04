@@ -43,7 +43,7 @@ public final class RuntimeToolCatalog {
                         object(Map.of(), List.of())),
                 tool("runtime_capabilities",
                         "Report capabilities; protocolMinor defaults to frozen V1.0",
-                        sessionInput(Map.of("protocolMinor", integer(0, 6)), List.of())),
+                        sessionInput(Map.of("protocolMinor", integer(0, 7)), List.of())),
                 tool("runtime_frames",
                         "List frame summaries; fromFrame defaults to 0, toFrame to max, limit to 100",
                         queryInput(Map.of(), List.of())),
@@ -145,6 +145,11 @@ public final class RuntimeToolCatalog {
                     "Submit or poll one registered semantic action",
                     actionInput(actionIndex.values())));
         }
+        if (supported.contains("runtime_assert")) {
+            selected.add(tool("runtime_assert",
+                    "Evaluate one bounded closed assertion over completed immutable evidence",
+                    assertionInput()));
+        }
         selected.removeIf(tool -> !supported.contains(tool.name()));
         tools = List.copyOf(selected);
         LinkedHashMap<String, McpSchema.Tool> index = new LinkedHashMap<>();
@@ -233,6 +238,83 @@ public final class RuntimeToolCatalog {
                 : Map.of("anyOf", schemas));
         return object(properties,
                 List.of("sessionId", "action", "actionRequestId", "parameters", "timeoutNanos"));
+    }
+
+    private static Map<String, Object> assertionInput() {
+        LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
+        properties.put("sessionId", string());
+        properties.put("fromFrame", integer(0, Long.MAX_VALUE));
+        properties.put("toFrame", integer(0, Long.MAX_VALUE));
+        properties.put("executionEpochId", integer(0, Long.MAX_VALUE));
+        properties.put("evidenceLimit", integer(1, 100));
+        properties.put("assertion", Map.of("oneOf", assertionSchemas()));
+        return object(properties, List.of("sessionId", "fromFrame", "toFrame",
+                "executionEpochId", "evidenceLimit", "assertion"));
+    }
+
+    private static List<Map<String, Object>> assertionSchemas() {
+        Map<String, Object> entityId = Map.of("entityId", string());
+        Map<String, Object> eventType = Map.of("eventType", string());
+        Map<String, Object> decision = Map.of("decisionType", string(), "candidate", string());
+        return List.of(
+                discriminated("entityExists", entityId, List.of("entityId")),
+                discriminated("entityDoesNotExist", entityId, List.of("entityId")),
+                discriminated("propertyEquals", Map.of(
+                        "entityId", string(), "property", string(), "expected", naturalValue()),
+                        List.of("entityId", "property", "expected")),
+                discriminated("propertyChangesFrom", Map.of(
+                        "entityId", string(), "property", string(), "from", naturalValue()),
+                        List.of("entityId", "property", "from")),
+                discriminated("propertyRemainsWithinRange", Map.of(
+                        "entityId", string(), "property", string(),
+                        "minimum", Map.of("type", "number"),
+                        "maximum", Map.of("type", "number")),
+                        List.of("entityId", "property", "minimum", "maximum")),
+                discriminated("eventOccurs", eventType, List.of("eventType")),
+                discriminated("eventDoesNotOccur", eventType, List.of("eventType")),
+                discriminated("eventOccursExactly", Map.of(
+                        "eventType", string(), "count", integer(1, 1_000_000)),
+                        List.of("eventType", "count")),
+                discriminated("decisionSelected", decision,
+                        List.of("decisionType", "candidate")),
+                discriminated("decisionRejected", decision,
+                        List.of("decisionType", "candidate")),
+                discriminated("entityCountStaysBelow", Map.of(
+                        "entityType", string(), "limit", integer(1, 1_000_000)),
+                        List.of("limit")),
+                discriminated("snapshotsEquivalent", Map.of(
+                        "leftFrameId", integer(0, Long.MAX_VALUE),
+                        "rightFrameId", integer(0, Long.MAX_VALUE),
+                        "comparisonScope", comparisonScope()),
+                        List.of("leftFrameId", "rightFrameId", "comparisonScope")));
+    }
+
+    private static Map<String, Object> discriminated(String type,
+            Map<String, Object> additions, List<String> required) {
+        LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
+        properties.put("assertionType", Map.of("type", "string", "const", type));
+        properties.putAll(additions);
+        ArrayList<String> requiredFields = new ArrayList<>(List.of("assertionType"));
+        requiredFields.addAll(required);
+        return object(properties, requiredFields);
+    }
+
+    private static Map<String, Object> comparisonScope() {
+        Map<String, Object> stringArray = Map.of(
+                "type", "array", "items", string(), "maxItems", 1_000);
+        return object(Map.of(
+                "entityIds", stringArray,
+                "properties", stringArray,
+                "excludedProperties", stringArray,
+                "includeEvents", bool(),
+                "includeDecisions", bool()), List.of(
+                        "entityIds", "properties", "excludedProperties",
+                        "includeEvents", "includeDecisions"));
+    }
+
+    private static Map<String, Object> naturalValue() {
+        return Map.of("type", List.of(
+                "null", "boolean", "integer", "number", "string", "array", "object"));
     }
 
     private static Map<String, Object> parameterObject(ActionDescriptor descriptor) {

@@ -13,6 +13,7 @@ import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue;
+import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeAssertion;
 import java.io.IOException;
 import java.util.Objects;
 
@@ -133,6 +134,7 @@ public final class ProtocolJson {
                 .addModule(new JavaTimeModule())
                 .build();
         mapper.addMixIn(RuntimeValue.class, RuntimeValueMixin.class);
+        mapper.addMixIn(RuntimeAssertion.class, RuntimeAssertionMixin.class);
         return mapper;
     }
 
@@ -149,6 +151,32 @@ public final class ProtocolJson {
         @JsonSubTypes.Type(value = RuntimeValue.ObjectValue.class, name = "object")
     })
     private interface RuntimeValueMixin {}
+
+    @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "assertionType")
+    @JsonSubTypes({
+        @JsonSubTypes.Type(value = RuntimeAssertion.EntityExists.class, name = "entityExists"),
+        @JsonSubTypes.Type(value = RuntimeAssertion.EntityDoesNotExist.class,
+                name = "entityDoesNotExist"),
+        @JsonSubTypes.Type(value = RuntimeAssertion.PropertyEquals.class, name = "propertyEquals"),
+        @JsonSubTypes.Type(value = RuntimeAssertion.PropertyChangesFrom.class,
+                name = "propertyChangesFrom"),
+        @JsonSubTypes.Type(value = RuntimeAssertion.PropertyRemainsWithinRange.class,
+                name = "propertyRemainsWithinRange"),
+        @JsonSubTypes.Type(value = RuntimeAssertion.EventOccurs.class, name = "eventOccurs"),
+        @JsonSubTypes.Type(value = RuntimeAssertion.EventDoesNotOccur.class,
+                name = "eventDoesNotOccur"),
+        @JsonSubTypes.Type(value = RuntimeAssertion.EventOccursExactly.class,
+                name = "eventOccursExactly"),
+        @JsonSubTypes.Type(value = RuntimeAssertion.DecisionSelected.class,
+                name = "decisionSelected"),
+        @JsonSubTypes.Type(value = RuntimeAssertion.DecisionRejected.class,
+                name = "decisionRejected"),
+        @JsonSubTypes.Type(value = RuntimeAssertion.EntityCountStaysBelow.class,
+                name = "entityCountStaysBelow"),
+        @JsonSubTypes.Type(value = RuntimeAssertion.SnapshotsEquivalent.class,
+                name = "snapshotsEquivalent")
+    })
+    private interface RuntimeAssertionMixin {}
 
     /** Local codec failure with a stable safe category. */
     @SuppressWarnings("serial")

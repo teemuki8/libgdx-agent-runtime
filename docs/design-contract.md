@@ -46,6 +46,10 @@ This document makes lifecycle and evidence edge cases explicit.
 23. Semantic actions have explicitly registered closed scalar schemas and application-owned handlers.
     Inputs are validated before capture-thread dispatch; retained retries do not re-execute, results
     carry bounded command/frame evidence, and effects are correlated only by explicit testimony.
+24. Declarative assertions evaluate only completed immutable evidence in one explicit bounded epoch
+    range. The assertion union and nested comparison scope are closed; negative and remains
+    assertions require complete evidence, while eviction, capture diagnostics, aborted decisions,
+    or relevant truncation produce `INCONCLUSIVE` instead of a misleading pass or failure.
 
 Closing during a frame is rejected. `frame` completes capture and rethrows callback failure.
 Disabled runtimes retain no providers or frames and perform no serialization.

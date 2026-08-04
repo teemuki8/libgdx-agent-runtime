@@ -10,12 +10,22 @@ import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeRequest;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeResponse;
 import io.github.teemuki8.libgdx.agent.runtime.core.ActionDescriptor;
 import io.github.teemuki8.libgdx.agent.runtime.core.ActionParameter;
+import io.github.teemuki8.libgdx.agent.runtime.core.DecisionType;
+import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
+import io.github.teemuki8.libgdx.agent.runtime.core.EntityType;
+import io.github.teemuki8.libgdx.agent.runtime.core.EventType;
+import io.github.teemuki8.libgdx.agent.runtime.core.FrameId;
+import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeAssertion;
+import io.github.teemuki8.libgdx.agent.runtime.core.SnapshotComparisonScope;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import io.modelcontextprotocol.json.McpJsonDefaults;
 import io.modelcontextprotocol.spec.McpSchema;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.Optional;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -150,6 +160,10 @@ public final class RuntimeToolHandler implements AutoCloseable {
                     string(arguments, "action"), string(arguments, "actionRequestId"),
                     actionParameters(string(arguments, "action"), arguments.get("parameters")),
                     string(arguments, "correlationId"), number(arguments, "timeoutNanos", -1));
+            case "runtime_assert" -> new RuntimeCommand.Assert(
+                    assertion(arguments.get("assertion")), from, to,
+                    number(arguments, "executionEpochId", -1),
+                    Math.toIntExact(number(arguments, "evidenceLimit", -1)));
             default -> throw new IllegalArgumentException("unknown runtime tool");
         };
         ProtocolVersion version = switch (toolName) {
@@ -161,6 +175,7 @@ public final class RuntimeToolHandler implements AutoCloseable {
             case "runtime_attributed_changes", "runtime_attributed_events",
                     "runtime_attributed_decisions" -> ProtocolVersion.V1_5;
             case "runtime_actions", "runtime_action" -> ProtocolVersion.V1_6;
+            case "runtime_assert" -> ProtocolVersion.V1_7;
             default -> ProtocolVersion.V1;
         };
         return new RuntimeRequest(version,
@@ -221,6 +236,133 @@ public final class RuntimeToolHandler implements AutoCloseable {
             case ENUM -> raw instanceof String value
                     ? RuntimeValues.enumValue(value) : wrongType();
         };
+    }
+
+    private static RuntimeAssertion assertion(Object raw) {
+        Map<String, Object> values = stringMap(raw, "assertion");
+        String type = string(values, "assertionType");
+        return switch (type) {
+            case "entityExists" -> new RuntimeAssertion.EntityExists(
+                    EntityId.of(string(values, "entityId")));
+            case "entityDoesNotExist" -> new RuntimeAssertion.EntityDoesNotExist(
+                    EntityId.of(string(values, "entityId")));
+            case "propertyEquals" -> new RuntimeAssertion.PropertyEquals(
+                    EntityId.of(string(values, "entityId")), string(values, "property"),
+                    runtimeValue(values.get("expected"), 0));
+            case "propertyChangesFrom" -> new RuntimeAssertion.PropertyChangesFrom(
+                    EntityId.of(string(values, "entityId")), string(values, "property"),
+                    runtimeValue(values.get("from"), 0));
+            case "propertyRemainsWithinRange" ->
+                    new RuntimeAssertion.PropertyRemainsWithinRange(
+                            EntityId.of(string(values, "entityId")), string(values, "property"),
+                            decimal(values, "minimum"), decimal(values, "maximum"));
+            case "eventOccurs" -> new RuntimeAssertion.EventOccurs(
+                    EventType.of(string(values, "eventType")));
+            case "eventDoesNotOccur" -> new RuntimeAssertion.EventDoesNotOccur(
+                    EventType.of(string(values, "eventType")));
+            case "eventOccursExactly" -> new RuntimeAssertion.EventOccursExactly(
+                    EventType.of(string(values, "eventType")),
+                    Math.toIntExact(number(values, "count", -1)));
+            case "decisionSelected" -> new RuntimeAssertion.DecisionSelected(
+                    DecisionType.of(string(values, "decisionType")),
+                    EntityId.of(string(values, "candidate")));
+            case "decisionRejected" -> new RuntimeAssertion.DecisionRejected(
+                    DecisionType.of(string(values, "decisionType")),
+                    EntityId.of(string(values, "candidate")));
+            case "entityCountStaysBelow" -> new RuntimeAssertion.EntityCountStaysBelow(
+                    Optional.ofNullable(string(values, "entityType")).map(EntityType::of),
+                    Math.toIntExact(number(values, "limit", -1)));
+            case "snapshotsEquivalent" -> new RuntimeAssertion.SnapshotsEquivalent(
+                    new FrameId(number(values, "leftFrameId", -1)),
+                    new FrameId(number(values, "rightFrameId", -1)),
+                    comparisonScope(values.get("comparisonScope")));
+            default -> throw new IllegalArgumentException("unknown assertion type");
+        };
+    }
+
+    private static SnapshotComparisonScope comparisonScope(Object raw) {
+        Map<String, Object> values = stringMap(raw, "comparisonScope");
+        return new SnapshotComparisonScope(
+                strings(values.get("entityIds")).stream().map(EntityId::of).toList(),
+                strings(values.get("properties")), strings(values.get("excludedProperties")),
+                bool(values, "includeEvents"), bool(values, "includeDecisions"));
+    }
+
+    private static List<String> strings(Object raw) {
+        if (!(raw instanceof List<?> values)) {
+            throw new IllegalArgumentException("assertion string list is invalid");
+        }
+        return values.stream().map(value -> {
+            if (!(value instanceof String text)) {
+                throw new IllegalArgumentException("assertion list value is not a string");
+            }
+            return text;
+        }).toList();
+    }
+
+    private static BigDecimal decimal(Map<String, Object> values, String key) {
+        Object raw = values.get(key);
+        if (!(raw instanceof Number number)) {
+            throw new IllegalArgumentException("assertion decimal is invalid");
+        }
+        return new BigDecimal(number.toString());
+    }
+
+    private static Map<String, Object> stringMap(Object raw, String name) {
+        if (!(raw instanceof Map<?, ?> values)) {
+            throw new IllegalArgumentException(name + " must be an object");
+        }
+        LinkedHashMap<String, Object> result = new LinkedHashMap<>();
+        values.forEach((key, value) -> {
+            if (!(key instanceof String text)) {
+                throw new IllegalArgumentException(name + " field name must be a string");
+            }
+            result.put(text, value);
+        });
+        return Map.copyOf(result);
+    }
+
+    private static RuntimeValue runtimeValue(Object raw, int depth) {
+        if (depth > ProtocolJson.MAX_NESTING_DEPTH) {
+            throw new IllegalArgumentException("runtime value nesting is too deep");
+        }
+        if (raw == null) {
+            return RuntimeValues.nullValue();
+        }
+        if (raw instanceof Boolean value) {
+            return RuntimeValues.bool(value);
+        }
+        if (raw instanceof Byte || raw instanceof Short || raw instanceof Integer
+                || raw instanceof Long) {
+            return RuntimeValues.integer(((Number) raw).longValue());
+        }
+        if (raw instanceof Number value) {
+            return RuntimeValues.decimal(value.toString());
+        }
+        if (raw instanceof String value) {
+            return RuntimeValues.string(value);
+        }
+        if (raw instanceof List<?> values) {
+            if (values.size() > ProtocolJson.MAX_RESULT_ITEMS) {
+                throw new IllegalArgumentException("runtime value list is too large");
+            }
+            return RuntimeValues.list(values.stream()
+                    .map(value -> runtimeValue(value, depth + 1)).toList());
+        }
+        if (raw instanceof Map<?, ?> values) {
+            if (values.size() > ProtocolJson.MAX_RESULT_ITEMS) {
+                throw new IllegalArgumentException("runtime value object is too large");
+            }
+            java.util.ArrayList<RuntimeValue.Field> fields = new java.util.ArrayList<>();
+            values.forEach((key, value) -> {
+                if (!(key instanceof String name)) {
+                    throw new IllegalArgumentException("runtime value field name is not a string");
+                }
+                fields.add(RuntimeValues.field(name, runtimeValue(value, depth + 1)));
+            });
+            return new RuntimeValue.ObjectValue(fields);
+        }
+        throw new IllegalArgumentException("unsupported runtime value");
     }
 
     private static RuntimeValue wrongType() {

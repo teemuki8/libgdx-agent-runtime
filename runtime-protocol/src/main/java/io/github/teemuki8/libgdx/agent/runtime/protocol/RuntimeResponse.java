@@ -19,6 +19,7 @@ import io.github.teemuki8.libgdx.agent.runtime.core.ScenarioDescriptor;
 import io.github.teemuki8.libgdx.agent.runtime.core.ScenarioReset;
 import io.github.teemuki8.libgdx.agent.runtime.core.ActionDescriptor;
 import io.github.teemuki8.libgdx.agent.runtime.core.ActionInvocation;
+import io.github.teemuki8.libgdx.agent.runtime.core.AssertionResult;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -75,12 +76,13 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         @JsonSubTypes.Type(value = Result.Scenarios.class, name = "scenarios"),
         @JsonSubTypes.Type(value = Result.Reset.class, name = "reset"),
         @JsonSubTypes.Type(value = Result.Actions.class, name = "actions"),
-        @JsonSubTypes.Type(value = Result.Action.class, name = "action")
+        @JsonSubTypes.Type(value = Result.Action.class, name = "action"),
+        @JsonSubTypes.Type(value = Result.Assertion.class, name = "assertion")
     })
     sealed interface Result permits Result.Sessions, Result.Capabilities, Result.Frames,
             Result.Snapshot, Result.Entity, Result.Changes, Result.Events, Result.Decisions,
             Result.CommandStatus, Result.CommandCancellation, Result.EpochFrames,
-            Result.Scenarios, Result.Reset, Result.Actions, Result.Action {
+            Result.Scenarios, Result.Reset, Result.Actions, Result.Action, Result.Assertion {
         /** Published session catalog. */
         record Sessions(List<SessionInfo> sessions) implements Result {
             /** Copies sessions. */
@@ -198,6 +200,13 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         record Action(ActionInvocation invocation) implements Result {
             public Action {
                 Objects.requireNonNull(invocation, "invocation");
+            }
+        }
+
+        /** Deterministic bounded declarative assertion outcome. */
+        record Assertion(AssertionResult result) implements Result {
+            public Assertion {
+                Objects.requireNonNull(result, "result");
             }
         }
     }

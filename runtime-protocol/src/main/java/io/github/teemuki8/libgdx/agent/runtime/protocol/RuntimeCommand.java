@@ -23,7 +23,8 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
     @JsonSubTypes.Type(value = RuntimeCommand.AttributedEvents.class, name = "attributedEvents"),
     @JsonSubTypes.Type(value = RuntimeCommand.AttributedDecisions.class, name = "attributedDecisions"),
     @JsonSubTypes.Type(value = RuntimeCommand.Actions.class, name = "actions"),
-    @JsonSubTypes.Type(value = RuntimeCommand.Action.class, name = "action")
+    @JsonSubTypes.Type(value = RuntimeCommand.Action.class, name = "action"),
+    @JsonSubTypes.Type(value = RuntimeCommand.Assert.class, name = "assert")
 })
 public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeCommand.Capabilities,
         RuntimeCommand.Frames, RuntimeCommand.Snapshot, RuntimeCommand.Entity,
@@ -31,7 +32,7 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
         RuntimeCommand.CommandStatus, RuntimeCommand.CommandCancel, RuntimeCommand.EpochFrames,
         RuntimeCommand.Scenarios, RuntimeCommand.Reset, RuntimeCommand.AttributedChanges,
         RuntimeCommand.AttributedEvents, RuntimeCommand.AttributedDecisions,
-        RuntimeCommand.Actions, RuntimeCommand.Action {
+        RuntimeCommand.Actions, RuntimeCommand.Action, RuntimeCommand.Assert {
     /** Lists published sessions. */
     record Sessions() implements RuntimeCommand {}
 
@@ -238,6 +239,24 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
             if (timeoutNanos <= 0) {
                 throw new IllegalArgumentException("timeoutNanos must be positive");
             }
+        }
+    }
+
+    /** Evaluates one closed declarative assertion over a bounded completed epoch range. */
+    record Assert(io.github.teemuki8.libgdx.agent.runtime.core.RuntimeAssertion assertion,
+            long fromFrame, long toFrame, long executionEpochId, int evidenceLimit)
+            implements RuntimeCommand {
+        public Assert {
+            java.util.Objects.requireNonNull(assertion, "assertion");
+            validateRange(fromFrame, toFrame);
+            if (executionEpochId < 0) {
+                throw new IllegalArgumentException("executionEpochId must be non-negative");
+            }
+            new io.github.teemuki8.libgdx.agent.runtime.core.AssertionScope(
+                    new io.github.teemuki8.libgdx.agent.runtime.core.ExecutionEpochId(
+                            executionEpochId),
+                    io.github.teemuki8.libgdx.agent.runtime.core.FrameRange.of(fromFrame, toFrame),
+                    evidenceLimit);
         }
     }
 

@@ -155,10 +155,12 @@ final class RuntimeMcpTest {
             assertEquals(runtime.sessionId(), publication.sessionId());
             RuntimeToolCatalog catalog = new RuntimeToolCatalog(
                     new RuntimeProtocolService(registry).toolNames());
-            assertEquals(14, catalog.tools().size());
+            assertEquals(15, catalog.tools().size());
             assertEquals(false,
                     catalog.tool("runtime_command_cancel").inputSchema()
                             .get("additionalProperties"));
+            assertEquals(false,
+                    catalog.tool("runtime_assert").inputSchema().get("additionalProperties"));
 
             McpSchema.CallToolResult status = handler.handle(call(
                     "runtime_command_status", Map.of(
@@ -310,6 +312,34 @@ final class RuntimeMcpTest {
                     .block(Duration.ofSeconds(5));
             assertTrue(unknown.isError());
             assertEquals(1, executions[0]);
+        }
+    }
+
+    @Test
+    void declarativeAssertionToolUsesClosedNaturalJsonSchema() {
+        Fixture fixture = fixture();
+        try (PublishedRuntime publication = fixture.registry.publish(fixture.runtime);
+                RuntimeToolHandler handler =
+                        new RuntimeToolHandler(new RuntimeProtocolService(fixture.registry))) {
+            assertEquals(fixture.runtime.sessionId(), publication.sessionId());
+            Map<String, Object> request = Map.of(
+                    "sessionId", "mcp-fixture", "fromFrame", 0, "toFrame", 1,
+                    "executionEpochId", 0, "evidenceLimit", 8,
+                    "assertion", Map.of(
+                            "assertionType", "propertyEquals", "entityId", "enemy-1",
+                            "property", "health", "expected", 75));
+            McpSchema.CallToolResult result = handler.handle(call("runtime_assert", request))
+                    .block(Duration.ofSeconds(5));
+
+            assertFalse(result.isError());
+            assertTrue(result.structuredContent().toString().contains("PASS"));
+            McpSchema.CallToolResult rejected = handler.handle(call("runtime_assert", Map.of(
+                    "sessionId", "mcp-fixture", "fromFrame", 0, "toFrame", 1,
+                    "executionEpochId", 0, "evidenceLimit", 8,
+                    "assertion", Map.of(
+                            "assertionType", "entityExists", "entityId", "enemy-1",
+                            "expression", "getClass()")))).block(Duration.ofSeconds(5));
+            assertTrue(rejected.isError());
         }
     }
 

@@ -101,7 +101,7 @@ final class RuntimeProtocolTest {
                 service.execute(new RuntimeRequest(
                         new ProtocolVersion(2, 0), "v", null, new RuntimeCommand.Sessions())));
         assertEquals(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED, version.error().code());
-        assertEquals("1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10,1.11,1.12",
+        assertEquals("1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10,1.11,1.12,1.13",
                 version.error().details().get("supported"));
 
         RuntimeResponse.Failure missing = assertInstanceOf(RuntimeResponse.Failure.class,
@@ -897,6 +897,70 @@ final class RuntimeProtocolTest {
                     service.execute(new RuntimeRequest(ProtocolVersion.V1_11, "old",
                             "recording-protocol",
                             new RuntimeCommand.RecordingGet("run-1", 0, 10))));
+            assertEquals(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
+                    oldVersion.error().code());
+        }
+    }
+
+    @Test
+    void determinismCapabilityAndCommandRoundTripWithBoundedEvidence() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        long[] value = {0};
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("determinism-protocol"))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .build();
+        runtime.entities().register(EntityId.of("counter"), EntityType.of("state"),
+                () -> "Counter", inspector -> inspector.property("value", () -> value[0]));
+        runtime.controls().register(
+                io.github.teemuki8.libgdx.agent.runtime.core.SimulationControllerSpec.builder()
+                        .pause(() -> {}).resume(() -> {}).tick(delta -> value[0]++).build());
+        runtime.scenarios().register("seeded",
+                context -> value[0] = context.randomSeed().orElseThrow());
+        runtime.start();
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime)) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            RuntimeProtocolService service = new RuntimeProtocolService(registry);
+            RuntimeCapability capability = capabilities(service, ProtocolVersion.V1_13,
+                    "determinism-capabilities", "determinism-protocol")
+                    .capabilityReport().orElseThrow().capabilities().stream()
+                    .filter(valueCapability ->
+                            valueCapability.id().equals("determinism-comparison"))
+                    .findFirst().orElseThrow();
+            assertEquals(RuntimeCapability.Availability.AVAILABLE, capability.availability());
+            assertTrue(capability.mcpTools().contains("runtime_determinism_check"));
+
+            RuntimeCommand.DeterminismCheck command = new RuntimeCommand.DeterminismCheck(
+                    "determinism-1", "seeded", 7, RuntimeValues.object(), 2, 2, 1,
+                    new io.github.teemuki8.libgdx.agent.runtime.core.DeterminismProfile(
+                            new io.github.teemuki8.libgdx.agent.runtime.core
+                                    .SnapshotComparisonScope(
+                                            List.of(EntityId.of("counter")), List.of("value"),
+                                            List.of(), false, false),
+                            false),
+                    1_000_000_000);
+            RuntimeCommand.DeterminismCheck decoded = assertInstanceOf(
+                    RuntimeCommand.DeterminismCheck.class,
+                    ProtocolJson.decodeRequest(ProtocolJson.encode(new RuntimeRequest(
+                            ProtocolVersion.V1_13, "determinism-json",
+                            "determinism-protocol", command))).command());
+            service.execute(new RuntimeRequest(ProtocolVersion.V1_13, "determinism-submit",
+                    "determinism-protocol", decoded));
+            queue.removeFirst().run();
+            RuntimeResponse.Result.Determinism result = assertInstanceOf(
+                    RuntimeResponse.Result.Determinism.class,
+                    assertInstanceOf(RuntimeResponse.Success.class,
+                            ProtocolJson.decodeResponse(ProtocolJson.encode(service.execute(
+                                    new RuntimeRequest(ProtocolVersion.V1_13, "determinism-poll",
+                                            "determinism-protocol", decoded))))).result());
+            assertEquals(
+                    io.github.teemuki8.libgdx.agent.runtime.core.DeterminismStatus.EQUAL,
+                    result.operation().result().orElseThrow().status());
+            RuntimeResponse.Failure oldVersion = assertInstanceOf(RuntimeResponse.Failure.class,
+                    service.execute(new RuntimeRequest(ProtocolVersion.V1_12, "old-determinism",
+                            "determinism-protocol", command)));
             assertEquals(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                     oldVersion.error().code());
         }

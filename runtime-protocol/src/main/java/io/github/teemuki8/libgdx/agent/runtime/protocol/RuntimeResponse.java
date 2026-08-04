@@ -30,6 +30,7 @@ import io.github.teemuki8.libgdx.agent.runtime.core.InputDescriptor;
 import io.github.teemuki8.libgdx.agent.runtime.core.InputInjection;
 import io.github.teemuki8.libgdx.agent.runtime.core.RecordingChunk;
 import io.github.teemuki8.libgdx.agent.runtime.core.RecordingOperation;
+import io.github.teemuki8.libgdx.agent.runtime.core.DeterminismOperation;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -97,7 +98,8 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         @JsonSubTypes.Type(value = Result.UiFrames.class, name = "uiFrames"),
         @JsonSubTypes.Type(value = Result.RecordingOperationResult.class,
                 name = "recordingOperation"),
-        @JsonSubTypes.Type(value = Result.RecordingChunkResult.class, name = "recordingChunk")
+        @JsonSubTypes.Type(value = Result.RecordingChunkResult.class, name = "recordingChunk"),
+        @JsonSubTypes.Type(value = Result.Determinism.class, name = "determinism")
     })
     sealed interface Result permits Result.Sessions, Result.Capabilities, Result.Frames,
             Result.Snapshot, Result.Entity, Result.Changes, Result.Events, Result.Decisions,
@@ -105,7 +107,7 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
             Result.Scenarios, Result.Reset, Result.Actions, Result.Action, Result.Assertion,
             Result.Control, Result.Inputs, Result.Input, Result.Checkpoints, Result.Checkpoint,
             Result.UiBindings, Result.UiFrames, Result.RecordingOperationResult,
-            Result.RecordingChunkResult {
+            Result.RecordingChunkResult, Result.Determinism {
         /** Published session catalog. */
         record Sessions(List<SessionInfo> sessions) implements Result {
             /** Copies sessions. */
@@ -301,6 +303,13 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         record RecordingChunkResult(RecordingChunk chunk) implements Result {
             public RecordingChunkResult {
                 Objects.requireNonNull(chunk, "chunk");
+            }
+        }
+
+        /** Bounded repeated-scenario determinism operation evidence. */
+        record Determinism(DeterminismOperation operation) implements Result {
+            public Determinism {
+                Objects.requireNonNull(operation, "operation");
             }
         }
     }

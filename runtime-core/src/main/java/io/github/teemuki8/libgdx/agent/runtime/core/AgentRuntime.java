@@ -40,6 +40,7 @@ public final class AgentRuntime implements AutoCloseable {
     private final CheckpointRegistry checkpoints;
     private final UiCorrelationRegistry uiCorrelations;
     private final RecordingRegistry recordings;
+    private final DeterminismRegistry determinism;
     private final EntityRegistry entities = new EntityRegistry(this);
     private final LinkedHashMap<EntityId, InspectableEntity> staticEntities = new LinkedHashMap<>();
     private final LinkedHashMap<String, Supplier<? extends Stream<InspectableEntity>>> sources =
@@ -81,6 +82,7 @@ public final class AgentRuntime implements AutoCloseable {
         checkpoints = new CheckpointRegistry(this, builder.checkpointLimits);
         uiCorrelations = new UiCorrelationRegistry(this, builder.uiCorrelationLimits);
         recordings = new RecordingRegistry(this, builder.recordingLimits);
+        determinism = new DeterminismRegistry(this, builder.determinismLimits);
     }
 
     /** Creates a runtime builder owned by the calling thread by default. */
@@ -151,6 +153,11 @@ public final class AgentRuntime implements AutoCloseable {
     /** Returns bounded versioned input and execution recording evidence. */
     public RecordingRegistry recordings() {
         return recordings;
+    }
+
+    /** Returns bounded repeated-scenario determinism comparison operations. */
+    public DeterminismRegistry determinism() {
+        return determinism;
     }
 
     /**
@@ -479,6 +486,7 @@ public final class AgentRuntime implements AutoCloseable {
             throw lifecycle("runtime cannot close while a frame is open");
         }
         recordings.close();
+        determinism.close();
         commands.ifPresent(CommandDispatch::close);
         Throwable checkpointFailure = null;
         try {
@@ -1142,6 +1150,7 @@ public final class AgentRuntime implements AutoCloseable {
         private UiCorrelationLimits uiCorrelationLimits =
                 UiCorrelationLimits.developmentDefaults();
         private RecordingLimits recordingLimits = RecordingLimits.developmentDefaults();
+        private DeterminismLimits determinismLimits = DeterminismLimits.developmentDefaults();
 
         private Builder() {}
 
@@ -1226,6 +1235,12 @@ public final class AgentRuntime implements AutoCloseable {
         /** Configures independent recording, retention, size, and chunk bounds. */
         public Builder recordingLimits(RecordingLimits value) {
             recordingLimits = Objects.requireNonNull(value, "value");
+            return this;
+        }
+
+        /** Configures repeated execution, evidence, and deadline bounds. */
+        public Builder determinismLimits(DeterminismLimits value) {
+            determinismLimits = Objects.requireNonNull(value, "value");
             return this;
         }
 

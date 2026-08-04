@@ -77,6 +77,14 @@ This document makes lifecycle and evidence edge cases explicit.
     truncation, incompleteness, and eviction evidence. Paged retrieval remains independently bounded
     by protocol and MCP response limits. Recording creates no input hooks or replay executor and never
     claims replayability unless the application explicitly does so.
+30. Determinism comparison repeats one explicitly registered scenario with the same
+    application-acknowledged random seed and closed scalar configuration in separate execution
+    epochs. The runtime pauses through the registered controller, advances exact controlled ticks,
+    and compares only configured completed-frame facts. Results are `EQUAL`, `DIVERGED`, or
+    `INCONCLUSIVE`; the first divergence carries both epochs, both frames, the epoch-relative tick,
+    and one typed difference. Repeat, tick, entity, property, value, UI-correlation, duration,
+    operation-retention, and result-retention bounds expose truncation, eviction, and incomplete
+    evidence. Equality is limited to compared observables, not proof of whole-program determinism.
 
 Closing during a frame is rejected. `frame` completes capture and rethrows callback failure.
 Disabled runtimes retain no providers or frames and perform no serialization.

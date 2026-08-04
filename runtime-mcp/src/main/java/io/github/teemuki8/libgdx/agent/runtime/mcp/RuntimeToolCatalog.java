@@ -57,7 +57,7 @@ public final class RuntimeToolCatalog {
                         object(Map.of(), List.of())),
                 tool("runtime_capabilities",
                         "Report capabilities; protocolMinor defaults to frozen V1.0",
-                        sessionInput(Map.of("protocolMinor", integer(0, 12)), List.of())),
+                        sessionInput(Map.of("protocolMinor", integer(0, 13)), List.of())),
                 tool("runtime_frames",
                         "List frame summaries; fromFrame defaults to 0, toFrame to max, limit to 100",
                         queryInput(Map.of(), List.of())),
@@ -251,6 +251,11 @@ public final class RuntimeToolCatalog {
                             "limit", integer(1, MAX_RESULTS)),
                             List.of("recordingId", "offset", "limit"))));
         }
+        if (supported.contains("runtime_determinism_check")) {
+            selected.add(tool("runtime_determinism_check",
+                    "Repeat one seeded scenario and report the first configured observable divergence",
+                    determinismInput()));
+        }
         selected.removeIf(tool -> !supported.contains(tool.name()));
         tools = List.copyOf(selected);
         LinkedHashMap<String, McpSchema.Tool> index = new LinkedHashMap<>();
@@ -432,6 +437,32 @@ public final class RuntimeToolCatalog {
         return sessionInput(properties, List.of(
                 "recordingId", "recordingRequestId", "configuration",
                 "replayGuaranteed", "timeoutNanos"));
+    }
+
+    private static Map<String, Object> determinismInput() {
+        Map<String, Object> scalar = Map.of("oneOf", List.of(
+                bool(), integer(Long.MIN_VALUE, Long.MAX_VALUE),
+                Map.of("type", "number"), string()));
+        Map<String, Object> configurationEntry = object(
+                Map.of("name", string(), "value", scalar), List.of("name", "value"));
+        Map<String, Object> profile = object(Map.of(
+                "comparisonScope", comparisonScope(),
+                "includeUiCorrelations", bool()),
+                List.of("comparisonScope", "includeUiCorrelations"));
+        LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
+        properties.put("determinismRequestId", string());
+        properties.put("scenarioId", string());
+        properties.put("randomSeed", integer(Long.MIN_VALUE, Long.MAX_VALUE));
+        properties.put("configuration", Map.of(
+                "type", "array", "items", configurationEntry, "maxItems", 100));
+        properties.put("repeatCount", integer(2, 100));
+        properties.put("ticksPerRepeat", integer(1, Integer.MAX_VALUE));
+        properties.put("deltaNanos", integer(1, Long.MAX_VALUE));
+        properties.put("profile", profile);
+        properties.put("timeoutNanos", integer(1, Long.MAX_VALUE));
+        return sessionInput(properties, List.of(
+                "determinismRequestId", "scenarioId", "randomSeed", "configuration",
+                "repeatCount", "ticksPerRepeat", "deltaNanos", "profile", "timeoutNanos"));
     }
 
     private static Map<String, Object> assertionInput() {

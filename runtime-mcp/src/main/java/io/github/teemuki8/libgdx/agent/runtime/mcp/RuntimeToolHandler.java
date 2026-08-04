@@ -11,6 +11,7 @@ import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeResponse;
 import io.github.teemuki8.libgdx.agent.runtime.core.ActionDescriptor;
 import io.github.teemuki8.libgdx.agent.runtime.core.ActionParameter;
 import io.github.teemuki8.libgdx.agent.runtime.core.DecisionType;
+import io.github.teemuki8.libgdx.agent.runtime.core.DeterminismProfile;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityType;
 import io.github.teemuki8.libgdx.agent.runtime.core.EventType;
@@ -217,6 +218,16 @@ public final class RuntimeToolHandler implements AutoCloseable {
             case "runtime_recording_get" -> new RuntimeCommand.RecordingGet(
                     string(arguments, "recordingId"),
                     Math.toIntExact(number(arguments, "offset", -1)), limit);
+            case "runtime_determinism_check" -> new RuntimeCommand.DeterminismCheck(
+                    string(arguments, "determinismRequestId"),
+                    string(arguments, "scenarioId"),
+                    number(arguments, "randomSeed", Long.MIN_VALUE),
+                    recordingConfiguration(arguments.get("configuration")),
+                    Math.toIntExact(number(arguments, "repeatCount", -1)),
+                    Math.toIntExact(number(arguments, "ticksPerRepeat", -1)),
+                    number(arguments, "deltaNanos", -1),
+                    determinismProfile(arguments.get("profile")),
+                    number(arguments, "timeoutNanos", -1));
             default -> throw new IllegalArgumentException("unknown runtime tool");
         };
         ProtocolVersion version = switch (toolName) {
@@ -236,6 +247,7 @@ public final class RuntimeToolHandler implements AutoCloseable {
             case "runtime_ui_bindings", "runtime_ui_frames" -> ProtocolVersion.V1_11;
             case "runtime_recording_start", "runtime_recording_stop",
                     "runtime_recording_get" -> ProtocolVersion.V1_12;
+            case "runtime_determinism_check" -> ProtocolVersion.V1_13;
             default -> ProtocolVersion.V1;
         };
         return new RuntimeRequest(version,
@@ -393,6 +405,13 @@ public final class RuntimeToolHandler implements AutoCloseable {
                 strings(values.get("entityIds")).stream().map(EntityId::of).toList(),
                 strings(values.get("properties")), strings(values.get("excludedProperties")),
                 bool(values, "includeEvents"), bool(values, "includeDecisions"));
+    }
+
+    private static DeterminismProfile determinismProfile(Object raw) {
+        Map<String, Object> values = stringMap(raw, "determinism profile");
+        return new DeterminismProfile(
+                comparisonScope(values.get("comparisonScope")),
+                bool(values, "includeUiCorrelations"));
     }
 
     private static List<String> strings(Object raw) {

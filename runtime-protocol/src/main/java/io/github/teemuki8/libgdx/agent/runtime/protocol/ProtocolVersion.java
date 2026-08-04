@@ -28,8 +28,10 @@ public record ProtocolVersion(int major, int minor) {
     public static final ProtocolVersion V1_11 = new ProtocolVersion(1, 11);
     /** Bounded input and execution recording protocol version. */
     public static final ProtocolVersion V1_12 = new ProtocolVersion(1, 12);
+    /** Bounded repeated-scenario determinism comparison protocol version. */
+    public static final ProtocolVersion V1_13 = new ProtocolVersion(1, 13);
     /** Latest implemented protocol version. */
-    public static final ProtocolVersion CURRENT = V1_12;
+    public static final ProtocolVersion CURRENT = V1_13;
 
     /** Validates version components. */
     public ProtocolVersion {

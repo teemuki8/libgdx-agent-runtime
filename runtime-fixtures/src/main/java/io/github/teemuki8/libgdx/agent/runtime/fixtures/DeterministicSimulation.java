@@ -67,6 +67,14 @@ public final class DeterministicSimulation {
                 .handler(parameters -> player.state = parameters.requiredString("state"))
                 .build());
         if (dispatcher != null) {
+            runtime.scenarios().register(
+                    new io.github.teemuki8.libgdx.agent.runtime.core.ScenarioDescriptor(
+                            "deterministic-fixture", Optional.of(
+                                    "Restores the seeded deterministic fixture state")),
+                    context -> {
+                        context.randomSeed().orElseThrow();
+                        reset();
+                    });
             runtime.checkpoints().register(new CheckpointProvider() {
                 @Override public CheckpointHandle create() {
                     return new FixtureCheckpoint(player.state, tower1.state);
@@ -141,6 +149,20 @@ public final class DeterministicSimulation {
                     .subject(EntityId.of("enemy-2")));
             enemies.removeIf(enemy -> enemy.id.equals("enemy-2"));
         }
+    }
+
+    private void reset() {
+        player.health = 100;
+        player.state = "READY";
+        tower1.health = 100;
+        tower1.state = "IDLE";
+        tower2.health = 100;
+        tower2.state = "IDLE";
+        enemies.clear();
+        enemies.add(new Unit("enemy-1", "enemy", 100, 20, 5, "MOVING"));
+        enemies.add(new Unit("enemy-2", "enemy", 100, 8, 1, "MOVING"));
+        paused = true;
+        nextControlledFrame = 1;
     }
 
     private void register(AgentRuntime runtime, Unit unit) {

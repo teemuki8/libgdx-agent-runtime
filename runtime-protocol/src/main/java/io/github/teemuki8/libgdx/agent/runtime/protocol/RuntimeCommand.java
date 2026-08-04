@@ -37,7 +37,8 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
     @JsonSubTypes.Type(value = RuntimeCommand.UiFrames.class, name = "uiFrames"),
     @JsonSubTypes.Type(value = RuntimeCommand.RecordingStart.class, name = "recordingStart"),
     @JsonSubTypes.Type(value = RuntimeCommand.RecordingStop.class, name = "recordingStop"),
-    @JsonSubTypes.Type(value = RuntimeCommand.RecordingGet.class, name = "recordingGet")
+    @JsonSubTypes.Type(value = RuntimeCommand.RecordingGet.class, name = "recordingGet"),
+    @JsonSubTypes.Type(value = RuntimeCommand.DeterminismCheck.class, name = "determinismCheck")
 })
 public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeCommand.Capabilities,
         RuntimeCommand.Frames, RuntimeCommand.Snapshot, RuntimeCommand.Entity,
@@ -51,7 +52,7 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
         RuntimeCommand.CheckpointCreate, RuntimeCommand.CheckpointRestore,
         RuntimeCommand.UiBindings, RuntimeCommand.UiFrames,
         RuntimeCommand.RecordingStart, RuntimeCommand.RecordingStop,
-        RuntimeCommand.RecordingGet {
+        RuntimeCommand.RecordingGet, RuntimeCommand.DeterminismCheck {
     /** Lists published sessions. */
     record Sessions() implements RuntimeCommand {}
 
@@ -460,6 +461,25 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
                 throw new IllegalArgumentException("recording offset must be non-negative");
             }
             validateLimit(limit);
+        }
+    }
+
+    /** Starts or polls one bounded repeated-scenario determinism comparison. */
+    record DeterminismCheck(String determinismRequestId, String scenarioId, long randomSeed,
+            io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue.ObjectValue configuration,
+            int repeatCount, int ticksPerRepeat, long deltaNanos,
+            io.github.teemuki8.libgdx.agent.runtime.core.DeterminismProfile profile,
+            long timeoutNanos) implements RuntimeCommand {
+        public DeterminismCheck {
+            ProtocolJson.requireIdentifier(determinismRequestId, "determinismRequestId");
+            ProtocolJson.requireIdentifier(scenarioId, "scenarioId");
+            java.util.Objects.requireNonNull(configuration, "configuration");
+            java.util.Objects.requireNonNull(profile, "profile");
+            if (repeatCount < 2 || ticksPerRepeat <= 0) {
+                throw new IllegalArgumentException("invalid determinism execution dimensions");
+            }
+            requirePositive(deltaNanos, "deltaNanos");
+            requirePositive(timeoutNanos, "timeoutNanos");
         }
     }
 

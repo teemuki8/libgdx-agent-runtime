@@ -23,6 +23,10 @@ All notable changes follow Keep a Changelog structure.
   semantic-action parameters, optional scenario/checkpoint/seed/configuration metadata,
   deterministic chunk retrieval, exact canonical encoded-byte accounting, and explicit
   item/tick/duration/size/retention loss evidence across Java, protocol, MCP, and fixture.
+- Protocol 1.13 bounded repeated-scenario determinism comparison with application-acknowledged
+  seed/configuration reset, exact controlled ticks in separate execution epochs, configurable
+  observables, stable first-divergence evidence, and explicit inconclusive/truncation/eviction
+  evidence across Java, protocol, MCP, and the deterministic fixture.
 
 ## [0.1.0] - Unreleased
 

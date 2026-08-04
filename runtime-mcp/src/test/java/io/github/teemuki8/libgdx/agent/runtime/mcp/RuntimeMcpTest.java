@@ -659,6 +659,69 @@ final class RuntimeMcpTest {
     }
 
     @Test
+    void determinismToolUsesClosedProfileAndReturnsFirstClassEvidence() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        long[] value = {0};
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("mcp-determinism"))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .build();
+        runtime.entities().register(
+                io.github.teemuki8.libgdx.agent.runtime.core.EntityId.of("counter"),
+                io.github.teemuki8.libgdx.agent.runtime.core.EntityType.of("state"),
+                () -> "Counter", inspector -> inspector.property("value", () -> value[0]));
+        runtime.controls().register(
+                io.github.teemuki8.libgdx.agent.runtime.core.SimulationControllerSpec.builder()
+                        .pause(() -> {}).resume(() -> {}).tick(delta -> value[0]++).build());
+        runtime.scenarios().register("seeded",
+                context -> value[0] = context.randomSeed().orElseThrow());
+        runtime.start();
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime);
+                RuntimeToolHandler handler =
+                        new RuntimeToolHandler(new RuntimeProtocolService(registry))) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            Map<String, Object> comparisonScope = Map.of(
+                    "entityIds", List.of("counter"),
+                    "properties", List.of("value"),
+                    "excludedProperties", List.of(),
+                    "includeEvents", false,
+                    "includeDecisions", false);
+            Map<String, Object> request = Map.of(
+                    "sessionId", "mcp-determinism",
+                    "determinismRequestId", "determinism-1",
+                    "scenarioId", "seeded",
+                    "randomSeed", 7,
+                    "configuration", List.of(),
+                    "repeatCount", 2,
+                    "ticksPerRepeat", 2,
+                    "deltaNanos", 1,
+                    "profile", Map.of(
+                            "comparisonScope", comparisonScope,
+                            "includeUiCorrelations", false),
+                    "timeoutNanos", 1_000_000_000);
+            assertFalse(handler.handle(call("runtime_determinism_check", request))
+                    .block(Duration.ofSeconds(5)).isError());
+            queue.removeFirst().run();
+            McpSchema.CallToolResult completed =
+                    handler.handle(call("runtime_determinism_check", request))
+                            .block(Duration.ofSeconds(5));
+            assertFalse(completed.isError());
+            Map<?, ?> operation = (Map<?, ?>) structured(completed).get("operation");
+            Map<?, ?> result = (Map<?, ?>) operation.get("result");
+            assertEquals("EQUAL", result.get("status"));
+            assertTrue(((String) result.get("message")).contains("configured observable state"));
+
+            java.util.LinkedHashMap<String, Object> unknown =
+                    new java.util.LinkedHashMap<>(request);
+            unknown.put("script", "run()");
+            assertTrue(handler.handle(call("runtime_determinism_check", unknown))
+                    .block(Duration.ofSeconds(5)).isError());
+        }
+    }
+
+    @Test
     @Timeout(10)
     void stdioServerStartsAndShutsDownCleanlyAtEof() {
         RuntimeMcpServer server = RuntimeMcpServer.open(

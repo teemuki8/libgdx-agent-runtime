@@ -9,7 +9,7 @@ strict closed input schemas (`additionalProperties: false`), and a maximum reque
 | Tool | Required fields | Optional fields |
 | --- | --- | --- |
 | `runtime_sessions` | none | none |
-| `runtime_capabilities` | `sessionId` | `protocolMinor` (`0` through `8`; default `0`) |
+| `runtime_capabilities` | `sessionId` | `protocolMinor` (`0` through `9`; default `0`) |
 | `runtime_frames` | `sessionId` | `fromFrame`, `toFrame`, `limit` |
 | `runtime_snapshot` | `sessionId` | `frameId`, `entityId`, `entityIdPrefix`, `entityType`, `entityTypePrefix`, `limit` |
 | `runtime_entity` | `sessionId`, `entityId` | `fromFrame`, `toFrame`, `limit` |
@@ -30,6 +30,8 @@ strict closed input schemas (`additionalProperties: false`), and a maximum reque
 | `runtime_control`**** | `sessionId`, `action` | `controlRequestId`, `timeoutNanos` for `PAUSE`/`RESUME` |
 | `runtime_advance`**** | `sessionId`, `controlRequestId`, `ticks`, `deltaNanos`, `timeoutNanos` | none |
 | `runtime_wait`**** | `sessionId`, `controlRequestId`, `maximumTicks`, `deltaNanos`, `evidenceLimit`, `timeoutNanos`, exactly one of `conditionId` or `assertion` | assertion-specific closed fields |
+| `runtime_inputs`***** | `sessionId` | none |
+| `runtime_input`***** | `sessionId`, `input`, `inputRequestId`, `parameters`, `timeoutNanos` | `targetTick` |
 
 \* Command tools are included in the server-start catalog only when at least one published runtime
 has explicitly registered application command dispatch. They use protocol 1.2.
@@ -44,13 +46,17 @@ action. Invocation additionally requires application command dispatch. They use 
 simulation controller. Mutations additionally require application command dispatch. They use
 protocol 1.8.
 
+\*\*\*\*\* Input tools are included only when at least one published runtime explicitly registers an
+input type. Injection additionally requires application command dispatch and a paused registered
+simulation controller. They use protocol 1.9.
+
 Every identifier is a nonblank string of at most 256 UTF-16 code units. Frame fields are
 non-negative integers. Prefix matching is available only where the schema has an explicit prefix
 boolean; there are no regular expressions or generic expressions.
 
 ## Protocol and capabilities
 
-Protocol 1.0 retains the exact original capabilities result. Set `protocolMinor` from `1` to `8`
+Protocol 1.0 retains the exact original capabilities result. Set `protocolMinor` from `1` to `9`
 on `runtime_capabilities` to request extension metadata. The read-only MCP tools continue to use
 1.0. Command status and cancellation use protocol 1.2; epoch queries use protocol 1.3; scenario
 catalog and reset use protocol 1.4.
@@ -69,6 +75,15 @@ Results are `PASS`, `FAIL`, or `INCONCLUSIVE`; missing frames, diagnostics, abor
 truncation produce `INCONCLUSIVE` whenever they could change the answer. Negative, exact-count,
 range-remains, and equivalence assertions require complete evidence. The evaluator never advances
 simulation, sleeps, interprets expressions, or executes code.
+
+List `runtime_inputs` before injecting an input. Applications register stable input IDs, closed
+scalar parameter schemas, handlers, and an include/omit recording policy before runtime start.
+`runtime_input` schedules the next controlled tick by default or a bounded explicit future tick.
+Targets must be future ticks while simulation is paused. Requests execute in acceptance order on
+the application-owned command/capture thread, remain at-most-once while evidence is retained, and
+report requested/actual tick, epoch, submitted/resulting frame, state, and bounded diagnostics.
+Only registered input facts are recorded; this API does not install global hooks or inject
+operating-system input.
 
 `runtime_control` reports availability, current pause state, registered condition IDs/descriptions,
 and effective limits. `PAUSE` and `RESUME` use an idempotent `controlRequestId`.

@@ -15,6 +15,7 @@ public final class SimulationControlRegistry {
     private LinkedHashMap<String, SimulationControllerSpec.Condition> conditions =
             new LinkedHashMap<>();
     private boolean paused;
+    private long currentTick;
 
     SimulationControlRegistry(AgentRuntime runtime, ControlLimits limits) {
         this.runtime = Objects.requireNonNull(runtime, "runtime");
@@ -61,6 +62,11 @@ public final class SimulationControlRegistry {
     /** Returns configured hard control bounds. */
     public ControlLimits limits() {
         return limits;
+    }
+
+    /** Returns the number of successfully completed application-defined controlled ticks. */
+    public synchronized long currentTick() {
+        return currentTick;
     }
 
     /** Returns immutable discoverable control state and condition metadata. */
@@ -157,16 +163,25 @@ public final class SimulationControlRegistry {
                 }
                 FrameId expected = runtime.latestFrame().map(frame ->
                         new FrameId(Math.addExact(frame.frameId().value(), 1))).orElse(new FrameId(0));
+                long tick;
+                synchronized (this) {
+                    tick = Math.addExact(currentTick, 1);
+                }
                 try {
-                    runtime.frame(signature.deltaNanos, () ->
-                            spec.tick().accept(signature.deltaNanos));
+                    runtime.frame(signature.deltaNanos, () -> {
+                        runtime.inputs().executeTick(tick, runtime.currentEpoch());
+                        spec.tick().accept(signature.deltaNanos);
+                    });
+                    runtime.inputs().completeTick(tick, expected);
                 } catch (RuntimeException | Error failure) {
+                    runtime.inputs().failTick(tick);
                     synchronized (this) {
                         evidence.stopReason = ControlStopReason.CALLBACK_FAILED;
                     }
                     throw failure;
                 }
                 synchronized (this) {
+                    currentTick = tick;
                     evidence.completedTicks++;
                     if (evidence.firstFrameId.isEmpty()) {
                         evidence.firstFrameId = Optional.of(expected);

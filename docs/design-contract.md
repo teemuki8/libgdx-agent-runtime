@@ -55,6 +55,10 @@ This document makes lifecycle and evidence edge cases explicit.
     run through application command dispatch on the capture thread, capture one completed frame per
     tick, and retain requested/completed counts, first/final frame IDs, and explicit stop reasons.
     The runtime owns no loop, scheduler, sleep, or inferred condition.
+26. Input injection is limited to explicitly registered stable IDs and closed scalar schemas.
+    Requests target the next or a bounded future controlled tick while paused, execute in acceptance
+    order on the application-owned command/capture thread, and retain at-most-once tick, epoch, frame,
+    redaction, and diagnostic evidence. The runtime installs no global or operating-system input hook.
 
 Closing during a frame is rejected. `frame` completes capture and rethrows callback failure.
 Disabled runtimes retain no providers or frames and perform no serialization.

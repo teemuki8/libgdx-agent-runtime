@@ -10,6 +10,7 @@ import io.github.teemuki8.libgdx.agent.runtime.core.ActionDescriptor;
 import io.github.teemuki8.libgdx.agent.runtime.core.ActionParameter;
 import io.github.teemuki8.libgdx.agent.runtime.core.ActionParameterType;
 import io.github.teemuki8.libgdx.agent.runtime.core.AssertionScope;
+import io.github.teemuki8.libgdx.agent.runtime.core.InputDescriptor;
 
 /** Immutable catalog of the closed base tools and registered optional tools. */
 public final class RuntimeToolCatalog {
@@ -18,33 +19,45 @@ public final class RuntimeToolCatalog {
     private final List<McpSchema.Tool> tools;
     private final Map<String, McpSchema.Tool> byName;
     private final Map<String, ActionDescriptor> actions;
+    private final Map<String, InputDescriptor> inputs;
 
     /** Builds the fixed catalog. */
     public RuntimeToolCatalog() {
         this(Set.copyOf(io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeProtocolService
-                .BASE_TOOLS), List.of());
+                .BASE_TOOLS), List.of(), List.of());
     }
 
     /** Builds a server-start catalog from the protocol's deterministic supported-tool union. */
     public RuntimeToolCatalog(java.util.Collection<String> supportedTools) {
-        this(supportedTools, List.of());
+        this(supportedTools, List.of(), List.of());
     }
 
     /** Builds a server-start catalog including explicit closed action schemas. */
     public RuntimeToolCatalog(java.util.Collection<String> supportedTools,
             java.util.Collection<ActionDescriptor> actionDescriptors) {
+        this(supportedTools, actionDescriptors, List.of());
+    }
+
+    /** Builds a server-start catalog including explicit closed action and input schemas. */
+    public RuntimeToolCatalog(java.util.Collection<String> supportedTools,
+            java.util.Collection<ActionDescriptor> actionDescriptors,
+            java.util.Collection<InputDescriptor> inputDescriptors) {
         Set<String> supported = Set.copyOf(supportedTools);
         LinkedHashMap<String, ActionDescriptor> actionIndex = new LinkedHashMap<>();
         actionDescriptors.forEach(descriptor -> actionIndex.merge(descriptor.id(), descriptor,
                 (first, second) -> first.equals(second) ? first : first));
         actions = Map.copyOf(actionIndex);
+        LinkedHashMap<String, InputDescriptor> inputIndex = new LinkedHashMap<>();
+        inputDescriptors.forEach(descriptor -> inputIndex.merge(descriptor.id(), descriptor,
+                (first, second) -> first.equals(second) ? first : first));
+        inputs = Map.copyOf(inputIndex);
         ArrayList<McpSchema.Tool> selected = new ArrayList<>(List.of(
                 tool("runtime_sessions",
                         "List published runtime sessions; no arguments",
                         object(Map.of(), List.of())),
                 tool("runtime_capabilities",
                         "Report capabilities; protocolMinor defaults to frozen V1.0",
-                        sessionInput(Map.of("protocolMinor", integer(0, 8)), List.of())),
+                        sessionInput(Map.of("protocolMinor", integer(0, 9)), List.of())),
                 tool("runtime_frames",
                         "List frame summaries; fromFrame defaults to 0, toFrame to max, limit to 100",
                         queryInput(Map.of(), List.of())),
@@ -171,6 +184,16 @@ public final class RuntimeToolCatalog {
                     "Advance while paused until a named condition or closed assertion holds",
                     waitInput()));
         }
+        if (supported.contains("runtime_inputs")) {
+            selected.add(tool("runtime_inputs",
+                    "List explicitly registered closed input types",
+                    sessionInput(Map.of(), List.of())));
+        }
+        if (supported.contains("runtime_input")) {
+            selected.add(tool("runtime_input",
+                    "Schedule or poll one registered input for a controlled tick",
+                    inputInput(inputIndex.values())));
+        }
         selected.removeIf(tool -> !supported.contains(tool.name()));
         tools = List.copyOf(selected);
         LinkedHashMap<String, McpSchema.Tool> index = new LinkedHashMap<>();
@@ -202,6 +225,15 @@ public final class RuntimeToolCatalog {
         ActionDescriptor descriptor = actions.get(id);
         if (descriptor == null) {
             throw new IllegalArgumentException("unknown semantic action");
+        }
+        return descriptor;
+    }
+
+    /** Resolves one input schema captured when the server started. */
+    public InputDescriptor input(String id) {
+        InputDescriptor descriptor = inputs.get(id);
+        if (descriptor == null) {
+            throw new IllegalArgumentException("unknown registered input");
         }
         return descriptor;
     }
@@ -273,6 +305,23 @@ public final class RuntimeToolCatalog {
                 : Map.of("anyOf", schemas));
         return object(properties,
                 List.of("sessionId", "action", "actionRequestId", "parameters", "timeoutNanos"));
+    }
+
+    private static Map<String, Object> inputInput(
+            java.util.Collection<InputDescriptor> descriptors) {
+        LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
+        properties.put("sessionId", string());
+        properties.put("input", Map.of("type", "string", "enum",
+                descriptors.stream().map(InputDescriptor::id).sorted().toList()));
+        properties.put("inputRequestId", string());
+        properties.put("targetTick", integer(1, Long.MAX_VALUE));
+        properties.put("timeoutNanos", integer(1, Long.MAX_VALUE));
+        List<Map<String, Object>> schemas = descriptors.stream()
+                .map(RuntimeToolCatalog::inputParameterObject).distinct().toList();
+        properties.put("parameters", schemas.size() == 1 ? schemas.getFirst()
+                : Map.of("anyOf", schemas));
+        return object(properties,
+                List.of("sessionId", "input", "inputRequestId", "parameters", "timeoutNanos"));
     }
 
     private static Map<String, Object> assertionInput() {
@@ -383,6 +432,19 @@ public final class RuntimeToolCatalog {
         }
         return object(properties, required);
     }
+
+    private static Map<String, Object> inputParameterObject(InputDescriptor descriptor) {
+        LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
+        ArrayList<String> required = new ArrayList<>();
+        for (ActionParameter parameter : descriptor.parameters()) {
+            properties.put(parameter.name(), parameterSchema(parameter.type()));
+            if (parameter.required()) {
+                required.add(parameter.name());
+            }
+        }
+        return object(properties, required);
+    }
+
 
     private static Map<String, Object> parameterSchema(ActionParameterType type) {
         return switch (type) {

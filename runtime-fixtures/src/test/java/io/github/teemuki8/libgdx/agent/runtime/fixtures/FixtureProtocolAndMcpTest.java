@@ -9,7 +9,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
 import io.github.teemuki8.libgdx.agent.runtime.core.CommandState;
 import io.github.teemuki8.libgdx.agent.runtime.core.BaselineKind;
+import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeAssertion;
+import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import io.github.teemuki8.libgdx.agent.runtime.mcp.RuntimeToolHandler;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.ProtocolJson;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.ProtocolVersion;
@@ -157,6 +159,14 @@ final class FixtureProtocolAndMcpTest {
             simulation.advance(runtime, 1);
             assertEquals(0, runtime.latestFrame().orElseThrow().frameId().value());
 
+
+            Map<String, Object> input = Map.of(
+                    "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                    "input", "set-player-state", "inputRequestId", "input-fixture",
+                    "parameters", Map.of("state", "BOOSTED"),
+                    "timeoutNanos", 1_000_000_000);
+            handler.handle(call("runtime_input", input)).block(Duration.ofSeconds(5));
+            applicationQueue.removeFirst().run();
             Map<String, Object> advance = Map.of(
                     "sessionId", DeterministicSimulation.SESSION_ID.value(),
                     "controlRequestId", "advance-fixture", "ticks", 2,
@@ -177,6 +187,14 @@ final class FixtureProtocolAndMcpTest {
                                             1_000_000_000)))).result());
             assertEquals(2, advancedProtocol.operation().orElseThrow().completedTicks());
             assertEquals(2, runtime.latestFrame().orElseThrow().frameId().value());
+            McpSchema.CallToolResult injected =
+                    handler.handle(call("runtime_input", input)).block(Duration.ofSeconds(5));
+            assertFalse(injected.isError());
+            assertTrue(injected.structuredContent().toString().contains("EXECUTED"));
+            assertEquals(RuntimeValues.enumValue("BOOSTED"),
+                    runtime.frame(new io.github.teemuki8.libgdx.agent.runtime.core.FrameId(1))
+                            .orElseThrow().entity(EntityId.of("player-1")).orElseThrow()
+                            .property("state").orElseThrow());
 
             Map<String, Object> wait = Map.of(
                     "sessionId", DeterministicSimulation.SESSION_ID.value(),

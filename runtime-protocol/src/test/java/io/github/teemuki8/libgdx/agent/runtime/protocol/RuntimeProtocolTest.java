@@ -16,6 +16,9 @@ import io.github.teemuki8.libgdx.agent.runtime.core.ControlStopReason;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityType;
 import io.github.teemuki8.libgdx.agent.runtime.core.EventSpec;
+import io.github.teemuki8.libgdx.agent.runtime.core.FrameId;
+import io.github.teemuki8.libgdx.agent.runtime.core.InputInjectionState;
+import io.github.teemuki8.libgdx.agent.runtime.core.InputSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeAssertion;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import io.github.teemuki8.libgdx.agent.runtime.core.SessionId;
@@ -95,7 +98,7 @@ final class RuntimeProtocolTest {
                 service.execute(new RuntimeRequest(
                         new ProtocolVersion(2, 0), "v", null, new RuntimeCommand.Sessions())));
         assertEquals(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED, version.error().code());
-        assertEquals("1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8",
+        assertEquals("1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9",
                 version.error().details().get("supported"));
 
         RuntimeResponse.Failure missing = assertInstanceOf(RuntimeResponse.Failure.class,
@@ -597,6 +600,66 @@ final class RuntimeProtocolTest {
             assertEquals(ControlStopReason.CONDITION_SATISFIED,
                     waited.operation().orElseThrow().stopReason());
             assertEquals(3, ticks[0]);
+        }
+    }
+
+    @Test
+    void registeredInputCatalogAndTargetedInjectionRoundTripWithFrameEvidence() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        String[] key = {""};
+        AgentRuntime runtime = AgentRuntime.builder().sessionId(SessionId.of("input-protocol"))
+                .clock(() -> 1).commandDispatcher(queue::addLast).build();
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {})
+                .resume(() -> {})
+                .tick(deltaNanos -> {})
+                .build());
+        runtime.inputs().register(InputSpec.builder("key-down")
+                .description("Registered key input")
+                .requiredString("key")
+                .handler(parameters -> key[0] = parameters.requiredString("key"))
+                .build());
+        runtime.start();
+        runtime.controls().control(true, "pause-input", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime)) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            RuntimeProtocolService service = new RuntimeProtocolService(registry);
+            RuntimeResponse.Result.Inputs catalog = assertInstanceOf(
+                    RuntimeResponse.Result.Inputs.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V1_9, "inputs", "input-protocol",
+                                    new RuntimeCommand.Inputs()))).result());
+            assertEquals("key-down", catalog.inputs().getFirst().id());
+
+            RuntimeCommand.Input input = new RuntimeCommand.Input(
+                    "key-down", "key-1",
+                    RuntimeValues.object(RuntimeValues.field(
+                            "key", RuntimeValues.string("SPACE"))),
+                    null, 1_000);
+            RuntimeCommand.Input decoded = assertInstanceOf(RuntimeCommand.Input.class,
+                    ProtocolJson.decodeRequest(ProtocolJson.encode(new RuntimeRequest(
+                            ProtocolVersion.V1_9, "input-json", "input-protocol", input)))
+                            .command());
+            service.execute(new RuntimeRequest(
+                    ProtocolVersion.V1_9, "input", "input-protocol", decoded));
+            queue.removeFirst().run();
+            RuntimeCommand.Advance tick =
+                    new RuntimeCommand.Advance("input-tick", 1, 16_666_667, 1_000);
+            service.execute(new RuntimeRequest(
+                    ProtocolVersion.V1_8, "tick", "input-protocol", tick));
+            queue.removeFirst().run();
+            RuntimeResponse.Result.Input completed = assertInstanceOf(
+                    RuntimeResponse.Result.Input.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V1_9, "input-poll",
+                                    "input-protocol", decoded))).result());
+            assertEquals(InputInjectionState.EXECUTED, completed.injection().state());
+            assertEquals(1, completed.injection().actualTick().orElseThrow());
+            assertEquals(new FrameId(1),
+                    completed.injection().resultingFrameId().orElseThrow());
+            assertEquals("SPACE", key[0]);
         }
     }
 

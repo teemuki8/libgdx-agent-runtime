@@ -16,6 +16,7 @@ import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityType;
 import io.github.teemuki8.libgdx.agent.runtime.core.EventSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.FactMetadata;
+import io.github.teemuki8.libgdx.agent.runtime.core.InputSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.ChangeCause;
 import io.github.teemuki8.libgdx.agent.runtime.core.Reason;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
@@ -418,6 +419,64 @@ final class RuntimeMcpTest {
                     "deltaNanos", 1, "evidenceLimit", 8, "timeoutNanos", 1_000,
                     "script", "run()"))).block(Duration.ofSeconds(5));
             assertTrue(rejected.isError());
+        }
+    }
+
+    @Test
+    void registeredInputToolsUseClosedSchemaAndReturnTickFrameEvidence() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        String[] key = {""};
+        AgentRuntime runtime = AgentRuntime.builder().sessionId(SessionId.of("mcp-input"))
+                .clock(() -> 1).commandDispatcher(queue::addLast).build();
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {}).resume(() -> {}).tick(deltaNanos -> {}).build());
+        runtime.inputs().register(InputSpec.builder("key-down")
+                .requiredString("key")
+                .handler(parameters -> key[0] = parameters.requiredString("key"))
+                .build());
+        runtime.start();
+        runtime.controls().control(true, "pause-input", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime);
+                RuntimeToolHandler handler =
+                        new RuntimeToolHandler(new RuntimeProtocolService(registry))) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            RuntimeProtocolService protocol = new RuntimeProtocolService(registry);
+            RuntimeToolCatalog catalog = new RuntimeToolCatalog(
+                    protocol.toolNames(), protocol.actionCatalog(), protocol.inputCatalog());
+            Map<?, ?> inputSchema = catalog.tool("runtime_input").inputSchema();
+            assertFalse((Boolean) inputSchema.get("additionalProperties"));
+            Map<?, ?> properties = (Map<?, ?>) inputSchema.get("properties");
+            assertEquals(List.of("key-down"),
+                    ((Map<?, ?>) properties.get("input")).get("enum"));
+            assertFalse((Boolean) ((Map<?, ?>) properties.get("parameters"))
+                    .get("additionalProperties"));
+
+            Map<String, Object> input = Map.of(
+                    "sessionId", "mcp-input", "input", "key-down",
+                    "inputRequestId", "key-1", "parameters", Map.of("key", "SPACE"),
+                    "timeoutNanos", 1_000);
+            handler.handle(call("runtime_input", input)).block(Duration.ofSeconds(5));
+            queue.removeFirst().run();
+            Map<String, Object> advance = Map.of(
+                    "sessionId", "mcp-input", "controlRequestId", "input-tick",
+                    "ticks", 1, "deltaNanos", 16_666_667, "timeoutNanos", 1_000);
+            handler.handle(call("runtime_advance", advance)).block(Duration.ofSeconds(5));
+            queue.removeFirst().run();
+            McpSchema.CallToolResult completed =
+                    handler.handle(call("runtime_input", input)).block(Duration.ofSeconds(5));
+            assertFalse(completed.isError());
+            Map<?, ?> injection = (Map<?, ?>) structured(completed).get("injection");
+            assertEquals("EXECUTED", injection.get("state"));
+            assertEquals(1L, injection.get("actualTick"));
+            assertEquals("SPACE", key[0]);
+
+            assertTrue(handler.handle(call("runtime_input", Map.of(
+                    "sessionId", "mcp-input", "input", "key-down",
+                    "inputRequestId", "key-2",
+                    "parameters", Map.of("key", "A", "script", "run()"),
+                    "timeoutNanos", 1_000))).block(Duration.ofSeconds(5)).isError());
         }
     }
 

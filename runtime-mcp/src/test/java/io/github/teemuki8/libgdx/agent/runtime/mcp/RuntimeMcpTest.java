@@ -322,6 +322,19 @@ final class RuntimeMcpTest {
                 RuntimeToolHandler handler =
                         new RuntimeToolHandler(new RuntimeProtocolService(fixture.registry))) {
             assertEquals(fixture.runtime.sessionId(), publication.sessionId());
+            McpSchema.Tool tool = new RuntimeToolCatalog(
+                    new RuntimeProtocolService(fixture.registry).toolNames())
+                    .tool("runtime_assert");
+            Map<?, ?> toolProperties = (Map<?, ?>) tool.inputSchema().get("properties");
+            List<?> assertionSchemas = (List<?>) ((Map<?, ?>) toolProperties.get("assertion"))
+                    .get("oneOf");
+            Map<?, ?> snapshotProperties = (Map<?, ?>) assertionSchemas.getLast();
+            Map<?, ?> snapshotFields = (Map<?, ?>) snapshotProperties.get("properties");
+            Map<?, ?> comparisonScope =
+                    (Map<?, ?>) snapshotFields.get("comparisonScope");
+            Map<?, ?> comparisonFields = (Map<?, ?>) comparisonScope.get("properties");
+            assertEquals(100,
+                    ((Map<?, ?>) comparisonFields.get("entityIds")).get("maxItems"));
             Map<String, Object> request = Map.of(
                     "sessionId", "mcp-fixture", "fromFrame", 0, "toFrame", 1,
                     "executionEpochId", 0, "evidenceLimit", 8,

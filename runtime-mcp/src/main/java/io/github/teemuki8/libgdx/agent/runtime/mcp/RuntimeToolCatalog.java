@@ -9,6 +9,7 @@ import java.util.Set;
 import io.github.teemuki8.libgdx.agent.runtime.core.ActionDescriptor;
 import io.github.teemuki8.libgdx.agent.runtime.core.ActionParameter;
 import io.github.teemuki8.libgdx.agent.runtime.core.ActionParameterType;
+import io.github.teemuki8.libgdx.agent.runtime.core.AssertionScope;
 
 /** Immutable catalog of the closed base tools and registered optional tools. */
 public final class RuntimeToolCatalog {
@@ -301,7 +302,8 @@ public final class RuntimeToolCatalog {
 
     private static Map<String, Object> comparisonScope() {
         Map<String, Object> stringArray = Map.of(
-                "type", "array", "items", string(), "maxItems", 1_000);
+                "type", "array", "items", string(),
+                "maxItems", AssertionScope.MAX_EVIDENCE);
         return object(Map.of(
                 "entityIds", stringArray,
                 "properties", stringArray,

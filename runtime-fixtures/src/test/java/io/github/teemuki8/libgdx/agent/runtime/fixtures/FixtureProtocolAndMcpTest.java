@@ -383,6 +383,49 @@ final class FixtureProtocolAndMcpTest {
         return McpSchema.CallToolRequest.builder(name).arguments(arguments).build();
     }
 
+    @Test
+    void fixtureRecordingCapturesDeterministicFrameAndManifestThroughMcp() {
+        ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
+        DeterministicSimulation simulation = new DeterministicSimulation();
+        AgentRuntime runtime = simulation.startRuntime(applicationQueue::addLast);
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime);
+                RuntimeToolHandler handler =
+                        new RuntimeToolHandler(new RuntimeProtocolService(registry))) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            Map<String, Object> start = Map.of(
+                    "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                    "recordingId", "fixture-run",
+                    "recordingRequestId", "fixture-record-start",
+                    "randomSeed", 99,
+                    "configuration", List.of(
+                            Map.of("name", "profile", "value", "deterministic")),
+                    "replayGuaranteed", false,
+                    "timeoutNanos", 1_000_000_000);
+            assertFalse(handler.handle(call("runtime_recording_start", start))
+                    .block(Duration.ofSeconds(5)).isError());
+            applicationQueue.removeFirst().run();
+            simulation.advance(runtime, 20);
+
+            Map<String, Object> stop = Map.of(
+                    "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                    "recordingId", "fixture-run",
+                    "recordingRequestId", "fixture-record-stop",
+                    "timeoutNanos", 1_000_000_000);
+            handler.handle(call("runtime_recording_stop", stop)).block(Duration.ofSeconds(5));
+            applicationQueue.removeFirst().run();
+            McpSchema.CallToolResult result = handler.handle(call("runtime_recording_get", Map.of(
+                    "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                    "recordingId", "fixture-run", "offset", 0, "limit", 16)))
+                    .block(Duration.ofSeconds(5));
+            assertFalse(result.isError());
+            assertTrue(result.structuredContent().toString().contains("fixture-run"));
+            assertTrue(result.structuredContent().toString().contains("deterministic"));
+            assertTrue(result.structuredContent().toString().contains("frameId"));
+        }
+        runtime.close();
+    }
+
     private static Fixture fixture() {
         DeterministicSimulation simulation = new DeterministicSimulation();
         AgentRuntime runtime = simulation.startRuntime();

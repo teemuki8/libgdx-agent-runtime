@@ -26,8 +26,10 @@ public record ProtocolVersion(int major, int minor) {
     public static final ProtocolVersion V1_10 = new ProtocolVersion(1, 10);
     /** Explicit runtime-to-UI binding and frame-correlation protocol version. */
     public static final ProtocolVersion V1_11 = new ProtocolVersion(1, 11);
+    /** Bounded input and execution recording protocol version. */
+    public static final ProtocolVersion V1_12 = new ProtocolVersion(1, 12);
     /** Latest implemented protocol version. */
-    public static final ProtocolVersion CURRENT = V1_11;
+    public static final ProtocolVersion CURRENT = V1_12;
 
     /** Validates version components. */
     public ProtocolVersion {

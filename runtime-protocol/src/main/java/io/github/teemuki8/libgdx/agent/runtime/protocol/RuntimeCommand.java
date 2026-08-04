@@ -34,7 +34,10 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
     @JsonSubTypes.Type(value = RuntimeCommand.CheckpointCreate.class, name = "checkpointCreate"),
     @JsonSubTypes.Type(value = RuntimeCommand.CheckpointRestore.class, name = "checkpointRestore"),
     @JsonSubTypes.Type(value = RuntimeCommand.UiBindings.class, name = "uiBindings"),
-    @JsonSubTypes.Type(value = RuntimeCommand.UiFrames.class, name = "uiFrames")
+    @JsonSubTypes.Type(value = RuntimeCommand.UiFrames.class, name = "uiFrames"),
+    @JsonSubTypes.Type(value = RuntimeCommand.RecordingStart.class, name = "recordingStart"),
+    @JsonSubTypes.Type(value = RuntimeCommand.RecordingStop.class, name = "recordingStop"),
+    @JsonSubTypes.Type(value = RuntimeCommand.RecordingGet.class, name = "recordingGet")
 })
 public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeCommand.Capabilities,
         RuntimeCommand.Frames, RuntimeCommand.Snapshot, RuntimeCommand.Entity,
@@ -46,7 +49,9 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
         RuntimeCommand.Control, RuntimeCommand.Advance, RuntimeCommand.Wait,
         RuntimeCommand.Inputs, RuntimeCommand.Input, RuntimeCommand.Checkpoints,
         RuntimeCommand.CheckpointCreate, RuntimeCommand.CheckpointRestore,
-        RuntimeCommand.UiBindings, RuntimeCommand.UiFrames {
+        RuntimeCommand.UiBindings, RuntimeCommand.UiFrames,
+        RuntimeCommand.RecordingStart, RuntimeCommand.RecordingStop,
+        RuntimeCommand.RecordingGet {
     /** Lists published sessions. */
     record Sessions() implements RuntimeCommand {}
 
@@ -417,6 +422,42 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
             if ((uiSessionId == null) == (correlationToken == null)) {
                 throw new IllegalArgumentException(
                         "UI frame query requires exactly one UI session or correlation token");
+            }
+            validateLimit(limit);
+        }
+    }
+
+    /** Starts or polls one application-dispatched bounded recording. */
+    record RecordingStart(String recordingId, String recordingRequestId,
+            String scenarioId, String checkpointId, Long randomSeed,
+            io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue.ObjectValue configuration,
+            boolean replayGuaranteed, long timeoutNanos) implements RuntimeCommand {
+        public RecordingStart {
+            ProtocolJson.requireIdentifier(recordingId, "recordingId");
+            ProtocolJson.requireIdentifier(recordingRequestId, "recordingRequestId");
+            requireOptionalIdentifier(scenarioId, "scenarioId");
+            requireOptionalIdentifier(checkpointId, "checkpointId");
+            java.util.Objects.requireNonNull(configuration, "configuration");
+            requirePositive(timeoutNanos, "timeoutNanos");
+        }
+    }
+
+    /** Stops or polls one application-dispatched recording. */
+    record RecordingStop(String recordingId, String recordingRequestId, long timeoutNanos)
+            implements RuntimeCommand {
+        public RecordingStop {
+            ProtocolJson.requireIdentifier(recordingId, "recordingId");
+            ProtocolJson.requireIdentifier(recordingRequestId, "recordingRequestId");
+            requirePositive(timeoutNanos, "timeoutNanos");
+        }
+    }
+
+    /** Retrieves one bounded chunk of a stopped immutable recording. */
+    record RecordingGet(String recordingId, int offset, int limit) implements RuntimeCommand {
+        public RecordingGet {
+            ProtocolJson.requireIdentifier(recordingId, "recordingId");
+            if (offset < 0) {
+                throw new IllegalArgumentException("recording offset must be non-negative");
             }
             validateLimit(limit);
         }

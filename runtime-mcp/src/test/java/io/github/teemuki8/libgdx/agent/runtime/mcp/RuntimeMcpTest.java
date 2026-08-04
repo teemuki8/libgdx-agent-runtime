@@ -160,12 +160,15 @@ final class RuntimeMcpTest {
             assertEquals(runtime.sessionId(), publication.sessionId());
             RuntimeToolCatalog catalog = new RuntimeToolCatalog(
                     new RuntimeProtocolService(registry).toolNames());
-            assertEquals(15, catalog.tools().size());
+            assertEquals(18, catalog.tools().size());
             assertEquals(false,
                     catalog.tool("runtime_command_cancel").inputSchema()
                             .get("additionalProperties"));
             assertEquals(false,
                     catalog.tool("runtime_assert").inputSchema().get("additionalProperties"));
+            assertTrue(catalog.toolNames().containsAll(List.of(
+                    "runtime_recording_start", "runtime_recording_stop",
+                    "runtime_recording_get")));
 
             McpSchema.CallToolResult status = handler.handle(call(
                     "runtime_command_status", Map.of(
@@ -598,6 +601,59 @@ final class RuntimeMcpTest {
             assertTrue(handler.handle(call("runtime_ui_frames", Map.of(
                     "sessionId", "mcp-ui", "correlationToken", "render-token-4",
                     "uiSessionId", "battle-ui", "limit", 8, "script", "run()")))
+                    .block(Duration.ofSeconds(5)).isError());
+        }
+    }
+
+    @Test
+    void recordingToolsUseClosedSchemasAndReturnBoundedManifestChunks() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("mcp-recording"))
+                .commandDispatcher(queue::addLast)
+                .build();
+        runtime.start();
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime);
+                RuntimeToolHandler handler =
+                        new RuntimeToolHandler(new RuntimeProtocolService(registry))) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            Map<String, Object> start = Map.of(
+                    "sessionId", "mcp-recording",
+                    "recordingId", "mcp-run",
+                    "recordingRequestId", "mcp-start",
+                    "randomSeed", 17,
+                    "configuration", List.of(Map.of("name", "mode", "value", "test")),
+                    "replayGuaranteed", false,
+                    "timeoutNanos", 1_000_000_000);
+            assertFalse(handler.handle(call("runtime_recording_start", start))
+                    .block(Duration.ofSeconds(5)).isError());
+            queue.removeFirst().run();
+            assertFalse(handler.handle(call("runtime_recording_start", start))
+                    .block(Duration.ofSeconds(5)).isError());
+            runtime.frame(1, () -> {});
+
+            Map<String, Object> stop = Map.of(
+                    "sessionId", "mcp-recording",
+                    "recordingId", "mcp-run",
+                    "recordingRequestId", "mcp-stop",
+                    "timeoutNanos", 1_000_000_000);
+            handler.handle(call("runtime_recording_stop", stop))
+                    .block(Duration.ofSeconds(5));
+            queue.removeFirst().run();
+            McpSchema.CallToolResult chunk = handler.handle(call("runtime_recording_get", Map.of(
+                    "sessionId", "mcp-recording", "recordingId", "mcp-run",
+                    "offset", 0, "limit", 8))).block(Duration.ofSeconds(5));
+            assertFalse(chunk.isError());
+            Map<String, Object> body = structured(chunk);
+            Map<?, ?> metadata =
+                    (Map<?, ?>) ((Map<?, ?>) body.get("chunk")).get("metadata");
+            assertEquals("mcp-run", metadata.get("recordingId"));
+            assertEquals(17, ((Number) metadata.get("randomSeed")).intValue());
+
+            assertTrue(handler.handle(call("runtime_recording_get", Map.of(
+                    "sessionId", "mcp-recording", "recordingId", "mcp-run",
+                    "offset", 0, "limit", 8, "script", "run()")))
                     .block(Duration.ofSeconds(5)).isError());
         }
     }

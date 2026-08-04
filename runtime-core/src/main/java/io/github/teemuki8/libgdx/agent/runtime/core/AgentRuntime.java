@@ -39,6 +39,7 @@ public final class AgentRuntime implements AutoCloseable {
     private final InputRegistry inputs;
     private final CheckpointRegistry checkpoints;
     private final UiCorrelationRegistry uiCorrelations;
+    private final RecordingRegistry recordings;
     private final EntityRegistry entities = new EntityRegistry(this);
     private final LinkedHashMap<EntityId, InspectableEntity> staticEntities = new LinkedHashMap<>();
     private final LinkedHashMap<String, Supplier<? extends Stream<InspectableEntity>>> sources =
@@ -79,6 +80,7 @@ public final class AgentRuntime implements AutoCloseable {
         inputs = new InputRegistry(this, builder.inputLimits);
         checkpoints = new CheckpointRegistry(this, builder.checkpointLimits);
         uiCorrelations = new UiCorrelationRegistry(this, builder.uiCorrelationLimits);
+        recordings = new RecordingRegistry(this, builder.recordingLimits);
     }
 
     /** Creates a runtime builder owned by the calling thread by default. */
@@ -144,6 +146,11 @@ public final class AgentRuntime implements AutoCloseable {
     /** Returns explicit bounded bidirectional runtime/UI correlation evidence. */
     public UiCorrelationRegistry uiCorrelations() {
         return uiCorrelations;
+    }
+
+    /** Returns bounded versioned input and execution recording evidence. */
+    public RecordingRegistry recordings() {
+        return recordings;
     }
 
     /**
@@ -471,6 +478,7 @@ public final class AgentRuntime implements AutoCloseable {
         if (activeFrame != null) {
             throw lifecycle("runtime cannot close while a frame is open");
         }
+        recordings.close();
         commands.ifPresent(CommandDispatch::close);
         Throwable checkpointFailure = null;
         try {
@@ -555,6 +563,7 @@ public final class AgentRuntime implements AutoCloseable {
         retain(completed);
         previousFrame = completed;
         activeFrame = null;
+        recordings.recordFrame(completed);
         activeBaseline = Optional.empty();
         pendingEvents.clear();
         pendingDecisions.clear();
@@ -851,6 +860,10 @@ public final class AgentRuntime implements AutoCloseable {
         requireMutableRegistration();
     }
 
+    void requireRecordingMutation() {
+        requireMutableRegistration();
+    }
+
     long monotonicTimeNanos() {
         return monotonicClock.nanoTime();
     }
@@ -1128,6 +1141,7 @@ public final class AgentRuntime implements AutoCloseable {
         private CheckpointLimits checkpointLimits = CheckpointLimits.developmentDefaults();
         private UiCorrelationLimits uiCorrelationLimits =
                 UiCorrelationLimits.developmentDefaults();
+        private RecordingLimits recordingLimits = RecordingLimits.developmentDefaults();
 
         private Builder() {}
 
@@ -1206,6 +1220,12 @@ public final class AgentRuntime implements AutoCloseable {
         /** Configures hard bounds for runtime/UI bindings and frame mappings. */
         public Builder uiCorrelationLimits(UiCorrelationLimits value) {
             uiCorrelationLimits = Objects.requireNonNull(value, "value");
+            return this;
+        }
+
+        /** Configures independent recording, retention, size, and chunk bounds. */
+        public Builder recordingLimits(RecordingLimits value) {
+            recordingLimits = Objects.requireNonNull(value, "value");
             return this;
         }
 

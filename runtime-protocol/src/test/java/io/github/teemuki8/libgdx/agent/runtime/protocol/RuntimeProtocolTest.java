@@ -101,7 +101,7 @@ final class RuntimeProtocolTest {
                 service.execute(new RuntimeRequest(
                         new ProtocolVersion(2, 0), "v", null, new RuntimeCommand.Sessions())));
         assertEquals(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED, version.error().code());
-        assertEquals("1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10,1.11",
+        assertEquals("1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10,1.11,1.12",
                 version.error().details().get("supported"));
 
         RuntimeResponse.Failure missing = assertInstanceOf(RuntimeResponse.Failure.class,
@@ -820,6 +820,85 @@ final class RuntimeProtocolTest {
             assertEquals(new FrameId(1),
                     completed.injection().resultingFrameId().orElseThrow());
             assertEquals("SPACE", key[0]);
+        }
+    }
+
+    @Test
+    void recordingCapabilityAndCommandsRoundTripWithBoundedManifestEvidence() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("recording-protocol"))
+                .commandDispatcher(queue::addLast)
+                .build();
+        runtime.start();
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime)) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            RuntimeProtocolService service = new RuntimeProtocolService(registry);
+            RuntimeCapability capability = capabilities(service, ProtocolVersion.V1_12,
+                    "recording-capabilities", "recording-protocol")
+                    .capabilityReport().orElseThrow().capabilities().stream()
+                    .filter(value -> value.id().equals("recording")).findFirst().orElseThrow();
+            assertEquals(RuntimeCapability.Availability.AVAILABLE, capability.availability());
+            assertTrue(capability.mcpTools().contains("runtime_recording_get"));
+
+            RuntimeCommand.RecordingStart start = new RuntimeCommand.RecordingStart(
+                    "run-1", "record-start-1", "scenario-1", null, 42L,
+                    RuntimeValues.object(RuntimeValues.field(
+                            "difficulty", RuntimeValues.string("hard"))),
+                    false, 1_000_000_000);
+            RuntimeCommand.RecordingStart decoded =
+                    assertInstanceOf(RuntimeCommand.RecordingStart.class,
+                            ProtocolJson.decodeRequest(ProtocolJson.encode(new RuntimeRequest(
+                                    ProtocolVersion.V1_12, "start-json",
+                                    "recording-protocol", start))).command());
+            assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                    new RuntimeRequest(ProtocolVersion.V1_12, "start",
+                            "recording-protocol", decoded)));
+            queue.removeFirst().run();
+            RuntimeResponse.Result.RecordingOperationResult started = assertInstanceOf(
+                    RuntimeResponse.Result.RecordingOperationResult.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V1_12, "start-poll",
+                                    "recording-protocol", decoded))).result());
+            assertEquals(CommandState.SUCCEEDED,
+                    started.operation().command().status().orElseThrow().state());
+
+            runtime.frame(1, () -> {});
+            RuntimeCommand.RecordingStop stop = new RuntimeCommand.RecordingStop(
+                    "run-1", "record-stop-1", 1_000_000_000);
+            service.execute(new RuntimeRequest(ProtocolVersion.V1_12, "stop",
+                    "recording-protocol", stop));
+            queue.removeFirst().run();
+            RuntimeResponse.Result.RecordingChunkResult retrieved = assertInstanceOf(
+                    RuntimeResponse.Result.RecordingChunkResult.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V1_12, "get",
+                                    "recording-protocol",
+                                    new RuntimeCommand.RecordingGet("run-1", 0, 10)))).result());
+            assertEquals(42L, retrieved.chunk().metadata().randomSeed().orElseThrow());
+            assertEquals("hard", ((io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue
+                    .StringValue) retrieved.chunk().metadata().configuration().fields()
+                            .getFirst().value()).value());
+            assertEquals(1, retrieved.chunk().entries().size());
+            RuntimeResponse.Result.RecordingChunkResult decodedChunk = assertInstanceOf(
+                    RuntimeResponse.Result.RecordingChunkResult.class,
+                    assertInstanceOf(RuntimeResponse.Success.class,
+                            ProtocolJson.decodeResponse(ProtocolJson.encode(service.execute(
+                                    new RuntimeRequest(ProtocolVersion.V1_12, "get-json",
+                                            "recording-protocol",
+                                            new RuntimeCommand.RecordingGet(
+                                                    "run-1", 0, 10)))))).result());
+            assertInstanceOf(
+                    io.github.teemuki8.libgdx.agent.runtime.core.RecordingFrameEntry.class,
+                    decodedChunk.chunk().entries().getFirst());
+
+            RuntimeResponse.Failure oldVersion = assertInstanceOf(RuntimeResponse.Failure.class,
+                    service.execute(new RuntimeRequest(ProtocolVersion.V1_11, "old",
+                            "recording-protocol",
+                            new RuntimeCommand.RecordingGet("run-1", 0, 10))));
+            assertEquals(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
+                    oldVersion.error().code());
         }
     }
 

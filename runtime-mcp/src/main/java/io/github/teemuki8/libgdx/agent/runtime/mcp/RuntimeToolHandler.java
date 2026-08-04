@@ -202,6 +202,21 @@ public final class RuntimeToolHandler implements AutoCloseable {
                     string(arguments, "uiGeneration"), limit);
             case "runtime_ui_frames" -> new RuntimeCommand.UiFrames(
                     string(arguments, "uiSessionId"), string(arguments, "correlationToken"), limit);
+            case "runtime_recording_start" -> new RuntimeCommand.RecordingStart(
+                    string(arguments, "recordingId"),
+                    string(arguments, "recordingRequestId"),
+                    string(arguments, "scenarioId"), string(arguments, "checkpointId"),
+                    optionalLong(arguments, "randomSeed"),
+                    recordingConfiguration(arguments.get("configuration")),
+                    bool(arguments, "replayGuaranteed"),
+                    number(arguments, "timeoutNanos", -1));
+            case "runtime_recording_stop" -> new RuntimeCommand.RecordingStop(
+                    string(arguments, "recordingId"),
+                    string(arguments, "recordingRequestId"),
+                    number(arguments, "timeoutNanos", -1));
+            case "runtime_recording_get" -> new RuntimeCommand.RecordingGet(
+                    string(arguments, "recordingId"),
+                    Math.toIntExact(number(arguments, "offset", -1)), limit);
             default -> throw new IllegalArgumentException("unknown runtime tool");
         };
         ProtocolVersion version = switch (toolName) {
@@ -219,6 +234,8 @@ public final class RuntimeToolHandler implements AutoCloseable {
             case "runtime_checkpoints", "runtime_checkpoint_create",
                     "runtime_checkpoint_restore" -> ProtocolVersion.V1_10;
             case "runtime_ui_bindings", "runtime_ui_frames" -> ProtocolVersion.V1_11;
+            case "runtime_recording_start", "runtime_recording_stop",
+                    "runtime_recording_get" -> ProtocolVersion.V1_12;
             default -> ProtocolVersion.V1;
         };
         return new RuntimeRequest(version,
@@ -307,6 +324,22 @@ public final class RuntimeToolHandler implements AutoCloseable {
                 throw new IllegalArgumentException("unknown input parameter");
             }
             fields.add(RuntimeValues.field(name, actionValue(parameter, entry.getValue())));
+        }
+        return new RuntimeValue.ObjectValue(fields);
+    }
+
+    private static RuntimeValue.ObjectValue recordingConfiguration(Object raw) {
+        if (!(raw instanceof List<?> entries)) {
+            throw new IllegalArgumentException("recording configuration must be an array");
+        }
+        java.util.ArrayList<RuntimeValue.Field> fields = new java.util.ArrayList<>();
+        for (Object entry : entries) {
+            Map<String, Object> values = stringMap(entry, "recording configuration entry");
+            if (!values.keySet().equals(java.util.Set.of("name", "value"))) {
+                throw new IllegalArgumentException("recording configuration entry is invalid");
+            }
+            fields.add(RuntimeValues.field(
+                    string(values, "name"), runtimeValue(values.get("value"), 0)));
         }
         return new RuntimeValue.ObjectValue(fields);
     }

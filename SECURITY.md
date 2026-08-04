@@ -17,6 +17,12 @@ union. They do not accept scripts, expressions, class names, reflection, or call
 Registered input injection accepts only application-declared IDs and closed scalar parameters on
 paused controlled ticks. It cannot address arbitrary classes or operating-system input, and
 application-selected redaction can omit parameter values from retained evidence.
+Recording captures only explicitly registered semantic inputs/actions, including validated closed
+action parameters, and bounded completed-runtime evidence. Applications must omit secrets from action
+schemas and allowlisted configuration; input recording policy can omit or redact input values. The
+runtime installs no global or operating-system input hook, serializes no application object, and
+provides no replay executor. Manifest configuration is closed scalar data; opaque checkpoint handles,
+callbacks, and arbitrary payloads never cross Java, protocol, or MCP boundaries.
 Checkpoint payloads remain opaque application-owned handles inside the runtime. MCP exposes only
 bounded descriptors and operation evidence; it cannot serialize, traverse, name, or restore an
 arbitrary object supplied by a caller.

@@ -27,7 +27,9 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
     @JsonSubTypes.Type(value = RuntimeCommand.Assert.class, name = "assert"),
     @JsonSubTypes.Type(value = RuntimeCommand.Control.class, name = "control"),
     @JsonSubTypes.Type(value = RuntimeCommand.Advance.class, name = "advance"),
-    @JsonSubTypes.Type(value = RuntimeCommand.Wait.class, name = "wait")
+    @JsonSubTypes.Type(value = RuntimeCommand.Wait.class, name = "wait"),
+    @JsonSubTypes.Type(value = RuntimeCommand.Inputs.class, name = "inputs"),
+    @JsonSubTypes.Type(value = RuntimeCommand.Input.class, name = "input")
 })
 public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeCommand.Capabilities,
         RuntimeCommand.Frames, RuntimeCommand.Snapshot, RuntimeCommand.Entity,
@@ -36,7 +38,8 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
         RuntimeCommand.Scenarios, RuntimeCommand.Reset, RuntimeCommand.AttributedChanges,
         RuntimeCommand.AttributedEvents, RuntimeCommand.AttributedDecisions,
         RuntimeCommand.Actions, RuntimeCommand.Action, RuntimeCommand.Assert,
-        RuntimeCommand.Control, RuntimeCommand.Advance, RuntimeCommand.Wait {
+        RuntimeCommand.Control, RuntimeCommand.Advance, RuntimeCommand.Wait,
+        RuntimeCommand.Inputs, RuntimeCommand.Input {
     /** Lists published sessions. */
     record Sessions() implements RuntimeCommand {}
 
@@ -323,6 +326,24 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
                     || evidenceLimit
                             > io.github.teemuki8.libgdx.agent.runtime.core.AssertionScope.MAX_EVIDENCE) {
                 throw new IllegalArgumentException("evidenceLimit is outside the supported range");
+            }
+            requirePositive(timeoutNanos, "timeoutNanos");
+        }
+    }
+
+    /** Lists explicitly registered closed input types. */
+    record Inputs() implements RuntimeCommand {}
+
+    /** Schedules or polls one registered input for a controlled tick. */
+    record Input(String inputId, String inputRequestId,
+            io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue.ObjectValue parameters,
+            Long targetTick, long timeoutNanos) implements RuntimeCommand {
+        public Input {
+            ProtocolJson.requireIdentifier(inputId, "inputId");
+            ProtocolJson.requireIdentifier(inputRequestId, "inputRequestId");
+            java.util.Objects.requireNonNull(parameters, "parameters");
+            if (targetTick != null && targetTick <= 0) {
+                throw new IllegalArgumentException("targetTick must be positive");
             }
             requirePositive(timeoutNanos, "timeoutNanos");
         }

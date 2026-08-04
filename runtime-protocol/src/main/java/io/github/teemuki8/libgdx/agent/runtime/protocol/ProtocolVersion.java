@@ -20,8 +20,10 @@ public record ProtocolVersion(int major, int minor) {
     public static final ProtocolVersion V1_7 = new ProtocolVersion(1, 7);
     /** Application-owned bounded simulation-control protocol version. */
     public static final ProtocolVersion V1_8 = new ProtocolVersion(1, 8);
+    /** Explicit registered input scheduling protocol version. */
+    public static final ProtocolVersion V1_9 = new ProtocolVersion(1, 9);
     /** Latest implemented protocol version. */
-    public static final ProtocolVersion CURRENT = V1_8;
+    public static final ProtocolVersion CURRENT = V1_9;
 
     /** Validates version components. */
     public ProtocolVersion {

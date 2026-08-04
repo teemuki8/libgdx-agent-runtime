@@ -14,6 +14,9 @@ Declarative assertions are a closed data schema over completed evidence. They do
 expressions, method names, arbitrary expressions, or executable code.
 Simulation waits accept only registered named predicates or the same closed declarative assertion
 union. They do not accept scripts, expressions, class names, reflection, or caller-defined code.
+Registered input injection accepts only application-declared IDs and closed scalar parameters on
+paused controlled ticks. It cannot address arbitrary classes or operating-system input, and
+application-selected redaction can omit parameter values from retained evidence.
 
 Do not publish credentials, tokens, secrets, private user data, or filesystem information as entity
 properties, event attributes, decision attributes, names, or diagnostics.

@@ -15,6 +15,7 @@ import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityType;
 import io.github.teemuki8.libgdx.agent.runtime.core.EventType;
 import io.github.teemuki8.libgdx.agent.runtime.core.FrameId;
+import io.github.teemuki8.libgdx.agent.runtime.core.InputDescriptor;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeAssertion;
 import io.github.teemuki8.libgdx.agent.runtime.core.SnapshotComparisonScope;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue;
@@ -51,7 +52,8 @@ public final class RuntimeToolHandler implements AutoCloseable {
 
     /** Creates a handler over one protocol service. */
     public RuntimeToolHandler(RuntimeProtocolService protocol) {
-        this(protocol, new RuntimeToolCatalog(protocol.toolNames(), protocol.actionCatalog()));
+        this(protocol, new RuntimeToolCatalog(
+                protocol.toolNames(), protocol.actionCatalog(), protocol.inputCatalog()));
     }
 
     RuntimeToolHandler(RuntimeProtocolService protocol, RuntimeToolCatalog catalog) {
@@ -178,6 +180,12 @@ public final class RuntimeToolHandler implements AutoCloseable {
                     number(arguments, "deltaNanos", -1),
                     Math.toIntExact(number(arguments, "evidenceLimit", -1)),
                     number(arguments, "timeoutNanos", -1));
+            case "runtime_inputs" -> new RuntimeCommand.Inputs();
+            case "runtime_input" -> new RuntimeCommand.Input(
+                    string(arguments, "input"), string(arguments, "inputRequestId"),
+                    inputParameters(string(arguments, "input"), arguments.get("parameters")),
+                    optionalLong(arguments, "targetTick"),
+                    number(arguments, "timeoutNanos", -1));
             default -> throw new IllegalArgumentException("unknown runtime tool");
         };
         ProtocolVersion version = switch (toolName) {
@@ -191,6 +199,7 @@ public final class RuntimeToolHandler implements AutoCloseable {
             case "runtime_actions", "runtime_action" -> ProtocolVersion.V1_6;
             case "runtime_assert" -> ProtocolVersion.V1_7;
             case "runtime_control", "runtime_advance", "runtime_wait" -> ProtocolVersion.V1_8;
+            case "runtime_inputs", "runtime_input" -> ProtocolVersion.V1_9;
             default -> ProtocolVersion.V1;
         };
         return new RuntimeRequest(version,
@@ -261,6 +270,28 @@ public final class RuntimeToolHandler implements AutoCloseable {
                     ? RuntimeValues.enumValue(value) : wrongType();
         };
     }
+
+    private RuntimeValue.ObjectValue inputParameters(String inputId, Object raw) {
+        if (!(raw instanceof Map<?, ?> values)) {
+            throw new IllegalArgumentException("input parameters must be an object");
+        }
+        InputDescriptor descriptor = catalog.input(inputId);
+        Map<String, ActionParameter> schema = descriptor.parameters().stream().collect(
+                java.util.stream.Collectors.toMap(ActionParameter::name, value -> value));
+        java.util.ArrayList<RuntimeValue.Field> fields = new java.util.ArrayList<>();
+        for (Map.Entry<?, ?> entry : values.entrySet()) {
+            if (!(entry.getKey() instanceof String name)) {
+                throw new IllegalArgumentException("input parameter name must be a string");
+            }
+            ActionParameter parameter = schema.get(name);
+            if (parameter == null) {
+                throw new IllegalArgumentException("unknown input parameter");
+            }
+            fields.add(RuntimeValues.field(name, actionValue(parameter, entry.getValue())));
+        }
+        return new RuntimeValue.ObjectValue(fields);
+    }
+
 
     private static RuntimeAssertion assertion(Object raw) {
         Map<String, Object> values = stringMap(raw, "assertion");

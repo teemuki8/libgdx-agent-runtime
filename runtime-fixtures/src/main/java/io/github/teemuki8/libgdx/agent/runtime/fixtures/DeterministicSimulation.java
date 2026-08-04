@@ -8,6 +8,7 @@ import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityType;
 import io.github.teemuki8.libgdx.agent.runtime.core.EventSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.InspectableEntity;
+import io.github.teemuki8.libgdx.agent.runtime.core.InputSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.Reason;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import io.github.teemuki8.libgdx.agent.runtime.core.SessionId;
@@ -51,6 +52,11 @@ public final class DeterministicSimulation {
         register(runtime, tower1);
         register(runtime, tower2);
         runtime.entities().registerSource("enemies", () -> enemies.stream().map(this::inspectable));
+        runtime.inputs().register(InputSpec.builder("set-player-state")
+                .description("Sets the deterministic player state on a controlled tick")
+                .requiredString("state")
+                .handler(parameters -> player.state = parameters.requiredString("state"))
+                .build());
         if (dispatcher != null) {
             runtime.controls().register(SimulationControllerSpec.builder()
                     .pause(() -> paused = true)

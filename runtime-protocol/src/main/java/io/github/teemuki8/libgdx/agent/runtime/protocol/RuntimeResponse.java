@@ -22,6 +22,8 @@ import io.github.teemuki8.libgdx.agent.runtime.core.ActionInvocation;
 import io.github.teemuki8.libgdx.agent.runtime.core.AssertionResult;
 import io.github.teemuki8.libgdx.agent.runtime.core.ControlOperation;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationControlDescriptor;
+import io.github.teemuki8.libgdx.agent.runtime.core.InputDescriptor;
+import io.github.teemuki8.libgdx.agent.runtime.core.InputInjection;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -80,13 +82,15 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         @JsonSubTypes.Type(value = Result.Actions.class, name = "actions"),
         @JsonSubTypes.Type(value = Result.Action.class, name = "action"),
         @JsonSubTypes.Type(value = Result.Assertion.class, name = "assertion"),
-        @JsonSubTypes.Type(value = Result.Control.class, name = "control")
+        @JsonSubTypes.Type(value = Result.Control.class, name = "control"),
+        @JsonSubTypes.Type(value = Result.Inputs.class, name = "inputs"),
+        @JsonSubTypes.Type(value = Result.Input.class, name = "input")
     })
     sealed interface Result permits Result.Sessions, Result.Capabilities, Result.Frames,
             Result.Snapshot, Result.Entity, Result.Changes, Result.Events, Result.Decisions,
             Result.CommandStatus, Result.CommandCancellation, Result.EpochFrames,
             Result.Scenarios, Result.Reset, Result.Actions, Result.Action, Result.Assertion,
-            Result.Control {
+            Result.Control, Result.Inputs, Result.Input {
         /** Published session catalog. */
         record Sessions(List<SessionInfo> sessions) implements Result {
             /** Copies sessions. */
@@ -220,6 +224,23 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
             public Control {
                 Objects.requireNonNull(descriptor, "descriptor");
                 operation = Objects.requireNonNull(operation, "operation");
+            }
+        }
+
+        /** Explicitly registered input catalog. */
+        record Inputs(List<InputDescriptor> inputs) implements Result {
+            public Inputs {
+                inputs = List.copyOf(Objects.requireNonNull(inputs, "inputs"));
+                if (inputs.size() > ProtocolJson.MAX_RESULT_ITEMS) {
+                    throw new IllegalArgumentException("too many protocol inputs");
+                }
+            }
+        }
+
+        /** Correlated controlled-tick input scheduling and execution evidence. */
+        record Input(InputInjection injection) implements Result {
+            public Input {
+                Objects.requireNonNull(injection, "injection");
             }
         }
     }

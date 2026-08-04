@@ -1,6 +1,6 @@
 # libGDX Agent Runtime
 
-`libgdx-agent-runtime` is an early-stage Java 25 library for exposing deliberately registered,
+`libgdx-agent-runtime` is a production-supported Java 25 library for exposing deliberately registered,
 immutable facts about a live libGDX game to Java tests and coding agents.
 
 It answers questions such as:
@@ -24,14 +24,17 @@ decisions. Neither is a dependency of the other.
 
 ## V1 scope
 
-V1 includes registered static/dynamic entities, bounded immutable values, baseline plus frame
-snapshots, automatic structural diffs, explicit events and decisions, concurrent completed-frame
-queries, a strict JSON protocol, eight base stdio MCP tools, optional bounded application-command
-dispatch, and a deterministic LWJGL3 fixture.
+V1 includes registered entities, bounded immutable values, baseline/frame capture, structural diffs,
+events, decisions, completed-frame queries, execution epochs, explicit attribution, typed actions,
+and declarative assertions. Optional application-owned capabilities add scenarios, exact-tick
+control, registered input, opaque checkpoints, runtime/UI correlation, recording, and determinism
+comparison through closed protocol 1.0-1.13 and stdio MCP surfaces. A deterministic LWJGL3 fixture
+qualifies the full workflow.
 
-V1 excludes replay, reflection, instrumentation, mutation interception, networking, ECS adapters,
-hot reload, frame stepping, visual debugging, natural-language queries, and automatic causality.
-This repository is a `0.1.0` release candidate, not a production-stability claim.
+V1 excludes replay execution, reflection, instrumentation, mutation interception, networking, ECS
+adapters, hot reload, visual debugging, natural-language queries, and automatic causality.
+Version 1.0 establishes the stable Java and exact-version protocol contracts described in
+[ADR 0011](docs/adr/0011-stable-1x-compatibility.md).
 
 ## Minimal Java integration
 
@@ -120,7 +123,7 @@ game running elsewhere. Remote process attachment is explicitly outside V1.
 | `runtime-mcp` | eight base and registered optional stdio MCP tools | `agent-runtime-mcp` |
 | `runtime-fixtures` | deterministic LWJGL3 qualification | not published |
 
-Group: `io.github.teemuki8`. Snapshot version: `0.1.0-SNAPSHOT`.
+Group: `io.github.teemuki8`. Current release: `1.0.0`. Development version: `1.0.1-SNAPSHOT`.
 
 ## Build
 

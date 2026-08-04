@@ -2,8 +2,14 @@
 
 ## Supported versions
 
-No production-supported release exists yet. Security reports for the current `0.1.x` development
-line are welcome through GitHub's private vulnerability reporting for this repository.
+| Version | Supported |
+| --- | --- |
+| Latest `1.x` release | Yes |
+| `0.x` and older `1.x` releases | No |
+
+Security fixes are released on the latest 1.x line. Reports for every version are welcome through
+GitHub's private vulnerability reporting; the maintainer will assess whether a supported release is
+affected.
 
 ## Boundary
 

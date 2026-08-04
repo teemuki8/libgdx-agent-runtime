@@ -627,6 +627,7 @@ final class RuntimeProtocolTest {
         runtime.start();
         RuntimeRegistry registry = new RuntimeRegistry();
         try (PublishedRuntime publication = registry.publish(runtime)) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
             RuntimeProtocolService service = new RuntimeProtocolService(registry);
             RuntimeCapability capability = capabilities(service, ProtocolVersion.V1_10,
                     "checkpoint-capabilities", "checkpoint-protocol")

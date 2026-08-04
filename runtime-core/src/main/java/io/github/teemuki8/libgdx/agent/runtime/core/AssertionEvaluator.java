@@ -101,9 +101,17 @@ public final class AssertionEvaluator {
         AssertionStatus status = equal ? AssertionStatus.PASS
                 : context.incomplete || terminal == null ? AssertionStatus.INCONCLUSIVE
                         : AssertionStatus.FAIL;
-        List<AssertionEvidence> evidence = observed.map(value -> List.of(new AssertionEvidence(
-                terminal.frameId(), "property", Optional.of(assertion.entityId()),
-                Optional.of(assertion.property()), Optional.of(value)))).orElseGet(List::of);
+        List<AssertionEvidence> evidence;
+        if (observed.isPresent()) {
+            evidence = List.of(new AssertionEvidence(terminal.frameId(), "property",
+                    Optional.of(assertion.entityId()), Optional.of(assertion.property()), observed));
+        } else if (terminal != null && status == AssertionStatus.FAIL) {
+            evidence = List.of(new AssertionEvidence(terminal.frameId(), "property",
+                    Optional.of(assertion.entityId()), Optional.of(assertion.property()),
+                    Optional.empty()));
+        } else {
+            evidence = List.of();
+        }
         return result(status, "propertyEquals", scope, Optional.of(assertion.expected()), observed,
                 evidence, context.incomplete, statusMessage(status));
     }

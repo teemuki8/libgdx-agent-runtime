@@ -192,6 +192,13 @@ final class RuntimeAssertionTest {
         assertEquals(new FrameId(0), missing.evidence().getFirst().frameId());
         assertEquals(RuntimeValues.bool(false),
                 missing.evidence().getFirst().observed().orElseThrow());
+        AssertionResult missingProperty = runtime.assertions().evaluate(
+                new RuntimeAssertion.PropertyEquals(EntityId.of("missing"), "health",
+                        RuntimeValues.integer(75)),
+                complete);
+        assertEquals(AssertionStatus.FAIL, missingProperty.status());
+        assertEquals(new FrameId(0), missingProperty.evidence().getFirst().frameId());
+        assertEquals(Optional.empty(), missingProperty.evidence().getFirst().observed());
     }
 
     @Test

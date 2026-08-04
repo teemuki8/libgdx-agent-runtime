@@ -309,19 +309,18 @@ public final class RuntimeToolCatalog {
 
     private static Map<String, Object> inputInput(
             java.util.Collection<InputDescriptor> descriptors) {
-        LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
-        properties.put("sessionId", string());
-        properties.put("input", Map.of("type", "string", "enum",
-                descriptors.stream().map(InputDescriptor::id).sorted().toList()));
-        properties.put("inputRequestId", string());
-        properties.put("targetTick", integer(1, Long.MAX_VALUE));
-        properties.put("timeoutNanos", integer(1, Long.MAX_VALUE));
-        List<Map<String, Object>> schemas = descriptors.stream()
-                .map(RuntimeToolCatalog::inputParameterObject).distinct().toList();
-        properties.put("parameters", schemas.size() == 1 ? schemas.getFirst()
-                : Map.of("anyOf", schemas));
-        return object(properties,
-                List.of("sessionId", "input", "inputRequestId", "parameters", "timeoutNanos"));
+        List<Map<String, Object>> branches = descriptors.stream().map(descriptor -> {
+            LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
+            properties.put("sessionId", string());
+            properties.put("input", Map.of("type", "string", "const", descriptor.id()));
+            properties.put("inputRequestId", string());
+            properties.put("parameters", inputParameterObject(descriptor));
+            properties.put("targetTick", integer(1, Long.MAX_VALUE));
+            properties.put("timeoutNanos", integer(1, Long.MAX_VALUE));
+            return object(properties, List.of(
+                    "sessionId", "input", "inputRequestId", "parameters", "timeoutNanos"));
+        }).toList();
+        return Map.of("oneOf", branches);
     }
 
     private static Map<String, Object> assertionInput() {

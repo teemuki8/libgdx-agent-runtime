@@ -174,7 +174,11 @@ public final class SimulationControlRegistry {
                     });
                     runtime.inputs().completeTick(tick, expected);
                 } catch (RuntimeException | Error failure) {
-                    runtime.inputs().failTick(tick);
+                    if (runtime.frame(expected).isPresent()) {
+                        runtime.inputs().completeTick(tick, expected);
+                    } else {
+                        runtime.inputs().failTick(tick);
+                    }
                     synchronized (this) {
                         evidence.stopReason = ControlStopReason.CALLBACK_FAILED;
                     }

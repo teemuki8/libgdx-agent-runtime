@@ -124,4 +124,75 @@ final class InputRegistryTest {
                 "button", "changed", RuntimeValues.object(), OptionalLong.of(2),
                 Duration.ofSeconds(1)));
     }
+
+    @Test
+    void terminalDispatchBeforeSchedulingFailsInputWithoutLeakingQueueCapacity() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("input-dispatch-rejection"))
+                .clock(() -> 1)
+                .commandDispatcher(dispatch::addLast)
+                .commandDispatchLimits(new CommandDispatchLimits(1, 8, 8,
+                        Duration.ofSeconds(1).toNanos(), 64))
+                .inputLimits(new InputLimits(2, 2, 1, 4, 2, 64))
+                .build();
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {}).resume(() -> {}).tick(deltaNanos -> {}).build());
+        runtime.inputs().register(InputSpec.builder("button")
+                .requiredString("button").handler(parameters -> {}).build());
+        runtime.start();
+        runtime.controls().control(true, "pause-rejection", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        runtime.commands().orElseThrow().submit(
+                "blocking-command", Duration.ofSeconds(1), () -> {});
+        RuntimeValue.ObjectValue parameters = RuntimeValues.object(
+                RuntimeValues.field("button", RuntimeValues.string("PRIMARY")));
+
+        InputInjection first = runtime.inputs().inject(
+                "button", "rejected-input-1", parameters, OptionalLong.empty(),
+                Duration.ofSeconds(1));
+        InputInjection second = runtime.inputs().inject(
+                "button", "rejected-input-2", parameters, OptionalLong.empty(),
+                Duration.ofSeconds(1));
+
+        assertEquals(InputInjectionState.FAILED, first.state());
+        assertEquals(CommandState.REJECTED,
+                first.command().status().orElseThrow().state());
+        assertEquals(InputInjectionState.FAILED, second.state());
+    }
+
+    @Test
+    void callbackFailureStillReportsTheCompletedResultingFrame() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("input-failed-tick"))
+                .clock(() -> 1)
+                .commandDispatcher(dispatch::addLast)
+                .build();
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {}).resume(() -> {})
+                .tick(deltaNanos -> {
+                    throw new IllegalStateException("tick failed");
+                }).build());
+        RuntimeValue.ObjectValue parameters = RuntimeValues.object(
+                RuntimeValues.field("button", RuntimeValues.string("PRIMARY")));
+        runtime.inputs().register(InputSpec.builder("button")
+                .requiredString("button").handler(ignored -> {}).build());
+        runtime.start();
+        runtime.controls().control(true, "pause-failed-tick", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        runtime.inputs().inject("button", "failed-tick-input", parameters,
+                OptionalLong.empty(), Duration.ofSeconds(1));
+        runtime.controls().advance("failed-tick", 1, 1, Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        dispatch.removeFirst().run();
+
+        InputInjection completed = runtime.inputs().inject(
+                "button", "failed-tick-input", parameters,
+                OptionalLong.empty(), Duration.ofSeconds(1));
+        assertEquals(InputInjectionState.EXECUTED, completed.state());
+        assertEquals(new FrameId(1), completed.resultingFrameId().orElseThrow());
+        assertTrue(completed.diagnostic().isEmpty());
+        assertTrue(runtime.frame(new FrameId(1)).isPresent());
+    }
 }

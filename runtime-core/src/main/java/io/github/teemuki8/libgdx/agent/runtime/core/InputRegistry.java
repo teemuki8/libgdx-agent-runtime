@@ -204,10 +204,27 @@ public final class InputRegistry {
     }
 
     private synchronized InputInjection snapshot(Evidence evidence, CommandLookup command) {
+        reconcileTerminalDispatch(evidence, command);
         return new InputInjection(evidence.inputId, evidence.requestId, command, evidence.state,
                 evidence.targetTick, evidence.actualTick, evidence.executionEpochId,
                 evidence.submittedFrameId, evidence.resultingFrameId,
                 evidence.recordedParameters, evidence.parametersRedacted, evidence.diagnostic);
+    }
+
+    private void reconcileTerminalDispatch(Evidence evidence, CommandLookup command) {
+        if (evidence.state != InputInjectionState.QUEUED || command.status().isEmpty()) {
+            return;
+        }
+        CommandStatus status = command.status().orElseThrow();
+        boolean endedBeforeExecution = status.state() == CommandState.REJECTED
+                || status.state() == CommandState.CANCELLED
+                || status.state() == CommandState.TIMED_OUT && status.startedAtNanos().isEmpty();
+        if (endedBeforeExecution) {
+            outstanding--;
+            evidence.state = InputInjectionState.FAILED;
+            evidence.diagnostic = Optional.of(boundedDiagnostic(
+                    status.diagnostic().orElse("command ended before input execution")));
+        }
     }
 
     private void requireTargetingState() {
@@ -293,6 +310,10 @@ public final class InputRegistry {
                 ? failure.getClass().getSimpleName()
                 : failure.getClass().getSimpleName() + ": "
                         + message.replace('\n', ' ').replace('\r', ' ');
+        return boundedDiagnostic(value);
+    }
+
+    private String boundedDiagnostic(String value) {
         return value.length() <= limits.stringLength()
                 ? value : value.substring(0, limits.stringLength());
     }

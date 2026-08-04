@@ -434,6 +434,10 @@ final class RuntimeMcpTest {
                 .requiredString("key")
                 .handler(parameters -> key[0] = parameters.requiredString("key"))
                 .build());
+        runtime.inputs().register(InputSpec.builder("pointer-click")
+                .requiredInteger("button")
+                .handler(parameters -> {})
+                .build());
         runtime.start();
         runtime.controls().control(true, "pause-input", Duration.ofSeconds(1));
         queue.removeFirst().run();
@@ -446,12 +450,18 @@ final class RuntimeMcpTest {
             RuntimeToolCatalog catalog = new RuntimeToolCatalog(
                     protocol.toolNames(), protocol.actionCatalog(), protocol.inputCatalog());
             Map<?, ?> inputSchema = catalog.tool("runtime_input").inputSchema();
-            assertFalse((Boolean) inputSchema.get("additionalProperties"));
-            Map<?, ?> properties = (Map<?, ?>) inputSchema.get("properties");
-            assertEquals(List.of("key-down"),
-                    ((Map<?, ?>) properties.get("input")).get("enum"));
-            assertFalse((Boolean) ((Map<?, ?>) properties.get("parameters"))
+            List<?> branches = (List<?>) inputSchema.get("oneOf");
+            assertEquals(2, branches.size());
+            Map<?, ?> keyBranch = (Map<?, ?>) branches.getFirst();
+            assertFalse((Boolean) keyBranch.get("additionalProperties"));
+            Map<?, ?> keyProperties = (Map<?, ?>) keyBranch.get("properties");
+            assertEquals("key-down", ((Map<?, ?>) keyProperties.get("input")).get("const"));
+            assertFalse((Boolean) ((Map<?, ?>) keyProperties.get("parameters"))
                     .get("additionalProperties"));
+            Map<?, ?> pointerBranch = (Map<?, ?>) branches.get(1);
+            Map<?, ?> pointerProperties = (Map<?, ?>) pointerBranch.get("properties");
+            assertEquals("pointer-click",
+                    ((Map<?, ?>) pointerProperties.get("input")).get("const"));
 
             Map<String, Object> input = Map.of(
                     "sessionId", "mcp-input", "input", "key-down",
@@ -476,6 +486,11 @@ final class RuntimeMcpTest {
                     "sessionId", "mcp-input", "input", "key-down",
                     "inputRequestId", "key-2",
                     "parameters", Map.of("key", "A", "script", "run()"),
+                    "timeoutNanos", 1_000))).block(Duration.ofSeconds(5)).isError());
+            assertTrue(handler.handle(call("runtime_input", Map.of(
+                    "sessionId", "mcp-input", "input", "key-down",
+                    "inputRequestId", "key-3",
+                    "parameters", Map.of("button", 1),
                     "timeoutNanos", 1_000))).block(Duration.ofSeconds(5)).isError());
         }
     }

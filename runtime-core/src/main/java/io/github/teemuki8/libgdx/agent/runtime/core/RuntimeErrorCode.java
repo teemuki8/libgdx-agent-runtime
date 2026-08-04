@@ -17,5 +17,7 @@ public enum RuntimeErrorCode {
     /** Query fields are invalid. */
     INVALID_QUERY,
     /** A configured hard limit was exceeded by caller input. */
-    LIMIT_EXCEEDED
+    LIMIT_EXCEEDED,
+    /** Requested recording existed but its bounded retention entry was evicted. */
+    RECORDING_EVICTED
 }

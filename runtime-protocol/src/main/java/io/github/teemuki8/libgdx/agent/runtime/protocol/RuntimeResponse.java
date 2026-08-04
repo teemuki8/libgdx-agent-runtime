@@ -28,6 +28,8 @@ import io.github.teemuki8.libgdx.agent.runtime.core.UiBindingResult;
 import io.github.teemuki8.libgdx.agent.runtime.core.UiFrameCorrelationPage;
 import io.github.teemuki8.libgdx.agent.runtime.core.InputDescriptor;
 import io.github.teemuki8.libgdx.agent.runtime.core.InputInjection;
+import io.github.teemuki8.libgdx.agent.runtime.core.RecordingChunk;
+import io.github.teemuki8.libgdx.agent.runtime.core.RecordingOperation;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -92,14 +94,18 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         @JsonSubTypes.Type(value = Result.Checkpoints.class, name = "checkpoints"),
         @JsonSubTypes.Type(value = Result.Checkpoint.class, name = "checkpoint"),
         @JsonSubTypes.Type(value = Result.UiBindings.class, name = "uiBindings"),
-        @JsonSubTypes.Type(value = Result.UiFrames.class, name = "uiFrames")
+        @JsonSubTypes.Type(value = Result.UiFrames.class, name = "uiFrames"),
+        @JsonSubTypes.Type(value = Result.RecordingOperationResult.class,
+                name = "recordingOperation"),
+        @JsonSubTypes.Type(value = Result.RecordingChunkResult.class, name = "recordingChunk")
     })
     sealed interface Result permits Result.Sessions, Result.Capabilities, Result.Frames,
             Result.Snapshot, Result.Entity, Result.Changes, Result.Events, Result.Decisions,
             Result.CommandStatus, Result.CommandCancellation, Result.EpochFrames,
             Result.Scenarios, Result.Reset, Result.Actions, Result.Action, Result.Assertion,
             Result.Control, Result.Inputs, Result.Input, Result.Checkpoints, Result.Checkpoint,
-            Result.UiBindings, Result.UiFrames {
+            Result.UiBindings, Result.UiFrames, Result.RecordingOperationResult,
+            Result.RecordingChunkResult {
         /** Published session catalog. */
         record Sessions(List<SessionInfo> sessions) implements Result {
             /** Copies sessions. */
@@ -281,6 +287,20 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         record UiFrames(UiFrameCorrelationPage page) implements Result {
             public UiFrames {
                 Objects.requireNonNull(page, "page");
+            }
+        }
+
+        /** Recording lifecycle command evidence. */
+        record RecordingOperationResult(RecordingOperation operation) implements Result {
+            public RecordingOperationResult {
+                Objects.requireNonNull(operation, "operation");
+            }
+        }
+
+        /** One bounded recording manifest chunk. */
+        record RecordingChunkResult(RecordingChunk chunk) implements Result {
+            public RecordingChunkResult {
+                Objects.requireNonNull(chunk, "chunk");
             }
         }
     }

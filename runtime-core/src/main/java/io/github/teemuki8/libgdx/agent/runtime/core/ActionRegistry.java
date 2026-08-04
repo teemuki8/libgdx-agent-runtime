@@ -11,6 +11,7 @@ import java.util.Optional;
 public final class ActionRegistry {
     private final AgentRuntime runtime;
     private final ActionLimits limits;
+    private final Object submissionLock = new Object();
     private final LinkedHashMap<String, ActionSpec> actions = new LinkedHashMap<>();
     private final LinkedHashMap<String, RequestEvidence> requests = new LinkedHashMap<>();
 
@@ -38,6 +39,14 @@ public final class ActionRegistry {
     }
 
     public ActionInvocation invoke(String actionId, String requestId,
+            RuntimeValue.ObjectValue parameters, Optional<String> correlationId,
+            Duration timeout) {
+        synchronized (submissionLock) {
+            return invokeOrdered(actionId, requestId, parameters, correlationId, timeout);
+        }
+    }
+
+    private ActionInvocation invokeOrdered(String actionId, String requestId,
             RuntimeValue.ObjectValue parameters, Optional<String> correlationId,
             Duration timeout) {
         Objects.requireNonNull(parameters, "parameters");
@@ -73,8 +82,8 @@ public final class ActionRegistry {
             }
         }
         if (existing) {
-            return new ActionInvocation(actionId, requestId, dispatch.status(requestId),
-                    evidence.submittedFrame, evidence.completedFrame, correlationId);
+            return record(new ActionInvocation(actionId, requestId, dispatch.status(requestId),
+                    evidence.submittedFrame, evidence.completedFrame, correlationId), parameters);
         }
         RequestEvidence retained = evidence;
         ActionParameters validated = new ActionParameters(parameters);
@@ -82,12 +91,28 @@ public final class ActionRegistry {
             spec.handler().accept(validated);
             retained.completedFrame = runtime.latestFrame().map(FrameSnapshot::frameId);
         });
-        return new ActionInvocation(actionId, requestId, lookup, evidence.submittedFrame,
-                evidence.completedFrame, correlationId);
+        return record(new ActionInvocation(actionId, requestId, lookup, evidence.submittedFrame,
+                evidence.completedFrame, correlationId), parameters);
     }
 
     public ActionLimits limits() {
         return limits;
+    }
+
+    synchronized Optional<ActionInvocation> recording(String requestId) {
+        RequestEvidence evidence = requests.get(requestId);
+        if (evidence == null || runtime.commands().isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(new ActionInvocation(
+                evidence.actionId, requestId, runtime.commands().orElseThrow().status(requestId),
+                evidence.submittedFrame, evidence.completedFrame, evidence.correlationId));
+    }
+
+    private ActionInvocation record(ActionInvocation invocation,
+            RuntimeValue.ObjectValue parameters) {
+        runtime.recordings().recordAction(invocation, parameters);
+        return invocation;
     }
 
     private void validate(ActionDescriptor descriptor, RuntimeValue.ObjectValue parameters) {

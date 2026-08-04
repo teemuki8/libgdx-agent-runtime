@@ -9,7 +9,7 @@ strict closed input schemas (`additionalProperties: false`), and a maximum reque
 | Tool | Required fields | Optional fields |
 | --- | --- | --- |
 | `runtime_sessions` | none | none |
-| `runtime_capabilities` | `sessionId` | `protocolMinor` (`0` through `11`; default `0`) |
+| `runtime_capabilities` | `sessionId` | `protocolMinor` (`0` through `12`; default `0`) |
 | `runtime_frames` | `sessionId` | `fromFrame`, `toFrame`, `limit` |
 | `runtime_snapshot` | `sessionId` | `frameId`, `entityId`, `entityIdPrefix`, `entityType`, `entityTypePrefix`, `limit` |
 | `runtime_entity` | `sessionId`, `entityId` | `fromFrame`, `toFrame`, `limit` |
@@ -37,6 +37,9 @@ strict closed input schemas (`additionalProperties: false`), and a maximum reque
 | `runtime_checkpoint_restore`****** | `sessionId`, `checkpointId`, `checkpointRequestId`, `timeoutNanos` | none |
 | `runtime_ui_bindings`******* | `sessionId`, `executionEpochId`, `runtimeFrameId`, `limit`, exactly one of `entityId` or both `uiSessionId` and `uiControlId` | `property`, `uiGeneration` |
 | `runtime_ui_frames`******* | `sessionId`, `limit`, exactly one of `uiSessionId` or `correlationToken` | none |
+| `runtime_recording_start`******** | `sessionId`, `recordingId`, `recordingRequestId`, `configuration`, `replayGuaranteed`, `timeoutNanos` | `scenarioId`, `checkpointId`, `randomSeed` |
+| `runtime_recording_stop`******** | `sessionId`, `recordingId`, `recordingRequestId`, `timeoutNanos` | none |
+| `runtime_recording_get`******** | `sessionId`, `recordingId`, `offset`, `limit` | none |
 
 \* Command tools are included in the server-start catalog only when at least one published runtime
 has explicitly registered application command dispatch. They use protocol 1.2.
@@ -61,6 +64,9 @@ application command dispatch. They use protocol 1.10.
 
 \*\*\*\*\*\*\* UI correlation tools are included only when at least one published runtime has an
 explicit binding or frame mapping. They use protocol 1.11 and remain read-only.
+
+\*\*\*\*\*\*\*\* Recording tools are included only when application command dispatch is available.
+Start and stop use that dispatcher and protocol 1.12; retrieval returns immutable bounded chunks.
 
 Every identifier is a nonblank string of at most 256 UTF-16 code units. Frame fields are
 non-negative integers. Prefix matching is available only where the schema has an explicit prefix
@@ -222,12 +228,30 @@ Representative structured result:
 }
 ```
 
+## Recordings
+
+`runtime_recording_start` begins or polls an at-most-once recording request. `configuration` is a
+bounded array of closed `{name, value}` entries whose values are scalar booleans, integers, decimals,
+or strings. The manifest also freezes protocol and capability versions plus optional scenario,
+checkpoint, and random-seed metadata. `replayGuaranteed` is application testimony, not a runtime
+inference.
+
+The runtime records registered input outcomes, validated closed semantic-action parameters and
+outcomes, controlled ticks, and completed frame references in deterministic observation order.
+`runtime_recording_stop` freezes the manifest. `runtime_recording_get` retrieves it in offset/limit
+chunks, so a manifest cannot bypass MCP response bounds. `encodedBytes` is the exact UTF-8-aware byte
+count of the schema-versioned, type-tagged core manifest encoding; it is independent of the bounded
+JSON/MCP transport encoding. Item, tick-span, duration, or encoded-size exhaustion stops capture and
+reports the exact dimension, observed value, retained value, configured limit, and
+incomplete-reproduction flag. Retention eviction returns `RECORDING_EVICTED`. The runtime does not
+record raw platform events and does not replay a manifest.
+
 ## Errors and bounds
 
 Errors use `SESSION_NOT_FOUND`, `FRAME_NOT_FOUND`, `ENTITY_NOT_FOUND`, `INVALID_QUERY`,
 `INVALID_RANGE`, `LIMIT_EXCEEDED`, `RUNTIME_CLOSED`, `CAPTURE_NOT_AVAILABLE`,
-`CAPABILITY_UNAVAILABLE`, `PROTOCOL_VERSION_UNSUPPORTED`, or `INTERNAL_ERROR`. MCP returns these in
-a structured error with `isError: true`.
+`CAPABILITY_UNAVAILABLE`, `PROTOCOL_VERSION_UNSUPPORTED`, `RECORDING_EVICTED`, or
+`INTERNAL_ERROR`. MCP returns these in a structured error with `isError: true`.
 
 Raw requests are limited to 1 MiB, encoded responses to 8 MiB, JSON depth to 32, normal JSON strings
 to 16384 code units, and query counts to both the protocol maximum and the runtime's configured

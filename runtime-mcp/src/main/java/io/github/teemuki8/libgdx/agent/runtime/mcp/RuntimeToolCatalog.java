@@ -57,7 +57,7 @@ public final class RuntimeToolCatalog {
                         object(Map.of(), List.of())),
                 tool("runtime_capabilities",
                         "Report capabilities; protocolMinor defaults to frozen V1.0",
-                        sessionInput(Map.of("protocolMinor", integer(0, 11)), List.of())),
+                        sessionInput(Map.of("protocolMinor", integer(0, 12)), List.of())),
                 tool("runtime_frames",
                         "List frame summaries; fromFrame defaults to 0, toFrame to max, limit to 100",
                         queryInput(Map.of(), List.of())),
@@ -228,6 +228,29 @@ public final class RuntimeToolCatalog {
                     "Query explicit runtime/UI frame mappings by UI session or shared token",
                     uiFrameInput()));
         }
+        if (supported.contains("runtime_recording_start")) {
+            selected.add(tool("runtime_recording_start",
+                    "Start or poll one bounded input and execution recording",
+                    recordingStartInput()));
+        }
+        if (supported.contains("runtime_recording_stop")) {
+            selected.add(tool("runtime_recording_stop",
+                    "Stop or poll one bounded input and execution recording",
+                    sessionInput(Map.of(
+                            "recordingId", string(),
+                            "recordingRequestId", string(),
+                            "timeoutNanos", integer(1, Long.MAX_VALUE)),
+                            List.of("recordingId", "recordingRequestId", "timeoutNanos"))));
+        }
+        if (supported.contains("runtime_recording_get")) {
+            selected.add(tool("runtime_recording_get",
+                    "Retrieve one bounded immutable recording manifest chunk",
+                    sessionInput(Map.of(
+                            "recordingId", string(),
+                            "offset", integer(0, Integer.MAX_VALUE),
+                            "limit", integer(1, MAX_RESULTS)),
+                            List.of("recordingId", "offset", "limit"))));
+        }
         selected.removeIf(tool -> !supported.contains(tool.name()));
         tools = List.copyOf(selected);
         LinkedHashMap<String, McpSchema.Tool> index = new LinkedHashMap<>();
@@ -388,6 +411,27 @@ public final class RuntimeToolCatalog {
         return Map.of("oneOf", List.of(
                 object(session, List.of("sessionId", "uiSessionId", "limit")),
                 object(token, List.of("sessionId", "correlationToken", "limit"))));
+    }
+
+    private static Map<String, Object> recordingStartInput() {
+        Map<String, Object> scalar = Map.of("oneOf", List.of(
+                bool(), integer(Long.MIN_VALUE, Long.MAX_VALUE),
+                Map.of("type", "number"), string()));
+        Map<String, Object> configurationEntry = object(
+                Map.of("name", string(), "value", scalar), List.of("name", "value"));
+        LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
+        properties.put("recordingId", string());
+        properties.put("recordingRequestId", string());
+        properties.put("scenarioId", string());
+        properties.put("checkpointId", string());
+        properties.put("randomSeed", integer(Long.MIN_VALUE, Long.MAX_VALUE));
+        properties.put("configuration", Map.of(
+                "type", "array", "items", configurationEntry, "maxItems", 64));
+        properties.put("replayGuaranteed", bool());
+        properties.put("timeoutNanos", integer(1, Long.MAX_VALUE));
+        return sessionInput(properties, List.of(
+                "recordingId", "recordingRequestId", "configuration",
+                "replayGuaranteed", "timeoutNanos"));
     }
 
     private static Map<String, Object> assertionInput() {

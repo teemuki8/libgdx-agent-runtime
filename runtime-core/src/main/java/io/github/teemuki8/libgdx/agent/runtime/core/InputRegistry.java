@@ -13,6 +13,7 @@ import java.util.TreeMap;
 
 /** Explicit bounded registry and deterministic controlled-tick scheduler for input facts. */
 public final class InputRegistry {
+    private final Object submissionLock = new Object();
     private final AgentRuntime runtime;
     private final InputLimits limits;
     private final LinkedHashMap<String, InputSpec> inputs = new LinkedHashMap<>();
@@ -56,6 +57,15 @@ public final class InputRegistry {
      * tick.
      */
     public InputInjection inject(String inputId, String requestId,
+            RuntimeValue.ObjectValue parameters, OptionalLong requestedTargetTick,
+            Duration timeout) {
+        synchronized (submissionLock) {
+            return injectOrdered(
+                    inputId, requestId, parameters, requestedTargetTick, timeout);
+        }
+    }
+
+    private InputInjection injectOrdered(String inputId, String requestId,
             RuntimeValue.ObjectValue parameters, OptionalLong requestedTargetTick,
             Duration timeout) {
         Objects.requireNonNull(parameters, "parameters");
@@ -205,10 +215,22 @@ public final class InputRegistry {
 
     private synchronized InputInjection snapshot(Evidence evidence, CommandLookup command) {
         reconcileTerminalDispatch(evidence, command);
-        return new InputInjection(evidence.inputId, evidence.requestId, command, evidence.state,
+        InputInjection injection = new InputInjection(
+                evidence.inputId, evidence.requestId, command, evidence.state,
                 evidence.targetTick, evidence.actualTick, evidence.executionEpochId,
                 evidence.submittedFrameId, evidence.resultingFrameId,
                 evidence.recordedParameters, evidence.parametersRedacted, evidence.diagnostic);
+        runtime.recordings().recordInput(injection);
+        return injection;
+    }
+
+    synchronized Optional<InputInjection> recording(String requestId) {
+        Evidence evidence = requests.get(requestId);
+        if (evidence == null || runtime.commands().isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(snapshot(
+                evidence, runtime.commands().orElseThrow().status(requestId)));
     }
 
     private void reconcileTerminalDispatch(Evidence evidence, CommandLookup command) {

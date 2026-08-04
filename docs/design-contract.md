@@ -69,6 +69,14 @@ This document makes lifecycle and evidence edge cases explicit.
     and UI generation; stale matches are reported as `EXPIRED`, never guessed. Bidirectional queries,
     frame-correlation retention, strings, and results are bounded with explicit ambiguity,
     truncation, and eviction evidence. The runtime does not inspect UI objects or visual output.
+29. Recordings are explicit application-command operations that capture only registered input,
+    validated closed action parameters and outcomes, controlled-tick evidence, and completed-frame
+    references into an immutable bounded manifest. Protocol/capability versions, optional
+    scenario/checkpoint IDs, random seed, and allowlisted scalar configuration are embedded at start.
+    Item, tick-span, duration, exact canonical encoded-size, and retention bounds expose stop,
+    truncation, incompleteness, and eviction evidence. Paged retrieval remains independently bounded
+    by protocol and MCP response limits. Recording creates no input hooks or replay executor and never
+    claims replayability unless the application explicitly does so.
 
 Closing during a frame is rejected. `frame` completes capture and rethrows callback failure.
 Disabled runtimes retain no providers or frames and perform no serialization.

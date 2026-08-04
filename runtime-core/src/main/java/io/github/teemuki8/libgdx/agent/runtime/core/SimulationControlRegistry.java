@@ -192,6 +192,8 @@ public final class SimulationControlRegistry {
                     }
                     evidence.finalFrameId = Optional.of(expected);
                 }
+                runtime.recordings().recordTick(
+                        tick, signature.deltaNanos, runtime.currentEpoch(), expected);
                 if (satisfied(evidence, signature)) {
                     return;
                 }

@@ -50,13 +50,16 @@ public final class RuntimeProtocolService {
             "runtime_checkpoints", "runtime_checkpoint_create", "runtime_checkpoint_restore");
     private static final List<String> UI_CORRELATION_TOOLS =
             List.of("runtime_ui_bindings", "runtime_ui_frames");
+    private static final List<String> RECORDING_TOOLS = List.of(
+            "runtime_recording_start", "runtime_recording_stop", "runtime_recording_get");
     private static final List<String> FEATURES = List.of(
             "entities", "frames", "changes", "events", "decisions");
     private static final List<ProtocolVersion> SUPPORTED_VERSIONS =
             List.of(ProtocolVersion.V1, ProtocolVersion.V1_1, ProtocolVersion.V1_2,
                     ProtocolVersion.V1_3, ProtocolVersion.V1_4, ProtocolVersion.V1_5,
                     ProtocolVersion.V1_6, ProtocolVersion.V1_7, ProtocolVersion.V1_8,
-                    ProtocolVersion.V1_9, ProtocolVersion.V1_10, ProtocolVersion.V1_11);
+                    ProtocolVersion.V1_9, ProtocolVersion.V1_10, ProtocolVersion.V1_11,
+                    ProtocolVersion.V1_12);
     private final RuntimeRegistry registry;
 
     /** Creates a service over an isolated or global registry. */
@@ -101,7 +104,10 @@ public final class RuntimeProtocolService {
         }
         boolean uiCorrelations = registry.sessions().stream()
                 .anyMatch(runtime -> runtime.uiCorrelations().available());
-        return uiCorrelations ? Stream.concat(tools, UI_CORRELATION_TOOLS.stream()).toList()
+        if (uiCorrelations) {
+            tools = Stream.concat(tools, UI_CORRELATION_TOOLS.stream());
+        }
+        return commandDispatch ? Stream.concat(tools, RECORDING_TOOLS.stream()).toList()
                 : tools.toList();
     }
 
@@ -138,7 +144,8 @@ public final class RuntimeProtocolService {
         if (!SUPPORTED_VERSIONS.contains(request.version())) {
             return failure(request, ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                     "protocol version is unsupported", Map.of(
-                            "supported", "1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10,1.11",
+                            "supported",
+                            "1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10,1.11,1.12",
                             "requested", request.version().major() + "." + request.version().minor()));
         }
         try {
@@ -183,6 +190,13 @@ public final class RuntimeProtocolService {
                 throw new ProtocolFailure(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                         "command requires protocol version 1.11", Map.of());
             }
+            if ((request.command() instanceof RuntimeCommand.RecordingStart
+                    || request.command() instanceof RuntimeCommand.RecordingStop
+                    || request.command() instanceof RuntimeCommand.RecordingGet)
+                    && request.version().minor() < 12) {
+                throw new ProtocolFailure(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
+                        "command requires protocol version 1.12", Map.of());
+            }
             if ((request.command() instanceof RuntimeCommand.Control
                     || request.command() instanceof RuntimeCommand.Advance
                     || request.command() instanceof RuntimeCommand.Wait)
@@ -208,8 +222,11 @@ public final class RuntimeProtocolService {
         } catch (ProtocolFailure failure) {
             return failure(request, failure.code, failure.getMessage(), failure.details);
         } catch (AgentRuntimeException failure) {
-            ProtocolErrorCode code = failure.code().name().equals("LIMIT_EXCEEDED")
-                    ? ProtocolErrorCode.LIMIT_EXCEEDED : ProtocolErrorCode.INVALID_QUERY;
+            ProtocolErrorCode code = switch (failure.code()) {
+                case LIMIT_EXCEEDED -> ProtocolErrorCode.LIMIT_EXCEEDED;
+                case RECORDING_EVICTED -> ProtocolErrorCode.RECORDING_EVICTED;
+                default -> ProtocolErrorCode.INVALID_QUERY;
+            };
             return failure(request, code, failure.getMessage(), Map.of());
         } catch (IllegalArgumentException failure) {
             return failure(request, ProtocolErrorCode.INVALID_QUERY,
@@ -272,6 +289,10 @@ public final class RuntimeProtocolService {
                     new RuntimeResponse.Result.Checkpoints(runtime.checkpoints().list());
             case RuntimeCommand.CheckpointCreate command -> checkpointCreate(runtime, command);
             case RuntimeCommand.CheckpointRestore command -> checkpointRestore(runtime, command);
+            case RuntimeCommand.RecordingStart command -> recordingStart(runtime, command);
+            case RuntimeCommand.RecordingStop command -> recordingStop(runtime, command);
+            case RuntimeCommand.RecordingGet command -> new RuntimeResponse.Result.RecordingChunkResult(
+                    runtime.recordings().get(command.recordingId(), command.offset(), command.limit()));
             case RuntimeCommand.Sessions ignored ->
                     throw new AssertionError("sessions handled before runtime lookup");
         };
@@ -561,6 +582,30 @@ public final class RuntimeProtocolService {
                             "explicit-frame-mapping"),
                     List.of("execution-epochs", "explicit-correlation")));
         }
+        if (version.minor() >= 12) {
+            boolean available = runtime.commands().isPresent();
+            var recordingLimits = runtime.recordings().limits();
+            details.add(new RuntimeCapability(
+                    "recording", ProtocolVersion.V1_12,
+                    available ? RuntimeCapability.Availability.AVAILABLE
+                            : RuntimeCapability.Availability.UNAVAILABLE,
+                    available ? Optional.empty() : Optional.of("dispatcher-not-registered"),
+                    RuntimeCapability.Access.MUTATING,
+                    List.of("AgentRuntime#recordings", "RecordingRegistry#start",
+                            "RecordingRegistry#stop", "RecordingRegistry#get"),
+                    List.of("recording-start", "recording-stop", "recording-get"),
+                    RECORDING_TOOLS, Map.of(
+                            "retainedRecordings", (long) recordingLimits.retainedRecordings(),
+                            "itemsPerRecording", (long) recordingLimits.itemsPerRecording(),
+                            "maximumEncodedBytes", (long) recordingLimits.maximumEncodedBytes(),
+                            "maximumDurationNanos", recordingLimits.maximumDurationNanos(),
+                            "maximumTickSpan", recordingLimits.maximumTickSpan(),
+                            "retainedOperations", (long) recordingLimits.retainedOperations(),
+                            "chunkItems", (long) recordingLimits.chunkItems(),
+                            "stringLength", (long) recordingLimits.stringLength()),
+                    List.of("application-owned", "bounded", "immutable", "loss-explicit"),
+                    List.of("command-dispatch", "execution-epochs")));
+        }
         return List.copyOf(details);
     }
 
@@ -593,8 +638,11 @@ public final class RuntimeProtocolService {
         if (version.minor() >= 10 && runtime.checkpoints().available()) {
             tools = Stream.concat(tools, CHECKPOINT_TOOLS.stream());
         }
-        return version.minor() >= 11 && runtime.uiCorrelations().available()
-                ? Stream.concat(tools, UI_CORRELATION_TOOLS.stream()).toList() : tools.toList();
+        if (version.minor() >= 11 && runtime.uiCorrelations().available()) {
+            tools = Stream.concat(tools, UI_CORRELATION_TOOLS.stream());
+        }
+        return version.minor() >= 12 && runtime.commands().isPresent()
+                ? Stream.concat(tools, RECORDING_TOOLS.stream()).toList() : tools.toList();
     }
 
     private static RuntimeResponse.Result assertion(
@@ -732,6 +780,51 @@ public final class RuntimeProtocolService {
                     "runtime/UI correlation is unavailable",
                     Map.of("sessionId", runtime.sessionId().value(),
                             "capability", "runtime-ui-correlation"));
+        }
+    }
+
+    private static RuntimeResponse.Result recordingStart(
+            AgentRuntime runtime, RuntimeCommand.RecordingStart command) {
+        requireRecordingDispatch(runtime, command.timeoutNanos());
+        List<io.github.teemuki8.libgdx.agent.runtime.core.RecordingCapabilityVersion> versions =
+                capabilityDetails(runtime, ProtocolVersion.V1_12).stream()
+                        .map(capability ->
+                                new io.github.teemuki8.libgdx.agent.runtime.core
+                                        .RecordingCapabilityVersion(
+                                                capability.id(),
+                                                capability.capabilityVersion().major() + "."
+                                                        + capability.capabilityVersion().minor()))
+                        .toList();
+        var spec = new io.github.teemuki8.libgdx.agent.runtime.core.RecordingSpec(
+                command.recordingId(), "1.12", versions,
+                Optional.ofNullable(command.scenarioId()),
+                Optional.ofNullable(command.checkpointId()),
+                command.randomSeed() == null ? java.util.OptionalLong.empty()
+                        : java.util.OptionalLong.of(command.randomSeed()),
+                command.configuration(),
+                command.replayGuaranteed());
+        return new RuntimeResponse.Result.RecordingOperationResult(
+                runtime.recordings().start(spec, command.recordingRequestId(),
+                        Duration.ofNanos(command.timeoutNanos())));
+    }
+
+    private static RuntimeResponse.Result recordingStop(
+            AgentRuntime runtime, RuntimeCommand.RecordingStop command) {
+        requireRecordingDispatch(runtime, command.timeoutNanos());
+        return new RuntimeResponse.Result.RecordingOperationResult(
+                runtime.recordings().stop(command.recordingId(),
+                        command.recordingRequestId(), Duration.ofNanos(command.timeoutNanos())));
+    }
+
+    private static void requireRecordingDispatch(AgentRuntime runtime, long timeoutNanos) {
+        if (runtime.commands().isEmpty()) {
+            throw capabilityUnavailable(runtime);
+        }
+        long maximum = runtime.commands().orElseThrow().limits().maximumTimeoutNanos();
+        if (timeoutNanos > maximum) {
+            throw new ProtocolFailure(ProtocolErrorCode.LIMIT_EXCEEDED,
+                    "recording timeout exceeds the configured limit",
+                    Map.of("maximumTimeoutNanos", Long.toString(maximum)));
         }
     }
 

@@ -14,6 +14,11 @@ import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeAssertion;
+import io.github.teemuki8.libgdx.agent.runtime.core.RecordingActionEntry;
+import io.github.teemuki8.libgdx.agent.runtime.core.RecordingEntry;
+import io.github.teemuki8.libgdx.agent.runtime.core.RecordingFrameEntry;
+import io.github.teemuki8.libgdx.agent.runtime.core.RecordingInputEntry;
+import io.github.teemuki8.libgdx.agent.runtime.core.RecordingTickEntry;
 import java.io.IOException;
 import java.util.Objects;
 
@@ -135,6 +140,7 @@ public final class ProtocolJson {
                 .build();
         mapper.addMixIn(RuntimeValue.class, RuntimeValueMixin.class);
         mapper.addMixIn(RuntimeAssertion.class, RuntimeAssertionMixin.class);
+        mapper.addMixIn(RecordingEntry.class, RecordingEntryMixin.class);
         return mapper;
     }
 
@@ -177,6 +183,15 @@ public final class ProtocolJson {
                 name = "snapshotsEquivalent")
     })
     private interface RuntimeAssertionMixin {}
+
+    @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "entryType")
+    @JsonSubTypes({
+        @JsonSubTypes.Type(value = RecordingActionEntry.class, name = "action"),
+        @JsonSubTypes.Type(value = RecordingInputEntry.class, name = "input"),
+        @JsonSubTypes.Type(value = RecordingFrameEntry.class, name = "frame"),
+        @JsonSubTypes.Type(value = RecordingTickEntry.class, name = "tick")
+    })
+    private interface RecordingEntryMixin {}
 
     /** Local codec failure with a stable safe category. */
     @SuppressWarnings("serial")

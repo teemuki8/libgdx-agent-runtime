@@ -8,11 +8,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
 import io.github.teemuki8.libgdx.agent.runtime.core.CommandState;
+import io.github.teemuki8.libgdx.agent.runtime.core.CommandDispatchLimits;
 import io.github.teemuki8.libgdx.agent.runtime.core.BaselineKind;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeAssertion;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import io.github.teemuki8.libgdx.agent.runtime.mcp.RuntimeToolHandler;
+import io.github.teemuki8.libgdx.agent.runtime.mcp.RuntimeMcpServer;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.ProtocolJson;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.ProtocolVersion;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.PublishedRuntime;
@@ -22,12 +24,23 @@ import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeRegistry;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeRequest;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeResponse;
 import io.modelcontextprotocol.spec.McpSchema;
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.nio.channels.Channels;
+import java.nio.channels.Pipe;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 final class FixtureProtocolAndMcpTest {
     @Test
@@ -181,6 +194,63 @@ final class FixtureProtocolAndMcpTest {
     }
 
     @Test
+    void fixtureSemanticActionMatchesMcpProtocolAttributionAndClosedSchema() {
+        ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
+        DeterministicSimulation simulation = new DeterministicSimulation();
+        AgentRuntime runtime = simulation.startRuntime(applicationQueue::addLast);
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime);
+                RuntimeToolHandler handler =
+                        new RuntimeToolHandler(new RuntimeProtocolService(registry))) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            Map<String, Object> action = Map.of(
+                    "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                    "action", "set-tower-state",
+                    "actionRequestId", "fixture-action",
+                    "correlationId", "fixture-action-1",
+                    "parameters", Map.of("state", "ALERT"),
+                    "timeoutNanos", 1_000_000_000);
+            assertFalse(handler.handle(call("runtime_action", action))
+                    .block(Duration.ofSeconds(5)).isError());
+            applicationQueue.removeFirst().run();
+            assertFalse(handler.handle(call("runtime_action", action))
+                    .block(Duration.ofSeconds(5)).isError());
+            RuntimeResponse.Result.Action protocolAction = assertInstanceOf(
+                    RuntimeResponse.Result.Action.class,
+                    assertInstanceOf(RuntimeResponse.Success.class,
+                            new RuntimeProtocolService(registry).execute(new RuntimeRequest(
+                                    ProtocolVersion.V1_6, "fixture-action-protocol",
+                                    DeterministicSimulation.SESSION_ID.value(),
+                                    new RuntimeCommand.Action(
+                                            "set-tower-state", "fixture-action",
+                                            RuntimeValues.object(RuntimeValues.field(
+                                                    "state", RuntimeValues.string("ALERT"))),
+                                            "fixture-action-1", 1_000_000_000)))).result());
+            assertEquals(CommandState.SUCCEEDED,
+                    protocolAction.invocation().command().status().orElseThrow().state());
+            RuntimeResponse.Result.Changes attributed = assertInstanceOf(
+                    RuntimeResponse.Result.Changes.class,
+                    assertInstanceOf(RuntimeResponse.Success.class,
+                            new RuntimeProtocolService(registry).execute(new RuntimeRequest(
+                                    ProtocolVersion.V1_5, "fixture-attribution",
+                                    DeterministicSimulation.SESSION_ID.value(),
+                                    new RuntimeCommand.AttributedChanges(
+                                            0, 1, "tower-1", null, "state",
+                                            "fixture-action", "fixture-action-1", 8)))).result());
+            assertEquals(1, attributed.page().items().size());
+            assertEquals(1, simulation.actionExecutions());
+            assertEquals(Thread.currentThread(), simulation.lastMutationThread());
+
+            Map<String, Object> unknown = new java.util.LinkedHashMap<>(action);
+            unknown.put("script", "run()");
+            assertTrue(handler.handle(call("runtime_action", unknown))
+                    .block(Duration.ofSeconds(5)).isError());
+            assertEquals(1, simulation.actionExecutions());
+        }
+        runtime.close();
+    }
+
+    @Test
     void fixtureControlPausesNormalUpdatesAdvancesExactlyAndWaitsForCondition() {
         ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
         DeterministicSimulation simulation = new DeterministicSimulation();
@@ -226,6 +296,8 @@ final class FixtureProtocolAndMcpTest {
                                             "advance-fixture", 2, 16_000_000,
                                             1_000_000_000)))).result());
             assertEquals(2, advancedProtocol.operation().orElseThrow().completedTicks());
+            assertEquals(List.of(16_000_000L, 16_000_000L),
+                    simulation.controlledDeltaNanos());
             assertEquals(2, runtime.latestFrame().orElseThrow().frameId().value());
             McpSchema.CallToolResult injected =
                     handler.handle(call("runtime_input", input)).block(Duration.ofSeconds(5));
@@ -318,14 +390,30 @@ final class FixtureProtocolAndMcpTest {
 
     @Test
     void fixtureExposesResetBaselineEpochThroughProtocolAndMcp() {
+        ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
         DeterministicSimulation simulation = new DeterministicSimulation();
-        AgentRuntime runtime = simulation.startRuntime();
-        runtime.startEpoch(BaselineKind.SCENARIO_RESET);
+        AgentRuntime runtime = simulation.startRuntime(applicationQueue::addLast);
+        simulation.advance(runtime, 20);
         RuntimeRegistry registry = new RuntimeRegistry();
         try (PublishedRuntime publication = registry.publish(runtime);
                 RuntimeToolHandler handler =
                         new RuntimeToolHandler(new RuntimeProtocolService(registry))) {
             assertEquals(runtime.sessionId(), publication.sessionId());
+            Map<String, Object> reset = Map.of(
+                    "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                    "scenarioId", "deterministic-fixture",
+                    "resetRequestId", "fixture-reset",
+                    "timeoutNanos", 1_000_000_000);
+            assertFalse(handler.handle(call("runtime_reset", reset))
+                    .block(Duration.ofSeconds(5)).isError());
+            applicationQueue.removeFirst().run();
+            McpSchema.CallToolResult resetResult = handler.handle(call("runtime_reset", reset))
+                    .block(Duration.ofSeconds(5));
+            assertFalse(resetResult.isError());
+            assertTrue(resetResult.structuredContent().toString().contains("baselineFrameId"));
+            assertEquals(BaselineKind.SCENARIO_RESET,
+                    runtime.latestFrame().orElseThrow().baselineKind().orElseThrow());
+
             RuntimeResponse.Result.EpochFrames protocol = assertInstanceOf(
                     RuntimeResponse.Result.EpochFrames.class,
                     assertInstanceOf(RuntimeResponse.Success.class,
@@ -340,6 +428,8 @@ final class FixtureProtocolAndMcpTest {
             assertNotNull(mcp);
             assertFalse(mcp.isError());
             assertTrue(mcp.structuredContent().toString().contains("SCENARIO_RESET"));
+            simulation.advance(runtime, 1);
+            assertEquals(3, runtime.latestFrame().orElseThrow().frameId().value());
         }
         runtime.close();
     }
@@ -467,6 +557,149 @@ final class FixtureProtocolAndMcpTest {
             assertTrue(result.structuredContent().toString().contains("completedRepeats"));
         }
         runtime.close();
+    }
+
+    @Test
+    void fixtureReportsBoundedFailureTruncationAndEvictionEvidenceThroughMcp() {
+        ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
+        DeterministicSimulation simulation = new DeterministicSimulation();
+        CommandDispatchLimits limits = new CommandDispatchLimits(
+                8, 1, 4, Duration.ofSeconds(1).toNanos(), 128);
+        AgentRuntime runtime = simulation.startRuntime(applicationQueue::addLast, limits);
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime);
+                RuntimeToolHandler handler =
+                        new RuntimeToolHandler(new RuntimeProtocolService(registry))) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            runtime.commands().orElseThrow().submit(
+                    "fixture-failure", Duration.ofSeconds(1),
+                    () -> {
+                        throw new IllegalStateException("fixture callback rejected");
+                    });
+            applicationQueue.removeFirst().run();
+            McpSchema.CallToolResult failed = handler.handle(call(
+                    "runtime_command_status", Map.of(
+                            "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                            "commandRequestId", "fixture-failure")))
+                    .block(Duration.ofSeconds(5));
+            assertFalse(failed.isError());
+            assertTrue(failed.structuredContent().toString().contains("FAILED"));
+            assertTrue(failed.structuredContent().toString().contains("command failed"));
+
+            runtime.commands().orElseThrow().submit("fixture-timeout", 0, () -> {});
+            McpSchema.CallToolResult timedOut = handler.handle(call(
+                    "runtime_command_status", Map.of(
+                            "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                            "commandRequestId", "fixture-timeout")))
+                    .block(Duration.ofSeconds(5));
+            assertFalse(timedOut.isError());
+            assertTrue(timedOut.structuredContent().toString().contains("TIMED_OUT"));
+
+            McpSchema.CallToolResult truncated = handler.handle(call(
+                    "runtime_snapshot", Map.of(
+                            "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                            "frameId", 0,
+                            "limit", 1))).block(Duration.ofSeconds(5));
+            assertFalse(truncated.isError(), () -> truncated.toString());
+            assertTrue(truncated.structuredContent().toString().contains("hasMore=true"));
+
+            McpSchema.CallToolResult inconclusive = handler.handle(call(
+                    "runtime_assert", Map.of(
+                            "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                            "fromFrame", 0, "toFrame", 1, "executionEpochId", 0,
+                            "evidenceLimit", 8, "assertion", Map.of(
+                                    "assertionType", "eventDoesNotOccur",
+                                    "eventType", "missing.fixture.event"))))
+                    .block(Duration.ofSeconds(5));
+            assertFalse(inconclusive.isError());
+            assertTrue(inconclusive.structuredContent().toString().contains("INCONCLUSIVE"));
+
+            runtime.commands().orElseThrow().submit(
+                    "fixture-evicted", Duration.ofSeconds(1), () -> {});
+            applicationQueue.removeFirst().run();
+            runtime.commands().orElseThrow().submit(
+                    "fixture-replacement", Duration.ofSeconds(1), () -> {});
+            applicationQueue.removeFirst().run();
+            McpSchema.CallToolResult evicted = handler.handle(call(
+                    "runtime_command_status", Map.of(
+                            "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                            "commandRequestId", "fixture-evicted")))
+                    .block(Duration.ofSeconds(5));
+            assertFalse(evicted.isError());
+            assertTrue(evicted.structuredContent().toString().contains("EXPIRED"),
+                    () -> evicted.toString());
+        }
+        runtime.close();
+    }
+
+    @Test
+    @Timeout(10)
+    void fixtureControlAndActionCrossTheRealStdioMcpBoundary() throws Exception {
+        ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
+        DeterministicSimulation simulation = new DeterministicSimulation();
+        AgentRuntime runtime = simulation.startRuntime(applicationQueue::addLast);
+        RuntimeRegistry registry = new RuntimeRegistry();
+        Pipe requestPipe = Pipe.open();
+        Pipe responsePipe = Pipe.open();
+        try (PublishedRuntime publication = registry.publish(runtime);
+                InputStream serverInput = Channels.newInputStream(requestPipe.source());
+                OutputStream clientOutput = Channels.newOutputStream(requestPipe.sink());
+                InputStream clientInput = Channels.newInputStream(responsePipe.source());
+                OutputStream serverOutput = Channels.newOutputStream(responsePipe.sink());
+                RuntimeMcpServer server = RuntimeMcpServer.open(
+                        new RuntimeProtocolService(registry), serverInput, serverOutput);
+                BufferedWriter requests = new BufferedWriter(new OutputStreamWriter(
+                        clientOutput, StandardCharsets.UTF_8));
+                BufferedReader responses = new BufferedReader(new InputStreamReader(
+                        clientInput, StandardCharsets.UTF_8))) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            String initialized = exchange(requests, responses,
+                    "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{"
+                            + "\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},"
+                            + "\"clientInfo\":{\"name\":\"fixture-test\",\"version\":\"1\"}}}");
+            assertTrue(initialized.contains("\"result\""));
+            requests.write(
+                    "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n");
+            requests.flush();
+
+            String pauseRequest =
+                    "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{"
+                            + "\"name\":\"runtime_control\",\"arguments\":{"
+                            + "\"sessionId\":\"deterministic-fixture\",\"action\":\"PAUSE\","
+                            + "\"controlRequestId\":\"stdio-pause\","
+                            + "\"timeoutNanos\":1000000000}}}";
+            assertTrue(exchange(requests, responses, pauseRequest).contains("QUEUED"));
+            applicationQueue.removeFirst().run();
+            assertTrue(exchange(requests, responses,
+                    pauseRequest.replace("\"id\":2", "\"id\":3")).contains("SUCCEEDED"));
+
+            String actionRequest =
+                    "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{"
+                            + "\"name\":\"runtime_action\",\"arguments\":{"
+                            + "\"sessionId\":\"deterministic-fixture\","
+                            + "\"action\":\"set-tower-state\","
+                            + "\"actionRequestId\":\"stdio-action\","
+                            + "\"correlationId\":\"fixture-action-1\","
+                            + "\"parameters\":{\"state\":\"ALERT\"},"
+                            + "\"timeoutNanos\":1000000000}}}";
+            assertTrue(exchange(requests, responses, actionRequest).contains("QUEUED"));
+            applicationQueue.removeFirst().run();
+            assertTrue(exchange(requests, responses,
+                    actionRequest.replace("\"id\":4", "\"id\":5")).contains("SUCCEEDED"));
+            assertEquals(1, simulation.actionExecutions());
+            assertEquals(Thread.currentThread(), simulation.lastMutationThread());
+            requestPipe.sink().close();
+            server.awaitTermination();
+        }
+        runtime.close();
+    }
+
+    private static String exchange(
+            BufferedWriter requests, BufferedReader responses, String request) throws IOException {
+        requests.write(request);
+        requests.newLine();
+        requests.flush();
+        return responses.readLine();
     }
 
     private static Fixture fixture() {

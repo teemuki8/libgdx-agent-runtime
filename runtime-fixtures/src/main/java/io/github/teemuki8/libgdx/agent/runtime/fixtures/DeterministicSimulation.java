@@ -1,14 +1,18 @@
 package io.github.teemuki8.libgdx.agent.runtime.fixtures;
 
+import io.github.teemuki8.libgdx.agent.runtime.core.ActionSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
 import io.github.teemuki8.libgdx.agent.runtime.core.ApplicationCommandDispatcher;
+import io.github.teemuki8.libgdx.agent.runtime.core.ChangeCause;
 import io.github.teemuki8.libgdx.agent.runtime.core.CheckpointHandle;
 import io.github.teemuki8.libgdx.agent.runtime.core.CheckpointProvider;
+import io.github.teemuki8.libgdx.agent.runtime.core.CommandDispatchLimits;
 import io.github.teemuki8.libgdx.agent.runtime.core.DecisionScope;
 import io.github.teemuki8.libgdx.agent.runtime.core.DecisionType;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityType;
 import io.github.teemuki8.libgdx.agent.runtime.core.EventSpec;
+import io.github.teemuki8.libgdx.agent.runtime.core.FactMetadata;
 import io.github.teemuki8.libgdx.agent.runtime.core.InspectableEntity;
 import io.github.teemuki8.libgdx.agent.runtime.core.InputSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.Reason;
@@ -17,6 +21,7 @@ import io.github.teemuki8.libgdx.agent.runtime.core.SessionId;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationControllerSpec;
 import io.github.teemuki8.libgdx.agent.runtime.libgdx.LibGdxAgentRuntime;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
@@ -30,6 +35,9 @@ public final class DeterministicSimulation {
     private final List<Unit> enemies = new ArrayList<>();
     private boolean paused;
     private int nextControlledFrame = 1;
+    private Thread lastMutationThread;
+    private int actionExecutions;
+    private final List<Long> controlledDeltaNanos = new ArrayList<>();
 
     /** Creates initial fixture state. */
     public DeterministicSimulation() {
@@ -44,11 +52,16 @@ public final class DeterministicSimulation {
 
     /** Creates and starts a runtime with an explicit application command bridge. */
     public AgentRuntime startRuntime(ApplicationCommandDispatcher dispatcher) {
+        return startRuntime(dispatcher, CommandDispatchLimits.developmentDefaults());
+    }
+
+    AgentRuntime startRuntime(
+            ApplicationCommandDispatcher dispatcher, CommandDispatchLimits dispatchLimits) {
         LibGdxAgentRuntime.Builder builder = LibGdxAgentRuntime.builder()
                 .captureThread(Thread.currentThread())
                 .sessionId(SESSION_ID);
         if (dispatcher != null) {
-            builder.commandDispatcher(dispatcher);
+            builder.commandDispatcher(dispatcher).commandDispatchLimits(dispatchLimits);
         }
         AgentRuntime runtime = builder.build();
         register(runtime, player);
@@ -64,7 +77,10 @@ public final class DeterministicSimulation {
         runtime.inputs().register(InputSpec.builder("set-player-state")
                 .description("Sets the deterministic player state on a controlled tick")
                 .requiredString("state")
-                .handler(parameters -> player.state = parameters.requiredString("state"))
+                .handler(parameters -> {
+                    observeMutation();
+                    player.state = parameters.requiredString("state");
+                })
                 .build());
         if (dispatcher != null) {
             runtime.scenarios().register(
@@ -72,24 +88,57 @@ public final class DeterministicSimulation {
                             "deterministic-fixture", Optional.of(
                                     "Restores the seeded deterministic fixture state")),
                     context -> {
-                        context.randomSeed().orElseThrow();
+                        observeMutation();
                         reset();
                     });
+            runtime.actions().register(ActionSpec.builder("set-tower-state")
+                    .description("Sets tower state with explicit fixture attribution")
+                    .requiredString("state")
+                    .handler(parameters -> {
+                        observeMutation();
+                        actionExecutions++;
+                        runtime.frame(1, () -> {
+                            runtime.causeNextChange(EntityId.of(tower1.id), "state",
+                                    ChangeCause.semantic("fixture.action").withMetadata(
+                                            FactMetadata.empty()
+                                                    .withSourceSubsystem("fixture-action")
+                                                    .withCorrelationId("fixture-action-1")));
+                            tower1.state = parameters.requiredString("state");
+                        });
+                    })
+                    .build());
             runtime.checkpoints().register(new CheckpointProvider() {
                 @Override public CheckpointHandle create() {
+                    observeMutation();
                     return new FixtureCheckpoint(player.state, tower1.state);
                 }
                 @Override public void restore(CheckpointHandle handle) {
+                    observeMutation();
                     FixtureCheckpoint checkpoint = (FixtureCheckpoint) handle;
                     player.state = checkpoint.playerState();
                     tower1.state = checkpoint.towerState();
                 }
-                @Override public void dispose(CheckpointHandle handle) {}
+                @Override public void dispose(CheckpointHandle handle) {
+                    observeMutation();
+                }
             });
             runtime.controls().register(SimulationControllerSpec.builder()
-                    .pause(() -> paused = true)
-                    .resume(() -> paused = false)
-                    .tick(deltaNanos -> advanceControlled(runtime))
+                    .pause(() -> {
+                        observeMutation();
+                        paused = true;
+                        nextControlledFrame = Math.max(nextControlledFrame,
+                                Math.toIntExact(runtime.latestFrame().orElseThrow()
+                                        .frameId().value() + 1));
+                    })
+                    .resume(() -> {
+                        observeMutation();
+                        paused = false;
+                    })
+                    .tick(deltaNanos -> {
+                        controlledDeltaNanos.add(deltaNanos);
+                        observeMutation();
+                        advanceControlled(runtime);
+                    })
                     .condition("frame-48-complete", "Fixture frame 48 has completed",
                             () -> nextControlledFrame > 48)
                     .build());
@@ -113,6 +162,22 @@ public final class DeterministicSimulation {
 
     private void advanceControlled(AgentRuntime runtime) {
         update(runtime, nextControlledFrame++);
+    }
+
+    Thread lastMutationThread() {
+        return lastMutationThread;
+    }
+
+    int actionExecutions() {
+        return actionExecutions;
+    }
+
+    List<Long> controlledDeltaNanos() {
+        return Collections.unmodifiableList(new ArrayList<>(controlledDeltaNanos));
+    }
+
+    private void observeMutation() {
+        lastMutationThread = Thread.currentThread();
     }
 
     private void update(AgentRuntime runtime, int frame) {
@@ -161,7 +226,7 @@ public final class DeterministicSimulation {
         enemies.clear();
         enemies.add(new Unit("enemy-1", "enemy", 100, 20, 5, "MOVING"));
         enemies.add(new Unit("enemy-2", "enemy", 100, 8, 1, "MOVING"));
-        paused = true;
+        controlledDeltaNanos.clear();
         nextControlledFrame = 1;
     }
 

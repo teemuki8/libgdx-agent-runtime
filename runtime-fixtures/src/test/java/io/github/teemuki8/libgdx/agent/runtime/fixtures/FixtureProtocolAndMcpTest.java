@@ -139,6 +139,81 @@ final class FixtureProtocolAndMcpTest {
     }
 
     @Test
+    void fixtureControlPausesNormalUpdatesAdvancesExactlyAndWaitsForCondition() {
+        ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
+        DeterministicSimulation simulation = new DeterministicSimulation();
+        AgentRuntime runtime = simulation.startRuntime(applicationQueue::addLast);
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime);
+                RuntimeToolHandler handler =
+                        new RuntimeToolHandler(new RuntimeProtocolService(registry))) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            Map<String, Object> pause = Map.of(
+                    "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                    "action", "PAUSE", "controlRequestId", "pause-fixture",
+                    "timeoutNanos", 1_000_000_000);
+            handler.handle(call("runtime_control", pause)).block(Duration.ofSeconds(5));
+            applicationQueue.removeFirst().run();
+            simulation.advance(runtime, 1);
+            assertEquals(0, runtime.latestFrame().orElseThrow().frameId().value());
+
+            Map<String, Object> advance = Map.of(
+                    "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                    "controlRequestId", "advance-fixture", "ticks", 2,
+                    "deltaNanos", 16_000_000, "timeoutNanos", 1_000_000_000);
+            handler.handle(call("runtime_advance", advance)).block(Duration.ofSeconds(5));
+            applicationQueue.removeFirst().run();
+            McpSchema.CallToolResult advanced =
+                    handler.handle(call("runtime_advance", advance)).block(Duration.ofSeconds(5));
+            assertFalse(advanced.isError());
+            RuntimeResponse.Result.Control advancedProtocol = assertInstanceOf(
+                    RuntimeResponse.Result.Control.class,
+                    assertInstanceOf(RuntimeResponse.Success.class,
+                            new RuntimeProtocolService(registry).execute(new RuntimeRequest(
+                                    ProtocolVersion.V1_8, "advance-evidence",
+                                    DeterministicSimulation.SESSION_ID.value(),
+                                    new RuntimeCommand.Advance(
+                                            "advance-fixture", 2, 16_000_000,
+                                            1_000_000_000)))).result());
+            assertEquals(2, advancedProtocol.operation().orElseThrow().completedTicks());
+            assertEquals(2, runtime.latestFrame().orElseThrow().frameId().value());
+
+            Map<String, Object> wait = Map.of(
+                    "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                    "controlRequestId", "wait-fixture", "conditionId", "frame-48-complete",
+                    "maximumTicks", 46, "deltaNanos", 16_000_000,
+                    "evidenceLimit", 8, "timeoutNanos", 1_000_000_000);
+            handler.handle(call("runtime_wait", wait)).block(Duration.ofSeconds(5));
+            applicationQueue.removeFirst().run();
+            McpSchema.CallToolResult waited =
+                    handler.handle(call("runtime_wait", wait)).block(Duration.ofSeconds(5));
+            assertFalse(waited.isError());
+            RuntimeResponse.Result.Control waitedProtocol = assertInstanceOf(
+                    RuntimeResponse.Result.Control.class,
+                    assertInstanceOf(RuntimeResponse.Success.class,
+                            new RuntimeProtocolService(registry).execute(new RuntimeRequest(
+                                    ProtocolVersion.V1_8, "wait-evidence",
+                                    DeterministicSimulation.SESSION_ID.value(),
+                                    new RuntimeCommand.Wait(
+                                            "wait-fixture", "frame-48-complete", null,
+                                            46, 16_000_000, 8, 1_000_000_000)))).result());
+            assertEquals("CONDITION_SATISFIED",
+                    waitedProtocol.operation().orElseThrow().stopReason().name());
+            assertEquals(48, runtime.latestFrame().orElseThrow().frameId().value());
+
+            Map<String, Object> resume = Map.of(
+                    "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                    "action", "RESUME", "controlRequestId", "resume-fixture",
+                    "timeoutNanos", 1_000_000_000);
+            handler.handle(call("runtime_control", resume)).block(Duration.ofSeconds(5));
+            applicationQueue.removeFirst().run();
+            simulation.advance(runtime, 49);
+            assertEquals(49, runtime.latestFrame().orElseThrow().frameId().value());
+        }
+        runtime.close();
+    }
+
+    @Test
     void fixtureExposesResetBaselineEpochThroughProtocolAndMcp() {
         DeterministicSimulation simulation = new DeterministicSimulation();
         AgentRuntime runtime = simulation.startRuntime();

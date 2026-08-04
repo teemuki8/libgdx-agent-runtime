@@ -24,7 +24,10 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
     @JsonSubTypes.Type(value = RuntimeCommand.AttributedDecisions.class, name = "attributedDecisions"),
     @JsonSubTypes.Type(value = RuntimeCommand.Actions.class, name = "actions"),
     @JsonSubTypes.Type(value = RuntimeCommand.Action.class, name = "action"),
-    @JsonSubTypes.Type(value = RuntimeCommand.Assert.class, name = "assert")
+    @JsonSubTypes.Type(value = RuntimeCommand.Assert.class, name = "assert"),
+    @JsonSubTypes.Type(value = RuntimeCommand.Control.class, name = "control"),
+    @JsonSubTypes.Type(value = RuntimeCommand.Advance.class, name = "advance"),
+    @JsonSubTypes.Type(value = RuntimeCommand.Wait.class, name = "wait")
 })
 public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeCommand.Capabilities,
         RuntimeCommand.Frames, RuntimeCommand.Snapshot, RuntimeCommand.Entity,
@@ -32,7 +35,8 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
         RuntimeCommand.CommandStatus, RuntimeCommand.CommandCancel, RuntimeCommand.EpochFrames,
         RuntimeCommand.Scenarios, RuntimeCommand.Reset, RuntimeCommand.AttributedChanges,
         RuntimeCommand.AttributedEvents, RuntimeCommand.AttributedDecisions,
-        RuntimeCommand.Actions, RuntimeCommand.Action, RuntimeCommand.Assert {
+        RuntimeCommand.Actions, RuntimeCommand.Action, RuntimeCommand.Assert,
+        RuntimeCommand.Control, RuntimeCommand.Advance, RuntimeCommand.Wait {
     /** Lists published sessions. */
     record Sessions() implements RuntimeCommand {}
 
@@ -260,6 +264,70 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
         }
     }
 
+    /** Simulation control action. */
+    enum ControlAction {
+        /** Read control availability, state, conditions, and limits. */
+        STATUS,
+        /** Gate normal application simulation updates. */
+        PAUSE,
+        /** Resume normal application simulation updates. */
+        RESUME
+    }
+
+    /** Reads or mutates explicit simulation pause state. */
+    record Control(ControlAction action, String controlRequestId, long timeoutNanos)
+            implements RuntimeCommand {
+        public Control {
+            java.util.Objects.requireNonNull(action, "action");
+            if (action == ControlAction.STATUS) {
+                if (controlRequestId != null || timeoutNanos != 0) {
+                    throw new IllegalArgumentException("status does not accept mutation fields");
+                }
+            } else {
+                ProtocolJson.requireIdentifier(controlRequestId, "controlRequestId");
+                requirePositive(timeoutNanos, "timeoutNanos");
+            }
+        }
+    }
+
+    /** Advances an exact bounded number of application-defined ticks while paused. */
+    record Advance(String controlRequestId, int ticks, long deltaNanos, long timeoutNanos)
+            implements RuntimeCommand {
+        public Advance {
+            ProtocolJson.requireIdentifier(controlRequestId, "controlRequestId");
+            requirePositive(ticks, "ticks");
+            if (deltaNanos < 0) {
+                throw new IllegalArgumentException("deltaNanos must be non-negative");
+            }
+            requirePositive(timeoutNanos, "timeoutNanos");
+        }
+    }
+
+    /** Advances until one registered condition or closed assertion is satisfied. */
+    record Wait(String controlRequestId, String conditionId,
+            io.github.teemuki8.libgdx.agent.runtime.core.RuntimeAssertion assertion,
+            int maximumTicks, long deltaNanos, int evidenceLimit, long timeoutNanos)
+            implements RuntimeCommand {
+        public Wait {
+            ProtocolJson.requireIdentifier(controlRequestId, "controlRequestId");
+            requireOptionalIdentifier(conditionId, "conditionId");
+            if ((conditionId == null) == (assertion == null)) {
+                throw new IllegalArgumentException(
+                        "wait requires exactly one conditionId or assertion");
+            }
+            requirePositive(maximumTicks, "maximumTicks");
+            if (deltaNanos < 0) {
+                throw new IllegalArgumentException("deltaNanos must be non-negative");
+            }
+            if (evidenceLimit <= 0
+                    || evidenceLimit
+                            > io.github.teemuki8.libgdx.agent.runtime.core.AssertionScope.MAX_EVIDENCE) {
+                throw new IllegalArgumentException("evidenceLimit is outside the supported range");
+            }
+            requirePositive(timeoutNanos, "timeoutNanos");
+        }
+    }
+
     private static void validateRange(long from, long to) {
         if (from < 0 || to < from) {
             throw new IllegalArgumentException("frame range must be non-negative and ascending");
@@ -276,6 +344,12 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
     private static void requireOptionalIdentifier(String value, String name) {
         if (value != null) {
             ProtocolJson.requireIdentifier(value, name);
+        }
+    }
+
+    private static void requirePositive(long value, String name) {
+        if (value <= 0) {
+            throw new IllegalArgumentException(name + " must be positive");
         }
     }
 }

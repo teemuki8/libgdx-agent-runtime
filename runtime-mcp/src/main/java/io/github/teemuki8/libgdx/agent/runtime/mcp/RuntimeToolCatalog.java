@@ -44,7 +44,7 @@ public final class RuntimeToolCatalog {
                         object(Map.of(), List.of())),
                 tool("runtime_capabilities",
                         "Report capabilities; protocolMinor defaults to frozen V1.0",
-                        sessionInput(Map.of("protocolMinor", integer(0, 7)), List.of())),
+                        sessionInput(Map.of("protocolMinor", integer(0, 8)), List.of())),
                 tool("runtime_frames",
                         "List frame summaries; fromFrame defaults to 0, toFrame to max, limit to 100",
                         queryInput(Map.of(), List.of())),
@@ -151,6 +151,31 @@ public final class RuntimeToolCatalog {
                     "Evaluate one bounded closed assertion over completed immutable evidence",
                     assertionInput()));
         }
+        if (supported.contains("runtime_control")) {
+            selected.add(tool("runtime_control",
+                    "Read control state or submit/poll an idempotent pause or resume",
+                    sessionInput(Map.of(
+                            "action", Map.of("type", "string",
+                                    "enum", List.of("STATUS", "PAUSE", "RESUME")),
+                            "controlRequestId", string(),
+                            "timeoutNanos", integer(1, Long.MAX_VALUE)),
+                            List.of("action"))));
+        }
+        if (supported.contains("runtime_advance")) {
+            selected.add(tool("runtime_advance",
+                    "Advance an exact bounded number of application-owned ticks while paused",
+                    sessionInput(Map.of(
+                            "controlRequestId", string(),
+                            "ticks", integer(1, Integer.MAX_VALUE),
+                            "deltaNanos", integer(0, Long.MAX_VALUE),
+                            "timeoutNanos", integer(1, Long.MAX_VALUE)),
+                            List.of("controlRequestId", "ticks", "deltaNanos", "timeoutNanos"))));
+        }
+        if (supported.contains("runtime_wait")) {
+            selected.add(tool("runtime_wait",
+                    "Advance while paused until a named condition or closed assertion holds",
+                    waitInput()));
+        }
         selected.removeIf(tool -> !supported.contains(tool.name()));
         tools = List.copyOf(selected);
         LinkedHashMap<String, McpSchema.Tool> index = new LinkedHashMap<>();
@@ -251,6 +276,25 @@ public final class RuntimeToolCatalog {
         properties.put("assertion", Map.of("oneOf", assertionSchemas()));
         return object(properties, List.of("sessionId", "fromFrame", "toFrame",
                 "executionEpochId", "evidenceLimit", "assertion"));
+    }
+
+    private static Map<String, Object> waitInput() {
+        LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
+        properties.put("sessionId", string());
+        properties.put("controlRequestId", string());
+        properties.put("conditionId", string());
+        properties.put("assertion", Map.of("oneOf", assertionSchemas()));
+        properties.put("maximumTicks", integer(1, Integer.MAX_VALUE));
+        properties.put("deltaNanos", integer(0, Long.MAX_VALUE));
+        properties.put("evidenceLimit", integer(1, AssertionScope.MAX_EVIDENCE));
+        properties.put("timeoutNanos", integer(1, Long.MAX_VALUE));
+        LinkedHashMap<String, Object> schema = new LinkedHashMap<>(object(properties, List.of(
+                "sessionId", "controlRequestId", "maximumTicks", "deltaNanos",
+                "evidenceLimit", "timeoutNanos")));
+        schema.put("oneOf", List.of(
+                Map.of("required", List.of("conditionId")),
+                Map.of("required", List.of("assertion"))));
+        return Map.copyOf(schema);
     }
 
     private static List<Map<String, Object>> assertionSchemas() {

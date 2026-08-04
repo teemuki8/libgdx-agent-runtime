@@ -11,6 +11,7 @@ import io.github.teemuki8.libgdx.agent.runtime.core.InspectableEntity;
 import io.github.teemuki8.libgdx.agent.runtime.core.Reason;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import io.github.teemuki8.libgdx.agent.runtime.core.SessionId;
+import io.github.teemuki8.libgdx.agent.runtime.core.SimulationControllerSpec;
 import io.github.teemuki8.libgdx.agent.runtime.libgdx.LibGdxAgentRuntime;
 import java.util.ArrayList;
 import java.util.List;
@@ -23,6 +24,8 @@ public final class DeterministicSimulation {
     private final Unit tower1 = new Unit("tower-1", "tower", 100, 0, 0, "IDLE");
     private final Unit tower2 = new Unit("tower-2", "tower", 100, 30, 0, "IDLE");
     private final List<Unit> enemies = new ArrayList<>();
+    private boolean paused;
+    private int nextControlledFrame = 1;
 
     /** Creates initial fixture state. */
     public DeterministicSimulation() {
@@ -48,13 +51,29 @@ public final class DeterministicSimulation {
         register(runtime, tower1);
         register(runtime, tower2);
         runtime.entities().registerSource("enemies", () -> enemies.stream().map(this::inspectable));
+        if (dispatcher != null) {
+            runtime.controls().register(SimulationControllerSpec.builder()
+                    .pause(() -> paused = true)
+                    .resume(() -> paused = false)
+                    .tick(deltaNanos -> advanceControlled(runtime))
+                    .condition("frame-48-complete", "Fixture frame 48 has completed",
+                            () -> nextControlledFrame > 48)
+                    .build());
+        }
         runtime.start();
         return runtime;
     }
 
     /** Advances one exact fixture frame through public runtime APIs. */
     public void advance(AgentRuntime runtime, int frame) {
-        runtime.frame(16_000_000, () -> update(runtime, frame));
+        if (!paused) {
+            nextControlledFrame = Math.max(nextControlledFrame, frame + 1);
+            runtime.frame(16_000_000, () -> update(runtime, frame));
+        }
+    }
+
+    private void advanceControlled(AgentRuntime runtime) {
+        update(runtime, nextControlledFrame++);
     }
 
     private void update(AgentRuntime runtime, int frame) {

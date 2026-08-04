@@ -20,6 +20,7 @@ import io.github.teemuki8.libgdx.agent.runtime.core.ChangeCause;
 import io.github.teemuki8.libgdx.agent.runtime.core.Reason;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import io.github.teemuki8.libgdx.agent.runtime.core.SessionId;
+import io.github.teemuki8.libgdx.agent.runtime.core.SimulationControllerSpec;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.ProtocolJson;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.PublishedRuntime;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeProtocolService;
@@ -352,6 +353,61 @@ final class RuntimeMcpTest {
                     "assertion", Map.of(
                             "assertionType", "entityExists", "entityId", "enemy-1",
                             "expression", "getClass()")))).block(Duration.ofSeconds(5));
+            assertTrue(rejected.isError());
+        }
+    }
+
+    @Test
+    void simulationControlToolsExposeClosedSchemasAndBoundedTickEvidence() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        int[] ticks = {0};
+        AgentRuntime runtime = AgentRuntime.builder().sessionId(SessionId.of("mcp-control"))
+                .clock(() -> 1).commandDispatcher(queue::addLast).build();
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {})
+                .resume(() -> {})
+                .tick(deltaNanos -> ticks[0]++)
+                .condition("ready", "At least one tick completed", () -> ticks[0] > 0)
+                .build());
+        runtime.start();
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime);
+                RuntimeToolHandler handler =
+                        new RuntimeToolHandler(new RuntimeProtocolService(registry))) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            RuntimeToolCatalog catalog =
+                    new RuntimeToolCatalog(new RuntimeProtocolService(registry).toolNames());
+            assertFalse((Boolean) catalog.tool("runtime_wait")
+                    .inputSchema().get("additionalProperties"));
+
+            Map<String, Object> pause = Map.of(
+                    "sessionId", "mcp-control", "action", "PAUSE",
+                    "controlRequestId", "pause-1", "timeoutNanos", 1_000);
+            assertFalse(handler.handle(call("runtime_control", pause))
+                    .block(Duration.ofSeconds(5)).isError());
+            queue.removeFirst().run();
+            McpSchema.CallToolResult paused =
+                    handler.handle(call("runtime_control", pause)).block(Duration.ofSeconds(5));
+            assertEquals(true, ((Map<?, ?>) structured(paused).get("descriptor")).get("paused"));
+
+            Map<String, Object> wait = Map.of(
+                    "sessionId", "mcp-control", "controlRequestId", "wait-1",
+                    "conditionId", "ready", "maximumTicks", 2,
+                    "deltaNanos", 16_666_667, "evidenceLimit", 8, "timeoutNanos", 1_000);
+            handler.handle(call("runtime_wait", wait)).block(Duration.ofSeconds(5));
+            queue.removeFirst().run();
+            McpSchema.CallToolResult completed =
+                    handler.handle(call("runtime_wait", wait)).block(Duration.ofSeconds(5));
+            assertFalse(completed.isError());
+            assertEquals("CONDITION_SATISFIED",
+                    ((Map<?, ?>) structured(completed).get("operation")).get("stopReason"));
+            assertEquals(1, ticks[0]);
+
+            McpSchema.CallToolResult rejected = handler.handle(call("runtime_wait", Map.of(
+                    "sessionId", "mcp-control", "controlRequestId", "wait-2",
+                    "conditionId", "ready", "maximumTicks", 2,
+                    "deltaNanos", 1, "evidenceLimit", 8, "timeoutNanos", 1_000,
+                    "script", "run()"))).block(Duration.ofSeconds(5));
             assertTrue(rejected.isError());
         }
     }

@@ -10,6 +10,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
 import io.github.teemuki8.libgdx.agent.runtime.core.ActionSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.BaselineKind;
+import io.github.teemuki8.libgdx.agent.runtime.core.CheckpointHandle;
+import io.github.teemuki8.libgdx.agent.runtime.core.CheckpointProvider;
 import io.github.teemuki8.libgdx.agent.runtime.core.DecisionScope;
 import io.github.teemuki8.libgdx.agent.runtime.core.DecisionType;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
@@ -494,6 +496,63 @@ final class RuntimeMcpTest {
                     "timeoutNanos", 1_000))).block(Duration.ofSeconds(5)).isError());
         }
     }
+    @Test
+    void checkpointToolsKeepOpaqueHandlesInternalAndReturnRestoreBaseline() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        int[] state = {3};
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("mcp-checkpoint"))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .build();
+        runtime.checkpoints().register(new CheckpointProvider() {
+            @Override public CheckpointHandle create() {
+                return new McpCheckpoint(state[0]);
+            }
+            @Override public void restore(CheckpointHandle handle) {
+                state[0] = ((McpCheckpoint) handle).value();
+            }
+            @Override public void dispose(CheckpointHandle handle) {}
+        });
+        runtime.start();
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime);
+                RuntimeToolHandler handler =
+                        new RuntimeToolHandler(new RuntimeProtocolService(registry))) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            Map<String, Object> create = Map.of(
+                    "sessionId", "mcp-checkpoint", "checkpointId", "save-1",
+                    "description", "Before change", "checkpointRequestId", "create-1",
+                    "timeoutNanos", 1_000);
+            handler.handle(call("runtime_checkpoint_create", create)).block(Duration.ofSeconds(5));
+            queue.removeFirst().run();
+            McpSchema.CallToolResult created = handler.handle(
+                    call("runtime_checkpoint_create", create)).block(Duration.ofSeconds(5));
+            assertFalse(created.isError());
+            assertFalse(created.structuredContent().toString().contains("McpCheckpoint"));
+
+            state[0] = 8;
+            runtime.frame(1, () -> {});
+            Map<String, Object> restore = Map.of(
+                    "sessionId", "mcp-checkpoint", "checkpointId", "save-1",
+                    "checkpointRequestId", "restore-1", "timeoutNanos", 1_000);
+            handler.handle(call("runtime_checkpoint_restore", restore))
+                    .block(Duration.ofSeconds(5));
+            queue.removeFirst().run();
+            McpSchema.CallToolResult restored = handler.handle(
+                    call("runtime_checkpoint_restore", restore)).block(Duration.ofSeconds(5));
+            assertFalse(restored.isError());
+            assertEquals(3, state[0]);
+            Map<?, ?> operation = (Map<?, ?>) structured(restored).get("operation");
+            assertEquals(2L, ((Map<?, ?>) operation.get("baselineFrameId")).get("value"));
+
+            assertTrue(handler.handle(call("runtime_checkpoint_create", Map.of(
+                    "sessionId", "mcp-checkpoint", "checkpointId", "save-2",
+                    "checkpointRequestId", "create-2", "timeoutNanos", 1_000,
+                    "payload", Map.of("state", 3)))).block(Duration.ofSeconds(5)).isError());
+        }
+    }
+
 
     @Test
     @Timeout(10)
@@ -514,6 +573,8 @@ final class RuntimeMcpTest {
         return JSON.convertValue(
                 result.structuredContent(), new TypeReference<Map<String, Object>>() {});
     }
+
+    private record McpCheckpoint(int value) implements CheckpointHandle {}
 
     private static Fixture fixture() {
         long[] health = {100};

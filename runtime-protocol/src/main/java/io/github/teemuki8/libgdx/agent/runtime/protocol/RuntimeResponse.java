@@ -5,6 +5,8 @@ import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import io.github.teemuki8.libgdx.agent.runtime.core.DecisionTrace;
 import io.github.teemuki8.libgdx.agent.runtime.core.CommandLookup;
+import io.github.teemuki8.libgdx.agent.runtime.core.CheckpointDescriptor;
+import io.github.teemuki8.libgdx.agent.runtime.core.CheckpointOperation;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityHistory;
 import io.github.teemuki8.libgdx.agent.runtime.core.EpochFramePage;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntitySnapshot;
@@ -84,13 +86,15 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         @JsonSubTypes.Type(value = Result.Assertion.class, name = "assertion"),
         @JsonSubTypes.Type(value = Result.Control.class, name = "control"),
         @JsonSubTypes.Type(value = Result.Inputs.class, name = "inputs"),
-        @JsonSubTypes.Type(value = Result.Input.class, name = "input")
+        @JsonSubTypes.Type(value = Result.Input.class, name = "input"),
+        @JsonSubTypes.Type(value = Result.Checkpoints.class, name = "checkpoints"),
+        @JsonSubTypes.Type(value = Result.Checkpoint.class, name = "checkpoint")
     })
     sealed interface Result permits Result.Sessions, Result.Capabilities, Result.Frames,
             Result.Snapshot, Result.Entity, Result.Changes, Result.Events, Result.Decisions,
             Result.CommandStatus, Result.CommandCancellation, Result.EpochFrames,
             Result.Scenarios, Result.Reset, Result.Actions, Result.Action, Result.Assertion,
-            Result.Control, Result.Inputs, Result.Input {
+            Result.Control, Result.Inputs, Result.Input, Result.Checkpoints, Result.Checkpoint {
         /** Published session catalog. */
         record Sessions(List<SessionInfo> sessions) implements Result {
             /** Copies sessions. */
@@ -241,6 +245,23 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         record Input(InputInjection injection) implements Result {
             public Input {
                 Objects.requireNonNull(injection, "injection");
+            }
+        }
+
+        /** Retained checkpoint descriptors without opaque application handles. */
+        record Checkpoints(List<CheckpointDescriptor> checkpoints) implements Result {
+            public Checkpoints {
+                checkpoints = List.copyOf(Objects.requireNonNull(checkpoints, "checkpoints"));
+                if (checkpoints.size() > ProtocolJson.MAX_RESULT_ITEMS) {
+                    throw new IllegalArgumentException("too many protocol checkpoints");
+                }
+            }
+        }
+
+        /** Correlated checkpoint mutation and optional baseline evidence. */
+        record Checkpoint(CheckpointOperation operation) implements Result {
+            public Checkpoint {
+                Objects.requireNonNull(operation, "operation");
             }
         }
     }

@@ -59,6 +59,11 @@ This document makes lifecycle and evidence edge cases explicit.
     Requests target the next or a bounded future controlled tick while paused, execute in acceptance
     order on the application-owned command/capture thread, and retain at-most-once tick, epoch, frame,
     redaction, and diagnostic evidence. The runtime installs no global or operating-system input hook.
+27. Checkpoints exist only when an application registers create, restore, and disposal callbacks.
+    The runtime retains bounded descriptors plus opaque handles; handles and payloads never cross the
+    Java inspection, protocol, or MCP boundary. Creation is anchored to the latest quiescent completed
+    frame. Restore runs through application dispatch and claims success only after one new
+    `CHECKPOINT_RESTORE` baseline completes; failures report possible partial application mutation.
 
 Closing during a frame is rejected. `frame` completes capture and rethrows callback failure.
 Disabled runtimes retain no providers or frames and perform no serialization.

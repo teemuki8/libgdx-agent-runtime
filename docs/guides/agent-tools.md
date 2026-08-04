@@ -9,7 +9,7 @@ strict closed input schemas (`additionalProperties: false`), and a maximum reque
 | Tool | Required fields | Optional fields |
 | --- | --- | --- |
 | `runtime_sessions` | none | none |
-| `runtime_capabilities` | `sessionId` | `protocolMinor` (`0` through `9`; default `0`) |
+| `runtime_capabilities` | `sessionId` | `protocolMinor` (`0` through `10`; default `0`) |
 | `runtime_frames` | `sessionId` | `fromFrame`, `toFrame`, `limit` |
 | `runtime_snapshot` | `sessionId` | `frameId`, `entityId`, `entityIdPrefix`, `entityType`, `entityTypePrefix`, `limit` |
 | `runtime_entity` | `sessionId`, `entityId` | `fromFrame`, `toFrame`, `limit` |
@@ -32,6 +32,9 @@ strict closed input schemas (`additionalProperties: false`), and a maximum reque
 | `runtime_wait`**** | `sessionId`, `controlRequestId`, `maximumTicks`, `deltaNanos`, `evidenceLimit`, `timeoutNanos`, exactly one of `conditionId` or `assertion` | assertion-specific closed fields |
 | `runtime_inputs`***** | `sessionId` | none |
 | `runtime_input`***** | `sessionId`, `input`, `inputRequestId`, `parameters`, `timeoutNanos` | `targetTick` |
+| `runtime_checkpoints`****** | `sessionId` | none |
+| `runtime_checkpoint_create`****** | `sessionId`, `checkpointId`, `checkpointRequestId`, `timeoutNanos` | `description` |
+| `runtime_checkpoint_restore`****** | `sessionId`, `checkpointId`, `checkpointRequestId`, `timeoutNanos` | none |
 
 \* Command tools are included in the server-start catalog only when at least one published runtime
 has explicitly registered application command dispatch. They use protocol 1.2.
@@ -49,6 +52,10 @@ protocol 1.8.
 \*\*\*\*\* Input tools are included only when at least one published runtime explicitly registers an
 input type. Injection additionally requires application command dispatch and a paused registered
 simulation controller. They use protocol 1.9.
+
+\*\*\*\*\*\* Checkpoint tools are included only when at least one published runtime explicitly
+registers application-owned create, restore, and disposal callbacks. Mutation additionally requires
+application command dispatch. They use protocol 1.10.
 
 Every identifier is a nonblank string of at most 256 UTF-16 code units. Frame fields are
 non-negative integers. Prefix matching is available only where the schema has an explicit prefix
@@ -84,6 +91,14 @@ the application-owned command/capture thread, remain at-most-once while evidence
 report requested/actual tick, epoch, submitted/resulting frame, state, and bounded diagnostics.
 Only registered input facts are recorded; this API does not install global hooks or inject
 operating-system input.
+
+`runtime_checkpoints` exposes bounded descriptors only: stable checkpoint ID, source epoch/frame,
+optional description, creation time, and creation request ID. `runtime_checkpoint_create` captures
+an opaque application handle from the latest quiescent completed frame. `runtime_checkpoint_restore`
+runs the registered callback on the application thread and, on success, creates exactly one new
+`CHECKPOINT_RESTORE` epoch baseline with a fresh frame ID. Failed restores expose no baseline and
+conservatively report that application state may be partially changed. Eviction and runtime close
+invoke application disposal; opaque handles and payloads never cross protocol or MCP.
 
 `runtime_control` reports availability, current pause state, registered condition IDs/descriptions,
 and effective limits. `PAUSE` and `RESUME` use an idempotent `controlRequestId`.

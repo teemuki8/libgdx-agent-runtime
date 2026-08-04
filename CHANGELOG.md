@@ -15,6 +15,8 @@ All notable changes follow Keep a Changelog structure.
   waits with completed-frame evidence through Java, protocol, MCP, and the deterministic fixture.
 - Protocol 1.9 explicit registered input catalogs and bounded controlled-tick injection with closed
   MCP schemas, at-most-once correlation, redaction, and tick/epoch/frame evidence.
+- Protocol 1.10 application-owned opaque checkpoint creation and restore with bounded retention,
+  cleanup callbacks, closed MCP tools, and completed restore-baseline evidence.
 
 ## [0.1.0] - Unreleased
 

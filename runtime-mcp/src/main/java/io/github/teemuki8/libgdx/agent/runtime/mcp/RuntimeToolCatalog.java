@@ -57,7 +57,7 @@ public final class RuntimeToolCatalog {
                         object(Map.of(), List.of())),
                 tool("runtime_capabilities",
                         "Report capabilities; protocolMinor defaults to frozen V1.0",
-                        sessionInput(Map.of("protocolMinor", integer(0, 9)), List.of())),
+                        sessionInput(Map.of("protocolMinor", integer(0, 10)), List.of())),
                 tool("runtime_frames",
                         "List frame summaries; fromFrame defaults to 0, toFrame to max, limit to 100",
                         queryInput(Map.of(), List.of())),
@@ -193,6 +193,30 @@ public final class RuntimeToolCatalog {
             selected.add(tool("runtime_input",
                     "Schedule or poll one registered input for a controlled tick",
                     inputInput(inputIndex.values())));
+        }
+        if (supported.contains("runtime_checkpoints")) {
+            selected.add(tool("runtime_checkpoints",
+                    "List retained application checkpoint descriptors; opaque payloads are excluded",
+                    sessionInput(Map.of(), List.of())));
+        }
+        if (supported.contains("runtime_checkpoint_create")) {
+            selected.add(tool("runtime_checkpoint_create",
+                    "Create or poll one application-owned checkpoint from current quiescent state",
+                    sessionInput(Map.of(
+                            "checkpointId", string(),
+                            "description", string(),
+                            "checkpointRequestId", string(),
+                            "timeoutNanos", integer(1, Long.MAX_VALUE)),
+                            List.of("checkpointId", "checkpointRequestId", "timeoutNanos"))));
+        }
+        if (supported.contains("runtime_checkpoint_restore")) {
+            selected.add(tool("runtime_checkpoint_restore",
+                    "Restore or poll one retained checkpoint and capture a new epoch baseline",
+                    sessionInput(Map.of(
+                            "checkpointId", string(),
+                            "checkpointRequestId", string(),
+                            "timeoutNanos", integer(1, Long.MAX_VALUE)),
+                            List.of("checkpointId", "checkpointRequestId", "timeoutNanos"))));
         }
         selected.removeIf(tool -> !supported.contains(tool.name()));
         tools = List.copyOf(selected);

@@ -46,13 +46,15 @@ public final class RuntimeProtocolService {
     private static final List<String> CONTROL_TOOLS = List.of(
             "runtime_control", "runtime_advance", "runtime_wait");
     private static final List<String> INPUT_TOOLS = List.of("runtime_inputs", "runtime_input");
+    private static final List<String> CHECKPOINT_TOOLS = List.of(
+            "runtime_checkpoints", "runtime_checkpoint_create", "runtime_checkpoint_restore");
     private static final List<String> FEATURES = List.of(
             "entities", "frames", "changes", "events", "decisions");
     private static final List<ProtocolVersion> SUPPORTED_VERSIONS =
             List.of(ProtocolVersion.V1, ProtocolVersion.V1_1, ProtocolVersion.V1_2,
                     ProtocolVersion.V1_3, ProtocolVersion.V1_4, ProtocolVersion.V1_5,
                     ProtocolVersion.V1_6, ProtocolVersion.V1_7, ProtocolVersion.V1_8,
-                    ProtocolVersion.V1_9);
+                    ProtocolVersion.V1_9, ProtocolVersion.V1_10);
     private final RuntimeRegistry registry;
 
     /** Creates a service over an isolated or global registry. */
@@ -87,7 +89,13 @@ public final class RuntimeProtocolService {
         }
         boolean inputs = registry.sessions().stream()
                 .anyMatch(runtime -> !runtime.inputs().list().isEmpty());
-        return inputs ? Stream.concat(tools, INPUT_TOOLS.stream()).toList() : tools.toList();
+        if (inputs) {
+            tools = Stream.concat(tools, INPUT_TOOLS.stream());
+        }
+        boolean checkpoints = registry.sessions().stream()
+                .anyMatch(runtime -> runtime.checkpoints().available());
+        return checkpoints ? Stream.concat(tools, CHECKPOINT_TOOLS.stream()).toList()
+                : tools.toList();
     }
 
     /** Returns registered action schemas in deterministic session and action order. */
@@ -124,7 +132,7 @@ public final class RuntimeProtocolService {
         if (!SUPPORTED_VERSIONS.contains(request.version())) {
             return failure(request, ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                     "protocol version is unsupported", Map.of(
-                            "supported", "1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9",
+                            "supported", "1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10",
                             "requested", request.version().major() + "." + request.version().minor()));
         }
         try {
@@ -155,6 +163,13 @@ public final class RuntimeProtocolService {
                     && request.version().minor() < 9) {
                 throw new ProtocolFailure(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                         "command requires protocol version 1.9", Map.of());
+            }
+            if ((request.command() instanceof RuntimeCommand.Checkpoints
+                    || request.command() instanceof RuntimeCommand.CheckpointCreate
+                    || request.command() instanceof RuntimeCommand.CheckpointRestore)
+                    && request.version().minor() < 10) {
+                throw new ProtocolFailure(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
+                        "command requires protocol version 1.10", Map.of());
             }
             if ((request.command() instanceof RuntimeCommand.Control
                     || request.command() instanceof RuntimeCommand.Advance
@@ -239,6 +254,10 @@ public final class RuntimeProtocolService {
             case RuntimeCommand.Inputs ignored ->
                     new RuntimeResponse.Result.Inputs(runtime.inputs().list());
             case RuntimeCommand.Input command -> input(runtime, command);
+            case RuntimeCommand.Checkpoints ignored ->
+                    new RuntimeResponse.Result.Checkpoints(runtime.checkpoints().list());
+            case RuntimeCommand.CheckpointCreate command -> checkpointCreate(runtime, command);
+            case RuntimeCommand.CheckpointRestore command -> checkpointRestore(runtime, command);
             case RuntimeCommand.Sessions ignored ->
                     throw new AssertionError("sessions handled before runtime lookup");
         };
@@ -482,6 +501,30 @@ public final class RuntimeProtocolService {
                             "at-most-once", "redaction"),
                     List.of("command-dispatch", "simulation-control")));
         }
+        if (version.minor() >= 10) {
+            boolean registered = runtime.checkpoints().available();
+            boolean available = registered && runtime.commands().isPresent();
+            var checkpointLimits = runtime.checkpoints().limits();
+            details.add(new RuntimeCapability(
+                    "checkpoints", ProtocolVersion.V1_10,
+                    available ? RuntimeCapability.Availability.AVAILABLE
+                            : RuntimeCapability.Availability.UNAVAILABLE,
+                    available ? Optional.empty() : Optional.of(registered
+                            ? "dispatcher-not-registered" : "provider-not-registered"),
+                    RuntimeCapability.Access.MUTATING,
+                    List.of("AgentRuntime#checkpoints", "CheckpointRegistry#create",
+                            "CheckpointRegistry#restore"),
+                    List.of("checkpoints", "checkpoint-create", "checkpoint-restore"),
+                    CHECKPOINT_TOOLS, Map.of(
+                            "retainedCheckpoints",
+                            (long) checkpointLimits.retainedCheckpoints(),
+                            "retainedOperations",
+                            (long) checkpointLimits.retainedOperations(),
+                            "descriptionLength",
+                            (long) checkpointLimits.descriptionLength()),
+                    List.of("application-owned", "opaque-handles", "bounded", "at-most-once"),
+                    List.of("command-dispatch", "execution-epochs")));
+        }
         return List.copyOf(details);
     }
 
@@ -519,8 +562,11 @@ public final class RuntimeProtocolService {
         if (version.minor() >= 8 && runtime.controls().available()) {
             tools = Stream.concat(tools, CONTROL_TOOLS.stream());
         }
-        return version.minor() >= 9 && !runtime.inputs().list().isEmpty()
-                ? Stream.concat(tools, INPUT_TOOLS.stream()).toList() : tools.toList();
+        if (version.minor() >= 9 && !runtime.inputs().list().isEmpty()) {
+            tools = Stream.concat(tools, INPUT_TOOLS.stream());
+        }
+        return version.minor() >= 10 && runtime.checkpoints().available()
+                ? Stream.concat(tools, CHECKPOINT_TOOLS.stream()).toList() : tools.toList();
     }
 
     private static RuntimeResponse.Result assertion(
@@ -593,6 +639,34 @@ public final class RuntimeProtocolService {
         return new RuntimeResponse.Result.Input(runtime.inputs().inject(
                 command.inputId(), command.inputRequestId(), command.parameters(), target,
                 Duration.ofNanos(command.timeoutNanos())));
+    }
+
+    private static RuntimeResponse.Result checkpointCreate(
+            AgentRuntime runtime, RuntimeCommand.CheckpointCreate command) {
+        requireCheckpoints(runtime);
+        return new RuntimeResponse.Result.Checkpoint(runtime.checkpoints().create(
+                command.checkpointId(), command.description(), command.checkpointRequestId(),
+                Duration.ofNanos(command.timeoutNanos())));
+    }
+
+    private static RuntimeResponse.Result checkpointRestore(
+            AgentRuntime runtime, RuntimeCommand.CheckpointRestore command) {
+        requireCheckpoints(runtime);
+        return new RuntimeResponse.Result.Checkpoint(runtime.checkpoints().restore(
+                command.checkpointId(), command.checkpointRequestId(),
+                Duration.ofNanos(command.timeoutNanos())));
+    }
+
+    private static void requireCheckpoints(AgentRuntime runtime) {
+        if (!runtime.checkpoints().available()) {
+            throw new ProtocolFailure(ProtocolErrorCode.CAPABILITY_UNAVAILABLE,
+                    "checkpoint provider is unavailable",
+                    Map.of("sessionId", runtime.sessionId().value(),
+                            "capability", "checkpoints"));
+        }
+        if (runtime.commands().isEmpty()) {
+            throw capabilityUnavailable(runtime);
+        }
     }
 
     private static void requireControl(AgentRuntime runtime, long timeoutNanos) {

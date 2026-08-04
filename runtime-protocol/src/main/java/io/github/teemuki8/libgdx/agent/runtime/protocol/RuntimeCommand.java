@@ -29,7 +29,10 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
     @JsonSubTypes.Type(value = RuntimeCommand.Advance.class, name = "advance"),
     @JsonSubTypes.Type(value = RuntimeCommand.Wait.class, name = "wait"),
     @JsonSubTypes.Type(value = RuntimeCommand.Inputs.class, name = "inputs"),
-    @JsonSubTypes.Type(value = RuntimeCommand.Input.class, name = "input")
+    @JsonSubTypes.Type(value = RuntimeCommand.Input.class, name = "input"),
+    @JsonSubTypes.Type(value = RuntimeCommand.Checkpoints.class, name = "checkpoints"),
+    @JsonSubTypes.Type(value = RuntimeCommand.CheckpointCreate.class, name = "checkpointCreate"),
+    @JsonSubTypes.Type(value = RuntimeCommand.CheckpointRestore.class, name = "checkpointRestore")
 })
 public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeCommand.Capabilities,
         RuntimeCommand.Frames, RuntimeCommand.Snapshot, RuntimeCommand.Entity,
@@ -39,7 +42,8 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
         RuntimeCommand.AttributedEvents, RuntimeCommand.AttributedDecisions,
         RuntimeCommand.Actions, RuntimeCommand.Action, RuntimeCommand.Assert,
         RuntimeCommand.Control, RuntimeCommand.Advance, RuntimeCommand.Wait,
-        RuntimeCommand.Inputs, RuntimeCommand.Input {
+        RuntimeCommand.Inputs, RuntimeCommand.Input, RuntimeCommand.Checkpoints,
+        RuntimeCommand.CheckpointCreate, RuntimeCommand.CheckpointRestore {
     /** Lists published sessions. */
     record Sessions() implements RuntimeCommand {}
 
@@ -345,6 +349,33 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
             if (targetTick != null && targetTick <= 0) {
                 throw new IllegalArgumentException("targetTick must be positive");
             }
+            requirePositive(timeoutNanos, "timeoutNanos");
+        }
+    }
+
+    /** Lists retained application-owned checkpoint descriptors. */
+    record Checkpoints() implements RuntimeCommand {}
+
+    /** Creates or polls one opaque application-owned checkpoint. */
+    record CheckpointCreate(String checkpointId, String description,
+            String checkpointRequestId, long timeoutNanos) implements RuntimeCommand {
+        public CheckpointCreate {
+            ProtocolJson.requireIdentifier(checkpointId, "checkpointId");
+            if (description != null && (description.isBlank()
+                    || description.length() > ProtocolJson.MAX_STRING_LENGTH)) {
+                throw new IllegalArgumentException("description is invalid");
+            }
+            ProtocolJson.requireIdentifier(checkpointRequestId, "checkpointRequestId");
+            requirePositive(timeoutNanos, "timeoutNanos");
+        }
+    }
+
+    /** Restores or polls one retained application-owned checkpoint. */
+    record CheckpointRestore(String checkpointId, String checkpointRequestId,
+            long timeoutNanos) implements RuntimeCommand {
+        public CheckpointRestore {
+            ProtocolJson.requireIdentifier(checkpointId, "checkpointId");
+            ProtocolJson.requireIdentifier(checkpointRequestId, "checkpointRequestId");
             requirePositive(timeoutNanos, "timeoutNanos");
         }
     }

@@ -232,6 +232,51 @@ final class FixtureProtocolAndMcpTest {
     }
 
     @Test
+    void fixtureCheckpointRestoresApplicationStateAndPublishesOneBaseline() {
+        ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
+        DeterministicSimulation simulation = new DeterministicSimulation();
+        AgentRuntime runtime = simulation.startRuntime(applicationQueue::addLast);
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime);
+                RuntimeToolHandler handler =
+                        new RuntimeToolHandler(new RuntimeProtocolService(registry))) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            Map<String, Object> create = Map.of(
+                    "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                    "checkpointId", "before-targeting",
+                    "checkpointRequestId", "checkpoint-create",
+                    "timeoutNanos", 1_000_000_000);
+            handler.handle(call("runtime_checkpoint_create", create)).block(Duration.ofSeconds(5));
+            applicationQueue.removeFirst().run();
+
+            simulation.advance(runtime, 20);
+            assertEquals(RuntimeValues.enumValue("TRACKING"),
+                    runtime.latestFrame().orElseThrow().entity(EntityId.of("tower-1"))
+                            .orElseThrow().property("state").orElseThrow());
+
+            RuntimeCommand.CheckpointRestore restore = new RuntimeCommand.CheckpointRestore(
+                    "before-targeting", "checkpoint-restore", 1_000_000_000);
+            RuntimeProtocolService protocol = new RuntimeProtocolService(registry);
+            protocol.execute(new RuntimeRequest(ProtocolVersion.V1_10, "restore-submit",
+                    DeterministicSimulation.SESSION_ID.value(), restore));
+            applicationQueue.removeFirst().run();
+            RuntimeResponse.Result.Checkpoint restored = assertInstanceOf(
+                    RuntimeResponse.Result.Checkpoint.class,
+                    assertInstanceOf(RuntimeResponse.Success.class,
+                            protocol.execute(new RuntimeRequest(ProtocolVersion.V1_10,
+                                    "restore-poll", DeterministicSimulation.SESSION_ID.value(),
+                                    restore))).result());
+            assertEquals(2, restored.operation().baselineFrameId().orElseThrow().value());
+            assertEquals(BaselineKind.CHECKPOINT_RESTORE,
+                    runtime.latestFrame().orElseThrow().baselineKind().orElseThrow());
+            assertEquals(RuntimeValues.enumValue("IDLE"),
+                    runtime.latestFrame().orElseThrow().entity(EntityId.of("tower-1"))
+                            .orElseThrow().property("state").orElseThrow());
+        }
+        runtime.close();
+    }
+
+    @Test
     void fixtureExposesResetBaselineEpochThroughProtocolAndMcp() {
         DeterministicSimulation simulation = new DeterministicSimulation();
         AgentRuntime runtime = simulation.startRuntime();

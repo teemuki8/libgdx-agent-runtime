@@ -22,8 +22,10 @@ public record ProtocolVersion(int major, int minor) {
     public static final ProtocolVersion V1_8 = new ProtocolVersion(1, 8);
     /** Explicit registered input scheduling protocol version. */
     public static final ProtocolVersion V1_9 = new ProtocolVersion(1, 9);
+    /** Application-owned opaque checkpoint protocol version. */
+    public static final ProtocolVersion V1_10 = new ProtocolVersion(1, 10);
     /** Latest implemented protocol version. */
-    public static final ProtocolVersion CURRENT = V1_9;
+    public static final ProtocolVersion CURRENT = V1_10;
 
     /** Validates version components. */
     public ProtocolVersion {

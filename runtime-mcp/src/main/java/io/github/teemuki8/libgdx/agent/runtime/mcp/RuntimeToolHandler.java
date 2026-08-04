@@ -186,6 +186,14 @@ public final class RuntimeToolHandler implements AutoCloseable {
                     inputParameters(string(arguments, "input"), arguments.get("parameters")),
                     optionalLong(arguments, "targetTick"),
                     number(arguments, "timeoutNanos", -1));
+            case "runtime_checkpoints" -> new RuntimeCommand.Checkpoints();
+            case "runtime_checkpoint_create" -> new RuntimeCommand.CheckpointCreate(
+                    string(arguments, "checkpointId"), string(arguments, "description"),
+                    string(arguments, "checkpointRequestId"),
+                    number(arguments, "timeoutNanos", -1));
+            case "runtime_checkpoint_restore" -> new RuntimeCommand.CheckpointRestore(
+                    string(arguments, "checkpointId"), string(arguments, "checkpointRequestId"),
+                    number(arguments, "timeoutNanos", -1));
             default -> throw new IllegalArgumentException("unknown runtime tool");
         };
         ProtocolVersion version = switch (toolName) {
@@ -200,6 +208,8 @@ public final class RuntimeToolHandler implements AutoCloseable {
             case "runtime_assert" -> ProtocolVersion.V1_7;
             case "runtime_control", "runtime_advance", "runtime_wait" -> ProtocolVersion.V1_8;
             case "runtime_inputs", "runtime_input" -> ProtocolVersion.V1_9;
+            case "runtime_checkpoints", "runtime_checkpoint_create",
+                    "runtime_checkpoint_restore" -> ProtocolVersion.V1_10;
             default -> ProtocolVersion.V1;
         };
         return new RuntimeRequest(version,

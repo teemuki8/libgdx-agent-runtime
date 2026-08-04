@@ -12,6 +12,8 @@ application and provides no shell, filesystem, reflection, script, arbitrary cla
 destination, or remote listener.
 Declarative assertions are a closed data schema over completed evidence. They do not accept regular
 expressions, method names, arbitrary expressions, or executable code.
+Simulation waits accept only registered named predicates or the same closed declarative assertion
+union. They do not accept scripts, expressions, class names, reflection, or caller-defined code.
 
 Do not publish credentials, tokens, secrets, private user data, or filesystem information as entity
 properties, event attributes, decision attributes, names, or diagnostics.

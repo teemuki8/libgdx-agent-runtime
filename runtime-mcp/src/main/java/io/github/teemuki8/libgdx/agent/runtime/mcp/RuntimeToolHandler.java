@@ -164,6 +164,20 @@ public final class RuntimeToolHandler implements AutoCloseable {
                     assertion(arguments.get("assertion")), from, to,
                     number(arguments, "executionEpochId", -1),
                     Math.toIntExact(number(arguments, "evidenceLimit", -1)));
+            case "runtime_control" -> control(arguments);
+            case "runtime_advance" -> new RuntimeCommand.Advance(
+                    string(arguments, "controlRequestId"),
+                    Math.toIntExact(number(arguments, "ticks", -1)),
+                    number(arguments, "deltaNanos", -1),
+                    number(arguments, "timeoutNanos", -1));
+            case "runtime_wait" -> new RuntimeCommand.Wait(
+                    string(arguments, "controlRequestId"), string(arguments, "conditionId"),
+                    arguments.containsKey("assertion")
+                            ? assertion(arguments.get("assertion")) : null,
+                    Math.toIntExact(number(arguments, "maximumTicks", -1)),
+                    number(arguments, "deltaNanos", -1),
+                    Math.toIntExact(number(arguments, "evidenceLimit", -1)),
+                    number(arguments, "timeoutNanos", -1));
             default -> throw new IllegalArgumentException("unknown runtime tool");
         };
         ProtocolVersion version = switch (toolName) {
@@ -176,10 +190,20 @@ public final class RuntimeToolHandler implements AutoCloseable {
                     "runtime_attributed_decisions" -> ProtocolVersion.V1_5;
             case "runtime_actions", "runtime_action" -> ProtocolVersion.V1_6;
             case "runtime_assert" -> ProtocolVersion.V1_7;
+            case "runtime_control", "runtime_advance", "runtime_wait" -> ProtocolVersion.V1_8;
             default -> ProtocolVersion.V1;
         };
         return new RuntimeRequest(version,
                 "mcp-" + Long.toUnsignedString(sequence.incrementAndGet()), sessionId, command);
+    }
+
+    private static RuntimeCommand.Control control(Map<String, Object> arguments) {
+        RuntimeCommand.ControlAction action = RuntimeCommand.ControlAction.valueOf(
+                string(arguments, "action"));
+        return action == RuntimeCommand.ControlAction.STATUS
+                ? new RuntimeCommand.Control(action, null, 0)
+                : new RuntimeCommand.Control(action, string(arguments, "controlRequestId"),
+                        number(arguments, "timeoutNanos", -1));
     }
 
     private static String string(Map<String, Object> values, String key) {

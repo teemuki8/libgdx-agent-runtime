@@ -9,7 +9,7 @@ strict closed input schemas (`additionalProperties: false`), and a maximum reque
 | Tool | Required fields | Optional fields |
 | --- | --- | --- |
 | `runtime_sessions` | none | none |
-| `runtime_capabilities` | `sessionId` | `protocolMinor` (`0` through `7`; default `0`) |
+| `runtime_capabilities` | `sessionId` | `protocolMinor` (`0` through `8`; default `0`) |
 | `runtime_frames` | `sessionId` | `fromFrame`, `toFrame`, `limit` |
 | `runtime_snapshot` | `sessionId` | `frameId`, `entityId`, `entityIdPrefix`, `entityType`, `entityTypePrefix`, `limit` |
 | `runtime_entity` | `sessionId`, `entityId` | `fromFrame`, `toFrame`, `limit` |
@@ -27,6 +27,9 @@ strict closed input schemas (`additionalProperties: false`), and a maximum reque
 | `runtime_actions`*** | `sessionId` | none |
 | `runtime_action`*** | `sessionId`, `action`, `actionRequestId`, `parameters`, `timeoutNanos` | `correlationId` |
 | `runtime_assert` | `sessionId`, range, `executionEpochId`, `evidenceLimit`, `assertion` | assertion-specific closed fields |
+| `runtime_control`**** | `sessionId`, `action` | `controlRequestId`, `timeoutNanos` for `PAUSE`/`RESUME` |
+| `runtime_advance`**** | `sessionId`, `controlRequestId`, `ticks`, `deltaNanos`, `timeoutNanos` | none |
+| `runtime_wait`**** | `sessionId`, `controlRequestId`, `maximumTicks`, `deltaNanos`, `evidenceLimit`, `timeoutNanos`, exactly one of `conditionId` or `assertion` | assertion-specific closed fields |
 
 \* Command tools are included in the server-start catalog only when at least one published runtime
 has explicitly registered application command dispatch. They use protocol 1.2.
@@ -37,13 +40,17 @@ scenario. Reset additionally requires application command dispatch. They use pro
 \*\*\* Action tools are included only when at least one published runtime explicitly registers an
 action. Invocation additionally requires application command dispatch. They use protocol 1.6.
 
+\*\*\*\* Control tools are included only when at least one published runtime explicitly registers a
+simulation controller. Mutations additionally require application command dispatch. They use
+protocol 1.8.
+
 Every identifier is a nonblank string of at most 256 UTF-16 code units. Frame fields are
 non-negative integers. Prefix matching is available only where the schema has an explicit prefix
 boolean; there are no regular expressions or generic expressions.
 
 ## Protocol and capabilities
 
-Protocol 1.0 retains the exact original capabilities result. Set `protocolMinor` from `1` to `7`
+Protocol 1.0 retains the exact original capabilities result. Set `protocolMinor` from `1` to `8`
 on `runtime_capabilities` to request extension metadata. The read-only MCP tools continue to use
 1.0. Command status and cancellation use protocol 1.2; epoch queries use protocol 1.3; scenario
 catalog and reset use protocol 1.4.
@@ -62,6 +69,15 @@ Results are `PASS`, `FAIL`, or `INCONCLUSIVE`; missing frames, diagnostics, abor
 truncation produce `INCONCLUSIVE` whenever they could change the answer. Negative, exact-count,
 range-remains, and equivalence assertions require complete evidence. The evaluator never advances
 simulation, sleeps, interprets expressions, or executes code.
+
+`runtime_control` reports availability, current pause state, registered condition IDs/descriptions,
+and effective limits. `PAUSE` and `RESUME` use an idempotent `controlRequestId`.
+`runtime_advance` is accepted only while paused and captures exactly one completed frame per
+application-defined tick. `runtime_wait` checks one registered semantic condition or one closed
+declarative assertion after each tick and stops on satisfaction, tick limit, timeout, callback
+failure, or invalid state. Results retain requested/completed ticks and first/final completed frame
+IDs. The application must keep servicing its command queue while paused; the runtime never owns or
+sleeps the game loop.
 
 Scenario resets are idempotently correlated by `resetRequestId`. The first response may be queued;
 repeat the same reset request or read `runtime_command_status` until it is terminal. A successful
@@ -88,6 +104,21 @@ runtime = LibGdxAgentRuntime.builder()
         .commandDispatcher(Gdx.app::postRunnable)
         .build();
 ```
+
+Applications may then opt into simulation control before `start()`:
+
+```java
+runtime.controls().register(SimulationControllerSpec.builder()
+        .pause(() -> gamePaused = true)
+        .resume(() -> gamePaused = false)
+        .tick(deltaNanos -> updateOneTick(deltaNanos))
+        .condition("wave-cleared", "No enemies remain", enemies::isEmpty)
+        .build());
+```
+
+The tick callback updates application state inside the runtime-owned capture frame; it must not open
+another frame. Pause gates normal application updates, not immutable runtime queries or the command
+queue used to resume or advance.
 
 The runtime creates no command worker, scheduler, timer, or game loop. It bounds queued commands,
 maximum timeout, terminal results, expired request IDs, and diagnostic text. Concurrent submissions

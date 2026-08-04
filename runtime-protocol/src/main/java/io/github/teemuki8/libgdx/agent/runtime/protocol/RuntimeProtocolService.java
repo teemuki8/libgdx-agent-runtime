@@ -43,12 +43,14 @@ public final class RuntimeProtocolService {
             "runtime_attributed_decisions");
     private static final List<String> ACTION_TOOLS = List.of("runtime_actions", "runtime_action");
     private static final List<String> ASSERTION_TOOLS = List.of("runtime_assert");
+    private static final List<String> CONTROL_TOOLS = List.of(
+            "runtime_control", "runtime_advance", "runtime_wait");
     private static final List<String> FEATURES = List.of(
             "entities", "frames", "changes", "events", "decisions");
     private static final List<ProtocolVersion> SUPPORTED_VERSIONS =
             List.of(ProtocolVersion.V1, ProtocolVersion.V1_1, ProtocolVersion.V1_2,
                     ProtocolVersion.V1_3, ProtocolVersion.V1_4, ProtocolVersion.V1_5,
-                    ProtocolVersion.V1_6, ProtocolVersion.V1_7);
+                    ProtocolVersion.V1_6, ProtocolVersion.V1_7, ProtocolVersion.V1_8);
     private final RuntimeRegistry registry;
 
     /** Creates a service over an isolated or global registry. */
@@ -73,7 +75,12 @@ public final class RuntimeProtocolService {
         }
         boolean actions = registry.sessions().stream()
                 .anyMatch(runtime -> !runtime.actions().list().isEmpty());
-        return actions ? Stream.concat(tools, ACTION_TOOLS.stream()).toList() : tools.toList();
+        if (actions) {
+            tools = Stream.concat(tools, ACTION_TOOLS.stream());
+        }
+        boolean controls = registry.sessions().stream()
+                .anyMatch(runtime -> runtime.controls().available());
+        return controls ? Stream.concat(tools, CONTROL_TOOLS.stream()).toList() : tools.toList();
     }
 
     /** Returns registered action schemas in deterministic session and action order. */
@@ -95,46 +102,49 @@ public final class RuntimeProtocolService {
         if (!SUPPORTED_VERSIONS.contains(request.version())) {
             return failure(request, ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                     "protocol version is unsupported", Map.of(
-                            "supported", "1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7",
+                            "supported", "1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8",
                             "requested", request.version().major() + "." + request.version().minor()));
         }
         try {
             if ((request.command() instanceof RuntimeCommand.CommandStatus
                     || request.command() instanceof RuntimeCommand.CommandCancel)
-                    && !ProtocolVersion.V1_2.equals(request.version())) {
+                    && request.version().minor() < 2) {
                 throw new ProtocolFailure(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                         "command requires protocol version 1.2", Map.of());
             }
             if (request.command() instanceof RuntimeCommand.EpochFrames
-                    && !(ProtocolVersion.V1_3.equals(request.version())
-                    || ProtocolVersion.V1_4.equals(request.version())
-                    || ProtocolVersion.V1_5.equals(request.version())
-                    || ProtocolVersion.V1_6.equals(request.version())
-                    || ProtocolVersion.V1_7.equals(request.version()))) {
+                    && request.version().minor() < 3) {
                 throw new ProtocolFailure(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                         "command requires protocol version 1.3", Map.of());
             }
             if ((request.command() instanceof RuntimeCommand.Actions
                     || request.command() instanceof RuntimeCommand.Action)
-                    && !ProtocolVersion.V1_6.equals(request.version())) {
+                    && request.version().minor() < 6) {
                 throw new ProtocolFailure(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                         "command requires protocol version 1.6", Map.of());
             }
             if (request.command() instanceof RuntimeCommand.Assert
-                    && !ProtocolVersion.V1_7.equals(request.version())) {
+                    && request.version().minor() < 7) {
                 throw new ProtocolFailure(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                         "command requires protocol version 1.7", Map.of());
+            }
+            if ((request.command() instanceof RuntimeCommand.Control
+                    || request.command() instanceof RuntimeCommand.Advance
+                    || request.command() instanceof RuntimeCommand.Wait)
+                    && !ProtocolVersion.V1_8.equals(request.version())) {
+                throw new ProtocolFailure(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
+                        "command requires protocol version 1.8", Map.of());
             }
             if ((request.command() instanceof RuntimeCommand.AttributedChanges
                     || request.command() instanceof RuntimeCommand.AttributedEvents
                     || request.command() instanceof RuntimeCommand.AttributedDecisions)
-                    && !ProtocolVersion.V1_5.equals(request.version())) {
+                    && request.version().minor() < 5) {
                 throw new ProtocolFailure(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                         "command requires protocol version 1.5", Map.of());
             }
             if ((request.command() instanceof RuntimeCommand.Scenarios
                     || request.command() instanceof RuntimeCommand.Reset)
-                    && !ProtocolVersion.V1_4.equals(request.version())) {
+                    && request.version().minor() < 4) {
                 throw new ProtocolFailure(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                         "command requires protocol version 1.4", Map.of());
             }
@@ -195,6 +205,9 @@ public final class RuntimeProtocolService {
                     new RuntimeResponse.Result.Actions(runtime.actions().list());
             case RuntimeCommand.Action command -> action(runtime, command);
             case RuntimeCommand.Assert command -> assertion(runtime, command);
+            case RuntimeCommand.Control command -> control(runtime, command);
+            case RuntimeCommand.Advance command -> advance(runtime, command);
+            case RuntimeCommand.Wait command -> waitFor(runtime, command);
             case RuntimeCommand.Sessions ignored ->
                     throw new AssertionError("sessions handled before runtime lookup");
         };
@@ -260,7 +273,8 @@ public final class RuntimeProtocolService {
                         List.of("exact", "latest", "range"), List.of())));
         if (ProtocolVersion.V1_2.equals(version) || ProtocolVersion.V1_3.equals(version)
                 || ProtocolVersion.V1_4.equals(version) || ProtocolVersion.V1_5.equals(version)
-                || ProtocolVersion.V1_6.equals(version) || ProtocolVersion.V1_7.equals(version)) {
+                || ProtocolVersion.V1_6.equals(version) || ProtocolVersion.V1_7.equals(version)
+                || ProtocolVersion.V1_8.equals(version)) {
             boolean available = runtime.commands().isPresent();
             Map<String, Long> commandLimits = runtime.commands().map(commands -> Map.of(
                     "queuedCommands", (long) commands.limits().queuedCommands(),
@@ -282,7 +296,7 @@ public final class RuntimeProtocolService {
         }
         if (ProtocolVersion.V1_3.equals(version) || ProtocolVersion.V1_4.equals(version)
                 || ProtocolVersion.V1_5.equals(version) || ProtocolVersion.V1_6.equals(version)
-                || ProtocolVersion.V1_7.equals(version)) {
+                || ProtocolVersion.V1_7.equals(version) || ProtocolVersion.V1_8.equals(version)) {
             details.add(new RuntimeCapability(
                     "execution-epochs", ProtocolVersion.V1_3,
                     runtime.configuration().enabled()
@@ -299,7 +313,8 @@ public final class RuntimeProtocolService {
                     List.of("baseline", "epoch-filter"), List.of("frames")));
         }
         if (ProtocolVersion.V1_4.equals(version) || ProtocolVersion.V1_5.equals(version)
-                || ProtocolVersion.V1_6.equals(version) || ProtocolVersion.V1_7.equals(version)) {
+                || ProtocolVersion.V1_6.equals(version) || ProtocolVersion.V1_7.equals(version)
+                || ProtocolVersion.V1_8.equals(version)) {
             boolean registered = !runtime.scenarios().list().isEmpty();
             boolean available = registered && runtime.commands().isPresent();
             details.add(new RuntimeCapability(
@@ -321,7 +336,7 @@ public final class RuntimeProtocolService {
                     List.of("command-dispatch", "execution-epochs")));
         }
         if (ProtocolVersion.V1_5.equals(version) || ProtocolVersion.V1_6.equals(version)
-                || ProtocolVersion.V1_7.equals(version)) {
+                || ProtocolVersion.V1_7.equals(version) || ProtocolVersion.V1_8.equals(version)) {
             details.add(new RuntimeCapability(
                     "explicit-fact-attribution", ProtocolVersion.V1_5,
                     runtime.configuration().enabled()
@@ -342,7 +357,8 @@ public final class RuntimeProtocolService {
                     List.of("explicit", "exact-filter", "unverified-source-label"),
                     List.of("changes", "events", "decisions")));
         }
-        if (ProtocolVersion.V1_6.equals(version) || ProtocolVersion.V1_7.equals(version)) {
+        if (ProtocolVersion.V1_6.equals(version) || ProtocolVersion.V1_7.equals(version)
+                || ProtocolVersion.V1_8.equals(version)) {
             boolean registered = !runtime.actions().list().isEmpty();
             boolean available = registered && runtime.commands().isPresent();
             details.add(new RuntimeCapability(
@@ -366,7 +382,7 @@ public final class RuntimeProtocolService {
                     List.of("application-owned", "closed-schema", "at-most-once"),
                     List.of("command-dispatch", "explicit-fact-attribution")));
         }
-        if (ProtocolVersion.V1_7.equals(version)) {
+        if (ProtocolVersion.V1_7.equals(version) || ProtocolVersion.V1_8.equals(version)) {
             boolean available = runtime.configuration().enabled();
             details.add(new RuntimeCapability(
                     "declarative-assertions", ProtocolVersion.V1_7,
@@ -385,6 +401,29 @@ public final class RuntimeProtocolService {
                     List.of("closed-schema", "deterministic", "bounded"),
                     List.of("execution-epochs", "completed-frames")));
         }
+        if (ProtocolVersion.V1_8.equals(version)) {
+            boolean registered = runtime.controls().available();
+            boolean available = registered && runtime.commands().isPresent();
+            var controlLimits = runtime.controls().limits();
+            details.add(new RuntimeCapability(
+                    "simulation-control", ProtocolVersion.V1_8,
+                    available ? RuntimeCapability.Availability.AVAILABLE
+                            : RuntimeCapability.Availability.UNAVAILABLE,
+                    available ? Optional.empty() : Optional.of(registered
+                            ? "dispatcher-not-registered" : "controller-not-registered"),
+                    RuntimeCapability.Access.MUTATING,
+                    List.of("AgentRuntime#controls", "SimulationControlRegistry#control",
+                            "SimulationControlRegistry#advance",
+                            "SimulationControlRegistry#waitForCondition",
+                            "SimulationControlRegistry#waitForAssertion"),
+                    List.of("control", "advance", "wait"), CONTROL_TOOLS, Map.of(
+                            "registeredConditions", (long) controlLimits.registeredConditions(),
+                            "ticksPerOperation", (long) controlLimits.ticksPerOperation(),
+                            "retainedOperations", (long) controlLimits.retainedOperations(),
+                            "maximumDeltaNanos", controlLimits.maximumDeltaNanos()),
+                    List.of("application-owned", "paused-only-ticks", "bounded", "at-most-once"),
+                    List.of("command-dispatch", "declarative-assertions")));
+        }
         return List.copyOf(details);
     }
 
@@ -392,30 +431,35 @@ public final class RuntimeProtocolService {
         Stream<String> tools = BASE_TOOLS.stream();
         if (ProtocolVersion.V1_3.equals(version) || ProtocolVersion.V1_4.equals(version)
                 || ProtocolVersion.V1_5.equals(version) || ProtocolVersion.V1_6.equals(version)
-                || ProtocolVersion.V1_7.equals(version)) {
+                || ProtocolVersion.V1_7.equals(version) || ProtocolVersion.V1_8.equals(version)) {
             tools = Stream.concat(tools, EPOCH_TOOLS.stream());
         }
         if (runtime.commands().isPresent() && (ProtocolVersion.V1_2.equals(version)
                 || ProtocolVersion.V1_3.equals(version) || ProtocolVersion.V1_4.equals(version)
                 || ProtocolVersion.V1_5.equals(version) || ProtocolVersion.V1_6.equals(version)
-                || ProtocolVersion.V1_7.equals(version))) {
+                || ProtocolVersion.V1_7.equals(version) || ProtocolVersion.V1_8.equals(version))) {
             tools = Stream.concat(tools, COMMAND_TOOLS.stream());
         }
         if ((ProtocolVersion.V1_4.equals(version) || ProtocolVersion.V1_5.equals(version)
-                || ProtocolVersion.V1_6.equals(version) || ProtocolVersion.V1_7.equals(version))
+                || ProtocolVersion.V1_6.equals(version) || ProtocolVersion.V1_7.equals(version)
+                || ProtocolVersion.V1_8.equals(version))
                 && !runtime.scenarios().list().isEmpty()) {
             tools = Stream.concat(tools, SCENARIO_TOOLS.stream());
         }
         if (ProtocolVersion.V1_5.equals(version) || ProtocolVersion.V1_6.equals(version)
-                || ProtocolVersion.V1_7.equals(version)) {
+                || ProtocolVersion.V1_7.equals(version) || ProtocolVersion.V1_8.equals(version)) {
             tools = Stream.concat(tools, ATTRIBUTION_TOOLS.stream());
         }
-        if ((ProtocolVersion.V1_6.equals(version) || ProtocolVersion.V1_7.equals(version))
+        if ((ProtocolVersion.V1_6.equals(version) || ProtocolVersion.V1_7.equals(version)
+                || ProtocolVersion.V1_8.equals(version))
                 && !runtime.actions().list().isEmpty()) {
             tools = Stream.concat(tools, ACTION_TOOLS.stream());
         }
-        return ProtocolVersion.V1_7.equals(version)
-                ? Stream.concat(tools, ASSERTION_TOOLS.stream()).toList() : tools.toList();
+        if (ProtocolVersion.V1_7.equals(version) || ProtocolVersion.V1_8.equals(version)) {
+            tools = Stream.concat(tools, ASSERTION_TOOLS.stream());
+        }
+        return ProtocolVersion.V1_8.equals(version) && runtime.controls().available()
+                ? Stream.concat(tools, CONTROL_TOOLS.stream()).toList() : tools.toList();
     }
 
     private static RuntimeResponse.Result assertion(
@@ -425,6 +469,62 @@ public final class RuntimeProtocolService {
                 new io.github.teemuki8.libgdx.agent.runtime.core.AssertionScope(
                         new ExecutionEpochId(command.executionEpochId()),
                         range(command.fromFrame(), command.toFrame()), command.evidenceLimit())));
+    }
+
+    private static RuntimeResponse.Result control(
+            AgentRuntime runtime, RuntimeCommand.Control command) {
+        if (command.action() == RuntimeCommand.ControlAction.STATUS) {
+            return new RuntimeResponse.Result.Control(
+                    runtime.controls().descriptor(), Optional.empty());
+        }
+        requireControl(runtime, command.timeoutNanos());
+        boolean pause = command.action() == RuntimeCommand.ControlAction.PAUSE;
+        return new RuntimeResponse.Result.Control(runtime.controls().descriptor(), Optional.of(
+                runtime.controls().control(pause, command.controlRequestId(),
+                        Duration.ofNanos(command.timeoutNanos()))));
+    }
+
+    private static RuntimeResponse.Result advance(
+            AgentRuntime runtime, RuntimeCommand.Advance command) {
+        requireControl(runtime, command.timeoutNanos());
+        return new RuntimeResponse.Result.Control(runtime.controls().descriptor(), Optional.of(
+                runtime.controls().advance(command.controlRequestId(), command.ticks(),
+                        command.deltaNanos(), Duration.ofNanos(command.timeoutNanos()))));
+    }
+
+    private static RuntimeResponse.Result waitFor(
+            AgentRuntime runtime, RuntimeCommand.Wait command) {
+        requireControl(runtime, command.timeoutNanos());
+        io.github.teemuki8.libgdx.agent.runtime.core.ControlOperation operation =
+                command.conditionId() != null
+                        ? runtime.controls().waitForCondition(
+                                command.controlRequestId(), command.conditionId(),
+                                command.maximumTicks(), command.deltaNanos(),
+                                Duration.ofNanos(command.timeoutNanos()))
+                        : runtime.controls().waitForAssertion(
+                                command.controlRequestId(), command.assertion(),
+                                command.maximumTicks(), command.deltaNanos(),
+                                command.evidenceLimit(), Duration.ofNanos(command.timeoutNanos()));
+        return new RuntimeResponse.Result.Control(
+                runtime.controls().descriptor(), Optional.of(operation));
+    }
+
+    private static void requireControl(AgentRuntime runtime, long timeoutNanos) {
+        if (!runtime.controls().available()) {
+            throw new ProtocolFailure(ProtocolErrorCode.CAPABILITY_UNAVAILABLE,
+                    "simulation controller is unavailable",
+                    Map.of("sessionId", runtime.sessionId().value(),
+                            "capability", "simulation-control"));
+        }
+        if (runtime.commands().isEmpty()) {
+            throw capabilityUnavailable(runtime);
+        }
+        long maximum = runtime.commands().orElseThrow().limits().maximumTimeoutNanos();
+        if (timeoutNanos > maximum) {
+            throw new ProtocolFailure(ProtocolErrorCode.LIMIT_EXCEEDED,
+                    "control timeout exceeds the configured limit",
+                    Map.of("maximumTimeoutNanos", Long.toString(maximum)));
+        }
     }
 
     private static RuntimeResponse.Result epochFrames(

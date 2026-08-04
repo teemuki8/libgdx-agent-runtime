@@ -12,12 +12,14 @@ import io.github.teemuki8.libgdx.agent.runtime.core.ActionSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.BaselineKind;
 import io.github.teemuki8.libgdx.agent.runtime.core.CommandState;
 import io.github.teemuki8.libgdx.agent.runtime.core.AssertionStatus;
+import io.github.teemuki8.libgdx.agent.runtime.core.ControlStopReason;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityType;
 import io.github.teemuki8.libgdx.agent.runtime.core.EventSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeAssertion;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import io.github.teemuki8.libgdx.agent.runtime.core.SessionId;
+import io.github.teemuki8.libgdx.agent.runtime.core.SimulationControllerSpec;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayDeque;
@@ -93,7 +95,7 @@ final class RuntimeProtocolTest {
                 service.execute(new RuntimeRequest(
                         new ProtocolVersion(2, 0), "v", null, new RuntimeCommand.Sessions())));
         assertEquals(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED, version.error().code());
-        assertEquals("1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7",
+        assertEquals("1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8",
                 version.error().details().get("supported"));
 
         RuntimeResponse.Failure missing = assertInstanceOf(RuntimeResponse.Failure.class,
@@ -530,6 +532,71 @@ final class RuntimeProtocolTest {
                              "assertion":{"assertionType":"entityExists",
                              "entityId":{"value":"enemy-1"},"unknown":true}}}
                             """).getBytes(StandardCharsets.UTF_8)));
+        }
+    }
+
+    @Test
+    void simulationControlPauseAdvanceAndWaitRoundTripWithExactFrameEvidence() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        int[] ticks = {0};
+        AgentRuntime runtime = AgentRuntime.builder().sessionId(SessionId.of("control"))
+                .clock(() -> 1).commandDispatcher(queue::addLast).build();
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {})
+                .resume(() -> {})
+                .tick(deltaNanos -> ticks[0]++)
+                .condition("three-ticks", "Three ticks completed", () -> ticks[0] >= 3)
+                .build());
+        runtime.start();
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime)) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            RuntimeProtocolService service = new RuntimeProtocolService(registry);
+            RuntimeResponse.Result.Control status = assertInstanceOf(
+                    RuntimeResponse.Result.Control.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V1_8, "status", "control",
+                                    new RuntimeCommand.Control(
+                                            RuntimeCommand.ControlAction.STATUS, null, 0))))
+                            .result());
+            assertEquals("three-ticks",
+                    status.descriptor().conditions().getFirst().id());
+
+            RuntimeCommand.Control pause = new RuntimeCommand.Control(
+                    RuntimeCommand.ControlAction.PAUSE, "pause-1", 1_000);
+            service.execute(new RuntimeRequest(ProtocolVersion.V1_8, "pause", "control", pause));
+            queue.removeFirst().run();
+            RuntimeResponse.Result.Control paused = assertInstanceOf(
+                    RuntimeResponse.Result.Control.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V1_8, "pause-poll", "control",
+                                    pause))).result());
+            assertEquals(true, paused.descriptor().paused());
+
+            RuntimeCommand.Advance advance =
+                    new RuntimeCommand.Advance("advance-1", 2, 16_666_667, 1_000);
+            service.execute(new RuntimeRequest(
+                    ProtocolVersion.V1_8, "advance", "control", advance));
+            queue.removeFirst().run();
+            RuntimeResponse.Result.Control advanced = assertInstanceOf(
+                    RuntimeResponse.Result.Control.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V1_8, "advance-poll", "control",
+                                    advance))).result());
+            assertEquals(2, advanced.operation().orElseThrow().completedTicks());
+
+            RuntimeCommand.Wait wait = new RuntimeCommand.Wait(
+                    "wait-1", "three-ticks", null, 2, 16_666_667, 8, 1_000);
+            service.execute(new RuntimeRequest(ProtocolVersion.V1_8, "wait", "control", wait));
+            queue.removeFirst().run();
+            RuntimeResponse.Result.Control waited = assertInstanceOf(
+                    RuntimeResponse.Result.Control.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(
+                                    ProtocolVersion.V1_8, "wait-poll", "control", wait))).result());
+            assertEquals(ControlStopReason.CONDITION_SATISFIED,
+                    waited.operation().orElseThrow().stopReason());
+            assertEquals(3, ticks[0]);
         }
     }
 

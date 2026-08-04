@@ -50,6 +50,11 @@ This document makes lifecycle and evidence edge cases explicit.
     range. The assertion union and nested comparison scope are closed; negative and remains
     assertions require complete evidence, while eviction, capture diagnostics, aborted decisions,
     or relevant truncation produce `INCONCLUSIVE` instead of a misleading pass or failure.
+25. Simulation control is an optional application-owned controller registered explicitly before
+    start. Pause/resume callbacks gate only normal application updates; exact ticks and bounded waits
+    run through application command dispatch on the capture thread, capture one completed frame per
+    tick, and retain requested/completed counts, first/final frame IDs, and explicit stop reasons.
+    The runtime owns no loop, scheduler, sleep, or inferred condition.
 
 Closing during a frame is rejected. `frame` completes capture and rethrows callback failure.
 Disabled runtimes retain no providers or frames and perform no serialization.

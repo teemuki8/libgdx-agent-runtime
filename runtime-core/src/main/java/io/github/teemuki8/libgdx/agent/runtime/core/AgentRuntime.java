@@ -35,6 +35,7 @@ public final class AgentRuntime implements AutoCloseable {
     private final ScenarioRegistry scenarios;
     private final ActionRegistry actions;
     private final AssertionEvaluator assertions;
+    private final SimulationControlRegistry controls;
     private final EntityRegistry entities = new EntityRegistry(this);
     private final LinkedHashMap<EntityId, InspectableEntity> staticEntities = new LinkedHashMap<>();
     private final LinkedHashMap<String, Supplier<? extends Stream<InspectableEntity>>> sources =
@@ -71,6 +72,7 @@ public final class AgentRuntime implements AutoCloseable {
         scenarios = new ScenarioRegistry(this, builder.scenarioLimits);
         actions = new ActionRegistry(this, builder.actionLimits);
         assertions = new AssertionEvaluator(this);
+        controls = new SimulationControlRegistry(this, builder.controlLimits);
     }
 
     /** Creates a runtime builder owned by the calling thread by default. */
@@ -116,6 +118,11 @@ public final class AgentRuntime implements AutoCloseable {
     /** Returns the read-only declarative assertion evaluator. */
     public AssertionEvaluator assertions() {
         return assertions;
+    }
+
+    /** Returns the optional application-owned simulation control registration surface. */
+    public SimulationControlRegistry controls() {
+        return controls;
     }
 
     /**
@@ -794,6 +801,14 @@ public final class AgentRuntime implements AutoCloseable {
         requireMutableRegistration();
     }
 
+    void requireControlRegistration() {
+        requireMutableRegistration();
+    }
+
+    long monotonicTimeNanos() {
+        return monotonicClock.nanoTime();
+    }
+
     FrameId executeScenarioReset(Runnable reset) {
         requireCaptureThread();
         requireRunning();
@@ -1050,6 +1065,7 @@ public final class AgentRuntime implements AutoCloseable {
                 CommandDispatchLimits.developmentDefaults();
         private ScenarioLimits scenarioLimits = ScenarioLimits.developmentDefaults();
         private ActionLimits actionLimits = ActionLimits.developmentDefaults();
+        private ControlLimits controlLimits = ControlLimits.developmentDefaults();
 
         private Builder() {}
 
@@ -1104,6 +1120,12 @@ public final class AgentRuntime implements AutoCloseable {
         /** Configures hard bounds for application-registered semantic actions. */
         public Builder actionLimits(ActionLimits value) {
             actionLimits = Objects.requireNonNull(value, "value");
+            return this;
+        }
+
+        /** Configures hard bounds for optional simulation control. */
+        public Builder controlLimits(ControlLimits value) {
+            controlLimits = Objects.requireNonNull(value, "value");
             return this;
         }
 

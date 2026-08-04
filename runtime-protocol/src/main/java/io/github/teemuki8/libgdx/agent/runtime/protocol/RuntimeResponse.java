@@ -20,6 +20,8 @@ import io.github.teemuki8.libgdx.agent.runtime.core.ScenarioReset;
 import io.github.teemuki8.libgdx.agent.runtime.core.ActionDescriptor;
 import io.github.teemuki8.libgdx.agent.runtime.core.ActionInvocation;
 import io.github.teemuki8.libgdx.agent.runtime.core.AssertionResult;
+import io.github.teemuki8.libgdx.agent.runtime.core.ControlOperation;
+import io.github.teemuki8.libgdx.agent.runtime.core.SimulationControlDescriptor;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -77,12 +79,14 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         @JsonSubTypes.Type(value = Result.Reset.class, name = "reset"),
         @JsonSubTypes.Type(value = Result.Actions.class, name = "actions"),
         @JsonSubTypes.Type(value = Result.Action.class, name = "action"),
-        @JsonSubTypes.Type(value = Result.Assertion.class, name = "assertion")
+        @JsonSubTypes.Type(value = Result.Assertion.class, name = "assertion"),
+        @JsonSubTypes.Type(value = Result.Control.class, name = "control")
     })
     sealed interface Result permits Result.Sessions, Result.Capabilities, Result.Frames,
             Result.Snapshot, Result.Entity, Result.Changes, Result.Events, Result.Decisions,
             Result.CommandStatus, Result.CommandCancellation, Result.EpochFrames,
-            Result.Scenarios, Result.Reset, Result.Actions, Result.Action, Result.Assertion {
+            Result.Scenarios, Result.Reset, Result.Actions, Result.Action, Result.Assertion,
+            Result.Control {
         /** Published session catalog. */
         record Sessions(List<SessionInfo> sessions) implements Result {
             /** Copies sessions. */
@@ -207,6 +211,15 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         record Assertion(AssertionResult result) implements Result {
             public Assertion {
                 Objects.requireNonNull(result, "result");
+            }
+        }
+
+        /** Discoverable control state and optional correlated mutation outcome. */
+        record Control(SimulationControlDescriptor descriptor,
+                Optional<ControlOperation> operation) implements Result {
+            public Control {
+                Objects.requireNonNull(descriptor, "descriptor");
+                operation = Objects.requireNonNull(operation, "operation");
             }
         }
     }

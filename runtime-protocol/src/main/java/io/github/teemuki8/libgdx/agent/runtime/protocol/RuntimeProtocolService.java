@@ -457,14 +457,17 @@ public final class RuntimeProtocolService {
         }
         if (version.minor() >= 9) {
             boolean registered = !runtime.inputs().list().isEmpty();
-            boolean available = registered && runtime.commands().isPresent();
+            boolean dispatcher = runtime.commands().isPresent();
+            boolean controller = runtime.controls().available();
+            boolean available = registered && dispatcher && controller;
             var inputLimits = runtime.inputs().limits();
             details.add(new RuntimeCapability(
                     "registered-inputs", ProtocolVersion.V1_9,
                     available ? RuntimeCapability.Availability.AVAILABLE
                             : RuntimeCapability.Availability.UNAVAILABLE,
-                    available ? Optional.empty() : Optional.of(registered
-                            ? "dispatcher-not-registered" : "input-not-registered"),
+                    available ? Optional.empty() : Optional.of(!registered
+                            ? "input-not-registered" : !dispatcher
+                                    ? "dispatcher-not-registered" : "controller-not-registered"),
                     RuntimeCapability.Access.MUTATING,
                     List.of("AgentRuntime#inputs", "InputRegistry#register",
                             "InputRegistry#inject"),
@@ -577,6 +580,12 @@ public final class RuntimeProtocolService {
         }
         if (runtime.commands().isEmpty()) {
             throw capabilityUnavailable(runtime);
+        }
+        if (!runtime.controls().available()) {
+            throw new ProtocolFailure(ProtocolErrorCode.CAPABILITY_UNAVAILABLE,
+                    "simulation controller is unavailable",
+                    Map.of("sessionId", runtime.sessionId().value(),
+                            "capability", "registered-inputs"));
         }
         java.util.OptionalLong target = command.targetTick() == null
                 ? java.util.OptionalLong.empty()

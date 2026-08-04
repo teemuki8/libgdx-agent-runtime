@@ -604,6 +604,39 @@ final class RuntimeProtocolTest {
     }
 
     @Test
+    void registeredInputCapabilityRequiresSimulationController() {
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("input-without-controller"))
+                .commandDispatcher(command -> {}).build();
+        runtime.inputs().register(InputSpec.builder("key-down")
+                .requiredString("key").handler(parameters -> {}).build());
+        runtime.start();
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime)) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            RuntimeProtocolService service = new RuntimeProtocolService(registry);
+            RuntimeCapability inputs = capabilities(
+                    service, ProtocolVersion.V1_9, "input-capability",
+                    "input-without-controller").capabilityReport().orElseThrow()
+                    .capabilities().stream()
+                    .filter(capability -> capability.id().equals("registered-inputs"))
+                    .findFirst().orElseThrow();
+            assertEquals(RuntimeCapability.Availability.UNAVAILABLE, inputs.availability());
+            assertEquals("controller-not-registered",
+                    inputs.unavailableReason().orElseThrow());
+
+            RuntimeResponse.Failure failure = assertInstanceOf(RuntimeResponse.Failure.class,
+                    service.execute(new RuntimeRequest(
+                            ProtocolVersion.V1_9, "input", "input-without-controller",
+                            new RuntimeCommand.Input("key-down", "key-1",
+                                    RuntimeValues.object(RuntimeValues.field(
+                                            "key", RuntimeValues.string("SPACE"))),
+                                    null, 1_000))));
+            assertEquals(ProtocolErrorCode.CAPABILITY_UNAVAILABLE, failure.error().code());
+        }
+    }
+
+    @Test
     void registeredInputCatalogAndTargetedInjectionRoundTripWithFrameEvidence() {
         ArrayDeque<Runnable> queue = new ArrayDeque<>();
         String[] key = {""};

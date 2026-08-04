@@ -4,11 +4,21 @@ All notable changes follow Keep a Changelog structure.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-08-04
+
+First production-supported release and stable 1.x compatibility baseline.
+
 ### Added
 
-- Initial Java 25 multi-module release-candidate implementation.
-- Bounded immutable runtime model, capture, diffs, events, decisions, protocol, MCP, and fixture.
 - Frozen protocol 1.0 compatibility plus opt-in protocol 1.1 capability metadata.
+- Protocol 1.2 bounded application-owned command dispatch with request deduplication, cancellation,
+  timeouts, retention, and structured completion evidence.
+- Protocol 1.3 execution epochs and explicit reset baselines with epoch-scoped completed-frame
+  queries.
+- Protocol 1.4 registered resettable scenarios with idempotent application-thread dispatch.
+- Protocol 1.5 explicit fact attribution and closed metadata query filters.
+- Protocol 1.6 typed semantic actions with validated closed parameters and correlated completion
+  evidence.
 - Protocol 1.7 closed declarative assertions with bounded PASS, FAIL, and INCONCLUSIVE evidence
   across the Java API, typed protocol, MCP, and deterministic fixture.
 - Protocol 1.8 application-owned pause, resume, exact tick advance, and bounded semantic/assertion
@@ -30,6 +40,7 @@ All notable changes follow Keep a Changelog structure.
 - Deterministic optional-control conformance coverage across public Java, protocol JSON, closed MCP
   schemas, application-thread dispatch, and the real Xvfb-backed LWJGL3 lifecycle fixture.
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-07-30
 
-First planned public milestone. No production-stability guarantee.
+Initial Java 25 multi-module preview with the bounded immutable runtime model, capture, diffs,
+events, decisions, protocol, MCP, and fixture. No production-stability guarantee.

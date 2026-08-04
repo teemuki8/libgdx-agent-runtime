@@ -17,12 +17,12 @@ inside its existing libGDX process and display session.
 
 ## Add dependencies
 
-During snapshot development:
+For the 1.0 release:
 
 ```kotlin
 dependencies {
-    implementation("io.github.teemuki8:agent-runtime-core:0.1.0-SNAPSHOT")
-    implementation("io.github.teemuki8:agent-runtime-libgdx:0.1.0-SNAPSHOT")
+    implementation("io.github.teemuki8:agent-runtime-core:1.0.0")
+    implementation("io.github.teemuki8:agent-runtime-libgdx:1.0.0")
 }
 ```
 

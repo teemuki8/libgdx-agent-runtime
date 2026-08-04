@@ -31,14 +31,17 @@ build logs.
 ## Stage a candidate
 
 1. Confirm `main` is green and the version has never been published.
-2. Complete the maintainer confirmations in the
+2. For a 1.x update, compare the generated public/protected Javadocs and documented behavior with
+   the previous supported release under [ADR 0011](../adr/0011-stable-1x-compatibility.md). Use a
+   new artifact major version for an incompatible change.
+3. Complete the maintainer confirmations in the
    [Sonatype Central compliance checklist](../sonatype-central-compliance.md), including reviewing
    Sonatype's then-current terms and publishing limits.
-3. Create and push a version tag such as `v0.1.0`.
-4. Publish a GitHub release for that tag.
-5. Approve the waiting `Stage Maven Central` environment deployment.
-6. Inspect the deployment in the Central Publisher Portal.
-7. Publish it only after all Central validations pass; otherwise drop it.
+4. Create and push a version tag such as `v1.0.0`.
+5. Publish a GitHub release for that tag.
+6. Approve the waiting `Stage Maven Central` environment deployment.
+7. Inspect the deployment in the Central Publisher Portal.
+8. Publish it only after all Central validations pass; otherwise drop it.
 
 For recovery, the workflow can be dispatched manually only when the selected Git ref is a `v*`
 version tag. The environment does not permit branches to access its secrets.

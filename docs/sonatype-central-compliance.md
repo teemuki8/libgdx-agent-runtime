@@ -1,7 +1,7 @@
 # Sonatype Central compliance
 
 This project publishes the four library modules as community open-source artifacts under the
-Apache License 2.0. This checklist records the release controls reviewed on 2026-07-30. It is a
+Apache License 2.0. This checklist records the release controls reviewed on 2026-08-04. It is a
 technical release checklist, not legal advice.
 
 ## Automated controls

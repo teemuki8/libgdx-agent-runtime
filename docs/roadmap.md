@@ -7,14 +7,17 @@
 - Automatic structural diffs without inferred causality
 - Structured runtime events
 - Semantic decision traces
-- Typed Java, protocol, and MCP queries
+- Typed Java, exact-version protocol, and closed MCP surfaces
+- Explicit execution epochs, resettable scenarios, attribution, and semantic actions
+- Closed declarative assertions and application-owned exact-tick control
+- Registered input injection, opaque checkpoints, and runtime/UI correlation
+- Bounded semantic recording and repeated-scenario determinism comparison
 
 ## Potential V2
 
 - Scene2D correlation with `libgdx-ui-harness`
 - Ashley adapter
 - Artemis adapter
-- Pause and frame stepping
 - Conditional capture
 - Richer metrics
 - Trace archive viewer

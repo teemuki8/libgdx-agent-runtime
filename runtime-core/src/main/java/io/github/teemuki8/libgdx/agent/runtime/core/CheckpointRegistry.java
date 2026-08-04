@@ -137,9 +137,8 @@ public final class CheckpointRegistry {
             synchronized (this) {
                 if (checkpoints.size() >= limits.retainedCheckpoints()) {
                     String oldest = checkpoints.keySet().iterator().next();
-                    Retained evicted = checkpoints.get(oldest);
+                    Retained evicted = checkpoints.remove(oldest);
                     callbacks.dispose(evicted.handle());
-                    checkpoints.remove(oldest);
                 }
             }
             FrameSnapshot source = runtime.latestFrame().orElseThrow(() ->

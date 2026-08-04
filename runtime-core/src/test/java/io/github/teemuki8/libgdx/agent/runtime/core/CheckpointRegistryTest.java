@@ -114,5 +114,37 @@ final class CheckpointRegistryTest {
         assertTrue(failed.diagnostic().orElseThrow().contains("restore failed"));
     }
 
+    @Test
+    void failedEvictionDisposalDoesNotLeaveTheHandleRestorable() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("failed-disposal"))
+                .clock(() -> 1)
+                .commandDispatcher(dispatch::addLast)
+                .checkpointLimits(new CheckpointLimits(1, 8, 64))
+                .build();
+        runtime.checkpoints().register(new CheckpointProvider() {
+            @Override public CheckpointHandle create() {
+                return new StateHandle(1);
+            }
+            @Override public void restore(CheckpointHandle handle) {}
+            @Override public void dispose(CheckpointHandle handle) {
+                throw new IllegalStateException("disposal failed");
+            }
+        });
+        runtime.start();
+        runtime.checkpoints().create("first", null, "create-first", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        runtime.checkpoints().create("second", null, "create-second", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+
+        CheckpointOperation failed = runtime.checkpoints().create(
+                "second", null, "create-second", Duration.ofSeconds(1));
+        assertEquals(CommandState.FAILED, failed.command().status().orElseThrow().state());
+        assertTrue(runtime.checkpoints().list().isEmpty());
+        assertThrows(IllegalArgumentException.class, () -> runtime.checkpoints().restore(
+                "first", "restore-first", Duration.ofSeconds(1)));
+    }
+
     private record StateHandle(int value) implements CheckpointHandle {}
 }

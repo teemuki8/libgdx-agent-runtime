@@ -18,6 +18,7 @@ public final class AssertionEvaluator {
     public AssertionResult evaluate(RuntimeAssertion assertion, AssertionScope scope) {
         Objects.requireNonNull(assertion, "assertion");
         Objects.requireNonNull(scope, "scope");
+        validateValues(assertion);
         EvidenceContext context = load(scope);
         return switch (assertion) {
             case RuntimeAssertion.EntityExists value -> entityExists(value, scope, context, true);
@@ -44,6 +45,19 @@ public final class AssertionEvaluator {
         };
     }
 
+    private void validateValues(RuntimeAssertion assertion) {
+        RuntimeLimits limits = runtime.configuration().limits();
+        switch (assertion) {
+            case RuntimeAssertion.PropertyEquals value ->
+                    RuntimeValueValidator.validate(value.expected(), limits);
+            case RuntimeAssertion.PropertyChangesFrom value ->
+                    RuntimeValueValidator.validate(value.from(), limits);
+            default -> {
+                // Other assertion inputs contain bounded scalars and identifiers only.
+            }
+        }
+    }
+
     private AssertionResult entityExists(RuntimeAssertion assertion, AssertionScope scope,
             EvidenceContext context, boolean expectedExists) {
         FrameSnapshot terminal = context.terminal(scope.range().to());
@@ -60,8 +74,12 @@ public final class AssertionEvaluator {
         }
         RuntimeValue expected = RuntimeValues.bool(expectedExists);
         RuntimeValue observed = RuntimeValues.bool(exists);
+        List<AssertionEvidence> evidence = status == AssertionStatus.FAIL ? List.of(
+                new AssertionEvidence(terminal.frameId(), "entity",
+                        Optional.of(entityId(assertion)), Optional.empty(),
+                        Optional.of(observed))) : List.of();
         return result(status, expectedExists ? "entityExists" : "entityDoesNotExist", scope,
-                Optional.of(expected), Optional.of(observed), List.of(), context.incomplete,
+                Optional.of(expected), Optional.of(observed), evidence, context.incomplete,
                 statusMessage(status));
     }
 
@@ -207,7 +225,7 @@ public final class AssertionEvaluator {
                         : trace.candidates().stream().anyMatch(value ->
                                 value.entityId().equals(candidate)
                                         && value.status() == DecisionCandidate.Status.REJECTED));
-                if (matches) {
+                if (matches && trace.completion() == DecisionTrace.Completion.COMPLETED) {
                     AssertionEvidence evidence = new AssertionEvidence(frame.frameId(), "decision",
                             Optional.of(candidate), Optional.empty(),
                             Optional.of(RuntimeValues.string(type.value())));
@@ -350,11 +368,13 @@ public final class AssertionEvaluator {
                 .toList();
         List<ComparableEvent> events = scope.includeEvents()
                 ? frame.events().stream().map(event -> new ComparableEvent(event.type(),
-                        event.subject(), event.source(), event.attributes())).toList() : List.of();
+                        event.subject(), event.source(), event.metadata(), event.attributes()))
+                        .toList() : List.of();
         List<ComparableDecision> decisions = scope.includeDecisions()
                 ? frame.decisions().stream().map(decision -> new ComparableDecision(decision.type(),
                         decision.actor(), decision.candidates(), decision.chosenCandidate(),
-                        decision.completion())).toList() : List.of();
+                        decision.choiceReason(), decision.metadata(), decision.completion()))
+                        .toList() : List.of();
         return new ComparableSnapshot(entities, events, decisions);
     }
 
@@ -394,9 +414,11 @@ public final class AssertionEvaluator {
             List<RuntimeValue.Field> properties) {}
 
     private record ComparableEvent(EventType type, Optional<EntityId> subject,
-            Optional<EntityId> source, List<RuntimeValue.Field> attributes) {}
+            Optional<EntityId> source, FactMetadata metadata,
+            List<RuntimeValue.Field> attributes) {}
 
     private record ComparableDecision(DecisionType type, EntityId actor,
             List<DecisionCandidate> candidates, Optional<EntityId> chosenCandidate,
+            Optional<Reason> choiceReason, FactMetadata metadata,
             DecisionTrace.Completion completion) {}
 }

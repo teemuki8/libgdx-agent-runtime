@@ -131,6 +131,70 @@ final class RuntimeAssertionTest {
     }
 
     @Test
+    void snapshotEquivalenceIncludesSelectedFactMetadataAndDecisionReasons() {
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("equivalence"))
+                .clock(() -> 1)
+                .build();
+        runtime.start();
+        runtime.frame(1, () -> {
+            runtime.emit(EventSpec.type("signal").correlationId("first"));
+            try (DecisionScope decision = runtime.beginDecision(
+                    DecisionType.of("choice"), EntityId.of("actor"))) {
+                decision.accept(EntityId.of("candidate"));
+                decision.choose(EntityId.of("candidate"), Reason.of("first"));
+            }
+        });
+        runtime.frame(1, () -> {
+            runtime.emit(EventSpec.type("signal").correlationId("second"));
+            try (DecisionScope decision = runtime.beginDecision(
+                    DecisionType.of("choice"), EntityId.of("actor"))) {
+                decision.accept(EntityId.of("candidate"));
+                decision.choose(EntityId.of("candidate"), Reason.of("second"));
+            }
+        });
+        AssertionScope scope = new AssertionScope(new ExecutionEpochId(0),
+                new FrameRange(new FrameId(1), new FrameId(2)), 4);
+
+        assertEquals(AssertionStatus.FAIL, runtime.assertions().evaluate(
+                new RuntimeAssertion.SnapshotsEquivalent(new FrameId(1), new FrameId(2),
+                        new SnapshotComparisonScope(
+                                List.of(), List.of(), List.of(), true, false)), scope).status());
+        assertEquals(AssertionStatus.FAIL, runtime.assertions().evaluate(
+                new RuntimeAssertion.SnapshotsEquivalent(new FrameId(1), new FrameId(2),
+                        new SnapshotComparisonScope(
+                                List.of(), List.of(), List.of(), false, true)), scope).status());
+    }
+
+    @Test
+    void abortedDecisionMatchesAreInconclusiveAndFailuresCarryFrameEvidence() {
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("review"))
+                .clock(() -> 1)
+                .build();
+        runtime.start();
+        runtime.frame(1, () -> {
+            DecisionScope decision = runtime.beginDecision(
+                    DecisionType.of("target.select"), EntityId.of("actor"));
+            decision.reject(EntityId.of("enemy-1"), Reason.of("blocked"));
+        });
+        AssertionScope scope = new AssertionScope(new ExecutionEpochId(0),
+                new FrameRange(new FrameId(0), new FrameId(1)), 4);
+
+        assertEquals(AssertionStatus.INCONCLUSIVE, runtime.assertions().evaluate(
+                new RuntimeAssertion.DecisionRejected(DecisionType.of("target.select"),
+                        EntityId.of("enemy-1")), scope).status());
+        AssertionScope complete = new AssertionScope(new ExecutionEpochId(0),
+                new FrameRange(new FrameId(0), new FrameId(0)), 4);
+        AssertionResult missing = runtime.assertions().evaluate(
+                new RuntimeAssertion.EntityExists(EntityId.of("missing")), complete);
+        assertEquals(AssertionStatus.FAIL, missing.status());
+        assertEquals(new FrameId(0), missing.evidence().getFirst().frameId());
+        assertEquals(RuntimeValues.bool(false),
+                missing.evidence().getFirst().observed().orElseThrow());
+    }
+
+    @Test
     @Timeout(2)
     void handlesTheMaximumFrameIdWithoutLoopOverflow() {
         AgentRuntime runtime = AgentRuntime.builder()
@@ -155,5 +219,27 @@ final class RuntimeAssertionTest {
                 EventType.of("event"), 0));
         assertThrows(IllegalArgumentException.class, () -> new SnapshotComparisonScope(
                 List.of(), List.of(), List.of(), false, false));
+        assertThrows(IllegalArgumentException.class, () -> new SnapshotComparisonScope(
+                java.util.stream.IntStream.range(0, 101)
+                        .mapToObj(index -> EntityId.of("entity-" + index)).toList(),
+                List.of(), List.of(), false, false));
+
+        RuntimeLimits defaults = RuntimeLimits.developmentDefaults();
+        RuntimeLimits limits = new RuntimeLimits(defaults.retainedFrames(),
+                defaults.retainedEvents(), defaults.entitiesPerSnapshot(),
+                defaults.propertiesPerEntity(), defaults.decisionsPerFrame(),
+                defaults.candidatesPerDecision(), defaults.attributesPerItem(),
+                defaults.stringLength(), 1, defaults.nestingDepth(), defaults.queryResults());
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("bounded-values"))
+                .configuration(new RuntimeConfiguration(true, limits))
+                .clock(() -> 1)
+                .build();
+        runtime.start();
+        assertThrows(IllegalArgumentException.class, () -> runtime.assertions().evaluate(
+                new RuntimeAssertion.PropertyEquals(EntityId.of("missing"), "value",
+                        RuntimeValues.list(RuntimeValues.integer(1), RuntimeValues.integer(2))),
+                new AssertionScope(new ExecutionEpochId(0),
+                        new FrameRange(new FrameId(0), new FrameId(0)), 4)));
     }
 }

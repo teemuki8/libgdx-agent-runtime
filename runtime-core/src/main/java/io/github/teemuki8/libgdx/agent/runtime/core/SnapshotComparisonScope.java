@@ -9,15 +9,9 @@ public record SnapshotComparisonScope(List<EntityId> entityIds, List<String> pro
         List<String> excludedProperties, boolean includeEvents, boolean includeDecisions) {
     /** Validates, copies, and deterministically orders selectors. */
     public SnapshotComparisonScope {
-        entityIds = Objects.requireNonNull(entityIds, "entityIds").stream()
-                .sorted().distinct().toList();
+        entityIds = entities(entityIds);
         properties = identifiers(properties, "property");
         excludedProperties = identifiers(excludedProperties, "excluded property");
-        if (entityIds.size() > AssertionScope.MAX_EVIDENCE
-                || properties.size() > AssertionScope.MAX_EVIDENCE
-                || excludedProperties.size() > AssertionScope.MAX_EVIDENCE) {
-            throw new IllegalArgumentException("snapshot comparison selector limit exceeded");
-        }
         if (entityIds.isEmpty() && properties.isEmpty() && !includeEvents && !includeDecisions) {
             throw new IllegalArgumentException("snapshot comparison scope has no included observable");
         }
@@ -26,9 +20,23 @@ public record SnapshotComparisonScope(List<EntityId> entityIds, List<String> pro
         }
     }
 
+    private static List<EntityId> entities(List<EntityId> values) {
+        Objects.requireNonNull(values, "entityIds");
+        requireSelectorLimit(values.size());
+        return values.stream().map(value -> Objects.requireNonNull(value, "entityId"))
+                .sorted().distinct().toList();
+    }
+
     private static List<String> identifiers(List<String> values, String name) {
-        return Objects.requireNonNull(values, name).stream()
-                .map(value -> IdentifierSupport.validate(value, name))
+        Objects.requireNonNull(values, name);
+        requireSelectorLimit(values.size());
+        return values.stream().map(value -> IdentifierSupport.validate(value, name))
                 .sorted(Comparator.naturalOrder()).distinct().toList();
+    }
+
+    private static void requireSelectorLimit(int size) {
+        if (size > AssertionScope.MAX_EVIDENCE) {
+            throw new IllegalArgumentException("snapshot comparison selector limit exceeded");
+        }
     }
 }

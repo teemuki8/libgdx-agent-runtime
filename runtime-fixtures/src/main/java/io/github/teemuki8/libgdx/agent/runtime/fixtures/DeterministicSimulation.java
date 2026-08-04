@@ -2,6 +2,8 @@ package io.github.teemuki8.libgdx.agent.runtime.fixtures;
 
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
 import io.github.teemuki8.libgdx.agent.runtime.core.ApplicationCommandDispatcher;
+import io.github.teemuki8.libgdx.agent.runtime.core.CheckpointHandle;
+import io.github.teemuki8.libgdx.agent.runtime.core.CheckpointProvider;
 import io.github.teemuki8.libgdx.agent.runtime.core.DecisionScope;
 import io.github.teemuki8.libgdx.agent.runtime.core.DecisionType;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
@@ -58,6 +60,17 @@ public final class DeterministicSimulation {
                 .handler(parameters -> player.state = parameters.requiredString("state"))
                 .build());
         if (dispatcher != null) {
+            runtime.checkpoints().register(new CheckpointProvider() {
+                @Override public CheckpointHandle create() {
+                    return new FixtureCheckpoint(player.state, tower1.state);
+                }
+                @Override public void restore(CheckpointHandle handle) {
+                    FixtureCheckpoint checkpoint = (FixtureCheckpoint) handle;
+                    player.state = checkpoint.playerState();
+                    tower1.state = checkpoint.towerState();
+                }
+                @Override public void dispose(CheckpointHandle handle) {}
+            });
             runtime.controls().register(SimulationControllerSpec.builder()
                     .pause(() -> paused = true)
                     .resume(() -> paused = false)
@@ -138,6 +151,9 @@ public final class DeterministicSimulation {
     private Unit enemy(String id) {
         return enemies.stream().filter(enemy -> enemy.id.equals(id)).findFirst().orElseThrow();
     }
+
+    private record FixtureCheckpoint(
+            String playerState, String towerState) implements CheckpointHandle {}
 
     private static final class Unit {
         private final String id;

@@ -37,6 +37,7 @@ public final class AgentRuntime implements AutoCloseable {
     private final AssertionEvaluator assertions;
     private final SimulationControlRegistry controls;
     private final InputRegistry inputs;
+    private final CheckpointRegistry checkpoints;
     private final EntityRegistry entities = new EntityRegistry(this);
     private final LinkedHashMap<EntityId, InspectableEntity> staticEntities = new LinkedHashMap<>();
     private final LinkedHashMap<String, Supplier<? extends Stream<InspectableEntity>>> sources =
@@ -75,6 +76,7 @@ public final class AgentRuntime implements AutoCloseable {
         assertions = new AssertionEvaluator(this);
         controls = new SimulationControlRegistry(this, builder.controlLimits);
         inputs = new InputRegistry(this, builder.inputLimits);
+        checkpoints = new CheckpointRegistry(this, builder.checkpointLimits);
     }
 
     /** Creates a runtime builder owned by the calling thread by default. */
@@ -130,6 +132,11 @@ public final class AgentRuntime implements AutoCloseable {
     /** Returns the explicit bounded registry for controlled-tick input facts. */
     public InputRegistry inputs() {
         return inputs;
+    }
+
+    /** Returns the optional application-owned opaque checkpoint registry. */
+    public CheckpointRegistry checkpoints() {
+        return checkpoints;
     }
 
     /**
@@ -457,14 +464,26 @@ public final class AgentRuntime implements AutoCloseable {
         if (activeFrame != null) {
             throw lifecycle("runtime cannot close while a frame is open");
         }
+        commands.ifPresent(CommandDispatch::close);
+        Throwable checkpointFailure = null;
+        try {
+            checkpoints.close();
+        } catch (RuntimeException | Error failure) {
+            checkpointFailure = failure;
+        }
         staticEntities.clear();
         sources.clear();
         pendingCauses.clear();
         pendingEvents.clear();
         pendingDecisions.clear();
         openDecision = null;
-        commands.ifPresent(CommandDispatch::close);
         status = RuntimeStatus.CLOSED;
+        if (checkpointFailure instanceof RuntimeException failure) {
+            throw failure;
+        }
+        if (checkpointFailure instanceof Error failure) {
+            throw failure;
+        }
     }
 
     EntityRegistration registerStatic(InspectableEntity entity) {
@@ -816,8 +835,24 @@ public final class AgentRuntime implements AutoCloseable {
         requireMutableRegistration();
     }
 
+    void requireCheckpointRegistration() {
+        requireMutableRegistration();
+    }
+
     long monotonicTimeNanos() {
         return monotonicClock.nanoTime();
+    }
+
+    Instant wallTime() {
+        return Instant.now(wallClock);
+    }
+
+    void requireCheckpointMutation() {
+        requireCaptureThread();
+        requireRunning();
+        if (activeFrame != null) {
+            throw lifecycle("a checkpoint cannot mutate state while a frame is open");
+        }
     }
 
     FrameId executeScenarioReset(Runnable reset) {
@@ -1078,6 +1113,7 @@ public final class AgentRuntime implements AutoCloseable {
         private ActionLimits actionLimits = ActionLimits.developmentDefaults();
         private ControlLimits controlLimits = ControlLimits.developmentDefaults();
         private InputLimits inputLimits = InputLimits.developmentDefaults();
+        private CheckpointLimits checkpointLimits = CheckpointLimits.developmentDefaults();
 
         private Builder() {}
 
@@ -1144,6 +1180,12 @@ public final class AgentRuntime implements AutoCloseable {
         /** Configures hard bounds for registered and scheduled input facts. */
         public Builder inputLimits(InputLimits value) {
             inputLimits = Objects.requireNonNull(value, "value");
+            return this;
+        }
+
+        /** Configures hard bounds for retained opaque checkpoints and operation evidence. */
+        public Builder checkpointLimits(CheckpointLimits value) {
+            checkpointLimits = Objects.requireNonNull(value, "value");
             return this;
         }
 

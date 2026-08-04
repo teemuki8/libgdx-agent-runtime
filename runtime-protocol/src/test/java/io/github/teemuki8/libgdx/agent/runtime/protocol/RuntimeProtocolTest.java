@@ -11,6 +11,9 @@ import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
 import io.github.teemuki8.libgdx.agent.runtime.core.ActionSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.BaselineKind;
 import io.github.teemuki8.libgdx.agent.runtime.core.CommandState;
+import io.github.teemuki8.libgdx.agent.runtime.core.CheckpointHandle;
+import io.github.teemuki8.libgdx.agent.runtime.core.CheckpointOperation;
+import io.github.teemuki8.libgdx.agent.runtime.core.CheckpointProvider;
 import io.github.teemuki8.libgdx.agent.runtime.core.AssertionStatus;
 import io.github.teemuki8.libgdx.agent.runtime.core.ControlStopReason;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
@@ -98,7 +101,7 @@ final class RuntimeProtocolTest {
                 service.execute(new RuntimeRequest(
                         new ProtocolVersion(2, 0), "v", null, new RuntimeCommand.Sessions())));
         assertEquals(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED, version.error().code());
-        assertEquals("1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9",
+        assertEquals("1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10",
                 version.error().details().get("supported"));
 
         RuntimeResponse.Failure missing = assertInstanceOf(RuntimeResponse.Failure.class,
@@ -604,6 +607,73 @@ final class RuntimeProtocolTest {
     }
 
     @Test
+    void checkpointCreationAndRestoreRoundTripWithoutExposingOpaqueHandle() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        int[] state = {7};
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("checkpoint-protocol"))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .build();
+        runtime.checkpoints().register(new CheckpointProvider() {
+            @Override public CheckpointHandle create() {
+                return new TestCheckpoint(state[0]);
+            }
+            @Override public void restore(CheckpointHandle handle) {
+                state[0] = ((TestCheckpoint) handle).value();
+            }
+            @Override public void dispose(CheckpointHandle handle) {}
+        });
+        runtime.start();
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime)) {
+            RuntimeProtocolService service = new RuntimeProtocolService(registry);
+            RuntimeCapability capability = capabilities(service, ProtocolVersion.V1_10,
+                    "checkpoint-capabilities", "checkpoint-protocol")
+                    .capabilityReport().orElseThrow().capabilities().stream()
+                    .filter(value -> value.id().equals("checkpoints")).findFirst().orElseThrow();
+            assertEquals(RuntimeCapability.Availability.AVAILABLE, capability.availability());
+
+            RuntimeCommand.CheckpointCreate create = new RuntimeCommand.CheckpointCreate(
+                    "save-1", "Before change", "create-1", 1_000);
+            RuntimeCommand.CheckpointCreate decoded =
+                    assertInstanceOf(RuntimeCommand.CheckpointCreate.class,
+                            ProtocolJson.decodeRequest(ProtocolJson.encode(new RuntimeRequest(
+                                    ProtocolVersion.V1_10, "create-json",
+                                    "checkpoint-protocol", create))).command());
+            service.execute(new RuntimeRequest(ProtocolVersion.V1_10, "create",
+                    "checkpoint-protocol", decoded));
+            queue.removeFirst().run();
+            RuntimeResponse.Result.Checkpoint created = assertInstanceOf(
+                    RuntimeResponse.Result.Checkpoint.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V1_10, "create-poll",
+                                    "checkpoint-protocol", decoded))).result());
+            assertEquals(CheckpointOperation.Kind.CREATE, created.operation().kind());
+            RuntimeResponse catalogResponse = service.execute(new RuntimeRequest(
+                    ProtocolVersion.V1_10, "catalog", "checkpoint-protocol",
+                    new RuntimeCommand.Checkpoints()));
+            assertFalse(new String(ProtocolJson.encode(catalogResponse), StandardCharsets.UTF_8)
+                    .contains("TestCheckpoint"));
+
+            state[0] = 9;
+            runtime.frame(1, () -> {});
+            RuntimeCommand.CheckpointRestore restore =
+                    new RuntimeCommand.CheckpointRestore("save-1", "restore-1", 1_000);
+            service.execute(new RuntimeRequest(ProtocolVersion.V1_10, "restore",
+                    "checkpoint-protocol", restore));
+            queue.removeFirst().run();
+            RuntimeResponse.Result.Checkpoint restored = assertInstanceOf(
+                    RuntimeResponse.Result.Checkpoint.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V1_10, "restore-poll",
+                                    "checkpoint-protocol", restore))).result());
+            assertEquals(7, state[0]);
+            assertEquals(new FrameId(2), restored.operation().baselineFrameId().orElseThrow());
+        }
+    }
+
+    @Test
     void registeredInputCapabilityRequiresSimulationController() {
         AgentRuntime runtime = AgentRuntime.builder()
                 .sessionId(SessionId.of("input-without-controller"))
@@ -695,6 +765,8 @@ final class RuntimeProtocolTest {
             assertEquals("SPACE", key[0]);
         }
     }
+
+    private record TestCheckpoint(int value) implements CheckpointHandle {}
 
     private static AgentRuntime verticalRuntime() {
         long[] health = {100};

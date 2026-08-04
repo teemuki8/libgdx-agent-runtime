@@ -17,6 +17,9 @@ union. They do not accept scripts, expressions, class names, reflection, or call
 Registered input injection accepts only application-declared IDs and closed scalar parameters on
 paused controlled ticks. It cannot address arbitrary classes or operating-system input, and
 application-selected redaction can omit parameter values from retained evidence.
+Checkpoint payloads remain opaque application-owned handles inside the runtime. MCP exposes only
+bounded descriptors and operation evidence; it cannot serialize, traverse, name, or restore an
+arbitrary object supplied by a caller.
 
 Do not publish credentials, tokens, secrets, private user data, or filesystem information as entity
 properties, event attributes, decision attributes, names, or diagnostics.

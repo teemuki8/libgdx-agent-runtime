@@ -194,6 +194,14 @@ public final class RuntimeToolHandler implements AutoCloseable {
             case "runtime_checkpoint_restore" -> new RuntimeCommand.CheckpointRestore(
                     string(arguments, "checkpointId"), string(arguments, "checkpointRequestId"),
                     number(arguments, "timeoutNanos", -1));
+            case "runtime_ui_bindings" -> new RuntimeCommand.UiBindings(
+                    string(arguments, "entityId"), string(arguments, "property"),
+                    string(arguments, "uiSessionId"), string(arguments, "uiControlId"),
+                    number(arguments, "executionEpochId", -1),
+                    number(arguments, "runtimeFrameId", -1),
+                    string(arguments, "uiGeneration"), limit);
+            case "runtime_ui_frames" -> new RuntimeCommand.UiFrames(
+                    string(arguments, "uiSessionId"), string(arguments, "correlationToken"), limit);
             default -> throw new IllegalArgumentException("unknown runtime tool");
         };
         ProtocolVersion version = switch (toolName) {
@@ -210,6 +218,7 @@ public final class RuntimeToolHandler implements AutoCloseable {
             case "runtime_inputs", "runtime_input" -> ProtocolVersion.V1_9;
             case "runtime_checkpoints", "runtime_checkpoint_create",
                     "runtime_checkpoint_restore" -> ProtocolVersion.V1_10;
+            case "runtime_ui_bindings", "runtime_ui_frames" -> ProtocolVersion.V1_11;
             default -> ProtocolVersion.V1;
         };
         return new RuntimeRequest(version,

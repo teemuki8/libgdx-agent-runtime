@@ -18,6 +18,7 @@ import io.github.teemuki8.libgdx.agent.runtime.core.SimulationControllerSpec;
 import io.github.teemuki8.libgdx.agent.runtime.libgdx.LibGdxAgentRuntime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 /** Tiny deterministic tower simulation used by every public vertical-stack fixture test. */
 public final class DeterministicSimulation {
@@ -54,6 +55,12 @@ public final class DeterministicSimulation {
         register(runtime, tower1);
         register(runtime, tower2);
         runtime.entities().registerSource("enemies", () -> enemies.stream().map(this::inspectable));
+        runtime.uiCorrelations().register(
+                new io.github.teemuki8.libgdx.agent.runtime.core.UiBinding(
+                        "player-state-hud", EntityId.of("player-1"), Optional.of("state"),
+                        "fixture-hud", "player-state",
+                        new io.github.teemuki8.libgdx.agent.runtime.core.UiBindingValidity(
+                                Optional.empty(), Optional.empty(), Optional.empty())));
         runtime.inputs().register(InputSpec.builder("set-player-state")
                 .description("Sets the deterministic player state on a controlled tick")
                 .requiredString("state")
@@ -80,6 +87,11 @@ public final class DeterministicSimulation {
                     .build());
         }
         runtime.start();
+        runtime.uiCorrelations().recordFrame(
+                new io.github.teemuki8.libgdx.agent.runtime.core.UiFrameCorrelation(
+                        runtime.currentEpoch(),
+                        runtime.latestFrame().orElseThrow().frameId(),
+                        "fixture-hud", Optional.of("ui-baseline"), Optional.of("fixture-baseline")));
         return runtime;
     }
 

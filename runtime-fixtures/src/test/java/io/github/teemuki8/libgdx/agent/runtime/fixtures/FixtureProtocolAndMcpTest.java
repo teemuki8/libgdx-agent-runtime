@@ -66,6 +66,46 @@ final class FixtureProtocolAndMcpTest {
     }
 
     @Test
+    void fixtureCorrelatesRuntimeAndUiSelectorsInBothDirections() {
+        Fixture fixture = fixture();
+        try (PublishedRuntime publication = fixture.registry.publish(fixture.runtime);
+                RuntimeToolHandler handler =
+                        new RuntimeToolHandler(new RuntimeProtocolService(fixture.registry))) {
+            assertEquals(fixture.runtime.sessionId(), publication.sessionId());
+            RuntimeProtocolService protocol = new RuntimeProtocolService(fixture.registry);
+            RuntimeResponse.Result.UiBindings runtimeToUi = assertInstanceOf(
+                    RuntimeResponse.Result.UiBindings.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, protocol.execute(
+                            new RuntimeRequest(ProtocolVersion.V1_11, "runtime-to-ui",
+                                    DeterministicSimulation.SESSION_ID.value(),
+                                    new RuntimeCommand.UiBindings(
+                                            "player-1", "state", null, null,
+                                            0, 0, null, 8)))).result());
+            assertEquals("player-state",
+                    runtimeToUi.result().bindings().getFirst().uiControlId());
+
+            RuntimeResponse.Result.UiBindings uiToRuntime = assertInstanceOf(
+                    RuntimeResponse.Result.UiBindings.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, protocol.execute(
+                            new RuntimeRequest(ProtocolVersion.V1_11, "ui-to-runtime",
+                                    DeterministicSimulation.SESSION_ID.value(),
+                                    new RuntimeCommand.UiBindings(
+                                            null, null, "fixture-hud", "player-state",
+                                            0, 0, null, 8)))).result());
+            assertEquals(EntityId.of("player-1"),
+                    uiToRuntime.result().bindings().getFirst().runtimeEntityId());
+
+            McpSchema.CallToolResult frames = handler.handle(call("runtime_ui_frames", Map.of(
+                    "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                    "correlationToken", "fixture-baseline", "limit", 8)))
+                    .block(Duration.ofSeconds(5));
+            assertFalse(frames.isError());
+            assertTrue(frames.structuredContent().toString().contains("ui-baseline"));
+        }
+        fixture.runtime.close();
+    }
+
+    @Test
     void fixtureEvidenceIsAvailableThroughMcpToolCalls() {
         Fixture fixture = fixture();
         try (PublishedRuntime publication = fixture.registry.publish(fixture.runtime);

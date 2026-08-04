@@ -64,6 +64,11 @@ This document makes lifecycle and evidence edge cases explicit.
     Java inspection, protocol, or MCP boundary. Creation is anchored to the latest quiescent completed
     frame. Restore runs through application dispatch and claims success only after one new
     `CHECKPOINT_RESTORE` baseline completes; failures report possible partial application mutation.
+28. Runtime-to-UI correlation exists only through explicit application-registered immutable
+    bindings and frame mappings. Binding validity may name an execution epoch, runtime-frame range,
+    and UI generation; stale matches are reported as `EXPIRED`, never guessed. Bidirectional queries,
+    frame-correlation retention, strings, and results are bounded with explicit ambiguity,
+    truncation, and eviction evidence. The runtime does not inspect UI objects or visual output.
 
 Closing during a frame is rejected. `frame` completes capture and rethrows callback failure.
 Disabled runtimes retain no providers or frames and perform no serialization.

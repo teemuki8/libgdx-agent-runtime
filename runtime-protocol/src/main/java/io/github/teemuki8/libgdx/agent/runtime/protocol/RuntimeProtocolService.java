@@ -48,13 +48,15 @@ public final class RuntimeProtocolService {
     private static final List<String> INPUT_TOOLS = List.of("runtime_inputs", "runtime_input");
     private static final List<String> CHECKPOINT_TOOLS = List.of(
             "runtime_checkpoints", "runtime_checkpoint_create", "runtime_checkpoint_restore");
+    private static final List<String> UI_CORRELATION_TOOLS =
+            List.of("runtime_ui_bindings", "runtime_ui_frames");
     private static final List<String> FEATURES = List.of(
             "entities", "frames", "changes", "events", "decisions");
     private static final List<ProtocolVersion> SUPPORTED_VERSIONS =
             List.of(ProtocolVersion.V1, ProtocolVersion.V1_1, ProtocolVersion.V1_2,
                     ProtocolVersion.V1_3, ProtocolVersion.V1_4, ProtocolVersion.V1_5,
                     ProtocolVersion.V1_6, ProtocolVersion.V1_7, ProtocolVersion.V1_8,
-                    ProtocolVersion.V1_9, ProtocolVersion.V1_10);
+                    ProtocolVersion.V1_9, ProtocolVersion.V1_10, ProtocolVersion.V1_11);
     private final RuntimeRegistry registry;
 
     /** Creates a service over an isolated or global registry. */
@@ -94,7 +96,12 @@ public final class RuntimeProtocolService {
         }
         boolean checkpoints = registry.sessions().stream()
                 .anyMatch(runtime -> runtime.checkpoints().available());
-        return checkpoints ? Stream.concat(tools, CHECKPOINT_TOOLS.stream()).toList()
+        if (checkpoints) {
+            tools = Stream.concat(tools, CHECKPOINT_TOOLS.stream());
+        }
+        boolean uiCorrelations = registry.sessions().stream()
+                .anyMatch(runtime -> runtime.uiCorrelations().available());
+        return uiCorrelations ? Stream.concat(tools, UI_CORRELATION_TOOLS.stream()).toList()
                 : tools.toList();
     }
 
@@ -126,13 +133,12 @@ public final class RuntimeProtocolService {
         return List.copyOf(catalog.values());
     }
 
-    /** Executes one request without exposing local exceptions or stack traces. */
     public RuntimeResponse execute(RuntimeRequest request) {
         Objects.requireNonNull(request, "request");
         if (!SUPPORTED_VERSIONS.contains(request.version())) {
             return failure(request, ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                     "protocol version is unsupported", Map.of(
-                            "supported", "1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10",
+                            "supported", "1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10,1.11",
                             "requested", request.version().major() + "." + request.version().minor()));
         }
         try {
@@ -170,6 +176,12 @@ public final class RuntimeProtocolService {
                     && request.version().minor() < 10) {
                 throw new ProtocolFailure(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                         "command requires protocol version 1.10", Map.of());
+            }
+            if ((request.command() instanceof RuntimeCommand.UiBindings
+                    || request.command() instanceof RuntimeCommand.UiFrames)
+                    && request.version().minor() < 11) {
+                throw new ProtocolFailure(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
+                        "command requires protocol version 1.11", Map.of());
             }
             if ((request.command() instanceof RuntimeCommand.Control
                     || request.command() instanceof RuntimeCommand.Advance
@@ -253,6 +265,8 @@ public final class RuntimeProtocolService {
             case RuntimeCommand.Wait command -> waitFor(runtime, command);
             case RuntimeCommand.Inputs ignored ->
                     new RuntimeResponse.Result.Inputs(runtime.inputs().list());
+            case RuntimeCommand.UiBindings command -> uiBindings(runtime, command);
+            case RuntimeCommand.UiFrames command -> uiFrames(runtime, command);
             case RuntimeCommand.Input command -> input(runtime, command);
             case RuntimeCommand.Checkpoints ignored ->
                     new RuntimeResponse.Result.Checkpoints(runtime.checkpoints().list());
@@ -525,38 +539,49 @@ public final class RuntimeProtocolService {
                     List.of("application-owned", "opaque-handles", "bounded", "at-most-once"),
                     List.of("command-dispatch", "execution-epochs")));
         }
+        if (version.minor() >= 11) {
+            boolean available = runtime.uiCorrelations().available();
+            var uiLimits = runtime.uiCorrelations().limits();
+            details.add(new RuntimeCapability(
+                    "runtime-ui-correlation", ProtocolVersion.V1_11,
+                    available ? RuntimeCapability.Availability.AVAILABLE
+                            : RuntimeCapability.Availability.UNAVAILABLE,
+                    available ? Optional.empty() : Optional.of("binding-not-registered"),
+                    RuntimeCapability.Access.READ_ONLY,
+                    List.of("AgentRuntime#uiCorrelations",
+                            "UiCorrelationRegistry#runtimeToUi",
+                            "UiCorrelationRegistry#uiToRuntime"),
+                    List.of("ui-bindings", "ui-frames"), UI_CORRELATION_TOOLS, Map.of(
+                            "registeredBindings", (long) uiLimits.registeredBindings(),
+                            "queryResults", (long) uiLimits.queryResults(),
+                            "retainedFrameCorrelations",
+                            (long) uiLimits.retainedFrameCorrelations(),
+                            "stringLength", (long) uiLimits.stringLength()),
+                    List.of("application-provided", "bidirectional", "bounded",
+                            "explicit-frame-mapping"),
+                    List.of("execution-epochs", "explicit-correlation")));
+        }
         return List.copyOf(details);
     }
 
     private static List<String> toolsFor(AgentRuntime runtime, ProtocolVersion version) {
         Stream<String> tools = BASE_TOOLS.stream();
-        if (ProtocolVersion.V1_3.equals(version) || ProtocolVersion.V1_4.equals(version)
-                || ProtocolVersion.V1_5.equals(version) || ProtocolVersion.V1_6.equals(version)
-                || ProtocolVersion.V1_7.equals(version) || version.minor() >= 8) {
+        if (version.minor() >= 3) {
             tools = Stream.concat(tools, EPOCH_TOOLS.stream());
         }
-        if (runtime.commands().isPresent() && (ProtocolVersion.V1_2.equals(version)
-                || ProtocolVersion.V1_3.equals(version) || ProtocolVersion.V1_4.equals(version)
-                || ProtocolVersion.V1_5.equals(version) || ProtocolVersion.V1_6.equals(version)
-                || ProtocolVersion.V1_7.equals(version) || version.minor() >= 8)) {
+        if (runtime.commands().isPresent() && version.minor() >= 2) {
             tools = Stream.concat(tools, COMMAND_TOOLS.stream());
         }
-        if ((ProtocolVersion.V1_4.equals(version) || ProtocolVersion.V1_5.equals(version)
-                || ProtocolVersion.V1_6.equals(version) || ProtocolVersion.V1_7.equals(version)
-                || version.minor() >= 8)
-                && !runtime.scenarios().list().isEmpty()) {
+        if (version.minor() >= 4 && !runtime.scenarios().list().isEmpty()) {
             tools = Stream.concat(tools, SCENARIO_TOOLS.stream());
         }
-        if (ProtocolVersion.V1_5.equals(version) || ProtocolVersion.V1_6.equals(version)
-                || ProtocolVersion.V1_7.equals(version) || version.minor() >= 8) {
+        if (version.minor() >= 5) {
             tools = Stream.concat(tools, ATTRIBUTION_TOOLS.stream());
         }
-        if ((ProtocolVersion.V1_6.equals(version) || ProtocolVersion.V1_7.equals(version)
-                || version.minor() >= 8)
-                && !runtime.actions().list().isEmpty()) {
+        if (version.minor() >= 6 && !runtime.actions().list().isEmpty()) {
             tools = Stream.concat(tools, ACTION_TOOLS.stream());
         }
-        if (ProtocolVersion.V1_7.equals(version) || version.minor() >= 8) {
+        if (version.minor() >= 7) {
             tools = Stream.concat(tools, ASSERTION_TOOLS.stream());
         }
         if (version.minor() >= 8 && runtime.controls().available()) {
@@ -565,8 +590,11 @@ public final class RuntimeProtocolService {
         if (version.minor() >= 9 && !runtime.inputs().list().isEmpty()) {
             tools = Stream.concat(tools, INPUT_TOOLS.stream());
         }
-        return version.minor() >= 10 && runtime.checkpoints().available()
-                ? Stream.concat(tools, CHECKPOINT_TOOLS.stream()).toList() : tools.toList();
+        if (version.minor() >= 10 && runtime.checkpoints().available()) {
+            tools = Stream.concat(tools, CHECKPOINT_TOOLS.stream());
+        }
+        return version.minor() >= 11 && runtime.uiCorrelations().available()
+                ? Stream.concat(tools, UI_CORRELATION_TOOLS.stream()).toList() : tools.toList();
     }
 
     private static RuntimeResponse.Result assertion(
@@ -666,6 +694,44 @@ public final class RuntimeProtocolService {
         }
         if (runtime.commands().isEmpty()) {
             throw capabilityUnavailable(runtime);
+        }
+    }
+
+    private static RuntimeResponse.Result uiBindings(
+            AgentRuntime runtime, RuntimeCommand.UiBindings command) {
+        requireUiCorrelations(runtime);
+        java.util.Optional<String> generation =
+                java.util.Optional.ofNullable(command.uiGeneration());
+        io.github.teemuki8.libgdx.agent.runtime.core.UiBindingResult result =
+                command.entityId() != null
+                        ? runtime.uiCorrelations().runtimeToUi(
+                                EntityId.of(command.entityId()),
+                                java.util.Optional.ofNullable(command.property()),
+                                new ExecutionEpochId(command.executionEpochId()),
+                                new FrameId(command.runtimeFrameId()), generation, command.limit())
+                        : runtime.uiCorrelations().uiToRuntime(
+                                command.uiSessionId(), command.uiControlId(),
+                                new ExecutionEpochId(command.executionEpochId()),
+                                new FrameId(command.runtimeFrameId()), generation, command.limit());
+        return new RuntimeResponse.Result.UiBindings(result);
+    }
+
+    private static RuntimeResponse.Result uiFrames(
+            AgentRuntime runtime, RuntimeCommand.UiFrames command) {
+        requireUiCorrelations(runtime);
+        return new RuntimeResponse.Result.UiFrames(command.uiSessionId() != null
+                ? runtime.uiCorrelations().framesForUiSession(
+                        command.uiSessionId(), command.limit())
+                : runtime.uiCorrelations().framesForToken(
+                        command.correlationToken(), command.limit()));
+    }
+
+    private static void requireUiCorrelations(AgentRuntime runtime) {
+        if (!runtime.uiCorrelations().available()) {
+            throw new ProtocolFailure(ProtocolErrorCode.CAPABILITY_UNAVAILABLE,
+                    "runtime/UI correlation is unavailable",
+                    Map.of("sessionId", runtime.sessionId().value(),
+                            "capability", "runtime-ui-correlation"));
         }
     }
 

@@ -426,6 +426,49 @@ final class FixtureProtocolAndMcpTest {
         runtime.close();
     }
 
+    @Test
+    void fixtureDeterminismRepeatsSeededScenarioThroughMcp() {
+        ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
+        DeterministicSimulation simulation = new DeterministicSimulation();
+        AgentRuntime runtime = simulation.startRuntime(applicationQueue::addLast);
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime);
+                RuntimeToolHandler handler =
+                        new RuntimeToolHandler(new RuntimeProtocolService(registry))) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            Map<String, Object> comparisonScope = Map.of(
+                    "entityIds", List.of(),
+                    "properties", List.of(),
+                    "excludedProperties", List.of(),
+                    "includeEvents", true,
+                    "includeDecisions", true);
+            Map<String, Object> request = Map.of(
+                    "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                    "determinismRequestId", "fixture-determinism",
+                    "scenarioId", "deterministic-fixture",
+                    "randomSeed", 99,
+                    "configuration", List.of(
+                            Map.of("name", "profile", "value", "deterministic")),
+                    "repeatCount", 2,
+                    "ticksPerRepeat", 45,
+                    "deltaNanos", 16_000_000,
+                    "profile", Map.of(
+                            "comparisonScope", comparisonScope,
+                            "includeUiCorrelations", false),
+                    "timeoutNanos", 1_000_000_000);
+            assertFalse(handler.handle(call("runtime_determinism_check", request))
+                    .block(Duration.ofSeconds(5)).isError());
+            applicationQueue.removeFirst().run();
+            McpSchema.CallToolResult result =
+                    handler.handle(call("runtime_determinism_check", request))
+                            .block(Duration.ofSeconds(5));
+            assertFalse(result.isError());
+            assertTrue(result.structuredContent().toString().contains("EQUAL"));
+            assertTrue(result.structuredContent().toString().contains("completedRepeats"));
+        }
+        runtime.close();
+    }
+
     private static Fixture fixture() {
         DeterministicSimulation simulation = new DeterministicSimulation();
         AgentRuntime runtime = simulation.startRuntime();

@@ -52,6 +52,8 @@ public final class RuntimeProtocolService {
             List.of("runtime_ui_bindings", "runtime_ui_frames");
     private static final List<String> RECORDING_TOOLS = List.of(
             "runtime_recording_start", "runtime_recording_stop", "runtime_recording_get");
+    private static final List<String> DETERMINISM_TOOLS =
+            List.of("runtime_determinism_check");
     private static final List<String> FEATURES = List.of(
             "entities", "frames", "changes", "events", "decisions");
     private static final List<ProtocolVersion> SUPPORTED_VERSIONS =
@@ -59,7 +61,7 @@ public final class RuntimeProtocolService {
                     ProtocolVersion.V1_3, ProtocolVersion.V1_4, ProtocolVersion.V1_5,
                     ProtocolVersion.V1_6, ProtocolVersion.V1_7, ProtocolVersion.V1_8,
                     ProtocolVersion.V1_9, ProtocolVersion.V1_10, ProtocolVersion.V1_11,
-                    ProtocolVersion.V1_12);
+                    ProtocolVersion.V1_12, ProtocolVersion.V1_13);
     private final RuntimeRegistry registry;
 
     /** Creates a service over an isolated or global registry. */
@@ -107,7 +109,13 @@ public final class RuntimeProtocolService {
         if (uiCorrelations) {
             tools = Stream.concat(tools, UI_CORRELATION_TOOLS.stream());
         }
-        return commandDispatch ? Stream.concat(tools, RECORDING_TOOLS.stream()).toList()
+        if (commandDispatch) {
+            tools = Stream.concat(tools, RECORDING_TOOLS.stream());
+        }
+        boolean determinism = registry.sessions().stream().anyMatch(runtime ->
+                runtime.commands().isPresent() && runtime.controls().available()
+                        && runtime.scenarios().determinismAvailable());
+        return determinism ? Stream.concat(tools, DETERMINISM_TOOLS.stream()).toList()
                 : tools.toList();
     }
 
@@ -145,7 +153,7 @@ public final class RuntimeProtocolService {
             return failure(request, ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                     "protocol version is unsupported", Map.of(
                             "supported",
-                            "1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10,1.11,1.12",
+                            "1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10,1.11,1.12,1.13",
                             "requested", request.version().major() + "." + request.version().minor()));
         }
         try {
@@ -196,6 +204,11 @@ public final class RuntimeProtocolService {
                     && request.version().minor() < 12) {
                 throw new ProtocolFailure(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                         "command requires protocol version 1.12", Map.of());
+            }
+            if (request.command() instanceof RuntimeCommand.DeterminismCheck
+                    && request.version().minor() < 13) {
+                throw new ProtocolFailure(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
+                        "command requires protocol version 1.13", Map.of());
             }
             if ((request.command() instanceof RuntimeCommand.Control
                     || request.command() instanceof RuntimeCommand.Advance
@@ -293,6 +306,7 @@ public final class RuntimeProtocolService {
             case RuntimeCommand.RecordingStop command -> recordingStop(runtime, command);
             case RuntimeCommand.RecordingGet command -> new RuntimeResponse.Result.RecordingChunkResult(
                     runtime.recordings().get(command.recordingId(), command.offset(), command.limit()));
+            case RuntimeCommand.DeterminismCheck command -> determinism(runtime, command);
             case RuntimeCommand.Sessions ignored ->
                     throw new AssertionError("sessions handled before runtime lookup");
         };
@@ -606,6 +620,35 @@ public final class RuntimeProtocolService {
                     List.of("application-owned", "bounded", "immutable", "loss-explicit"),
                     List.of("command-dispatch", "execution-epochs")));
         }
+        if (version.minor() >= 13) {
+            boolean available = runtime.commands().isPresent()
+                    && runtime.controls().available()
+                    && runtime.scenarios().determinismAvailable();
+            var determinismLimits = runtime.determinism().limits();
+            details.add(new RuntimeCapability(
+                    "determinism-comparison", ProtocolVersion.V1_13,
+                    available ? RuntimeCapability.Availability.AVAILABLE
+                            : RuntimeCapability.Availability.UNAVAILABLE,
+                    available ? Optional.empty()
+                            : Optional.of("deterministic-scenario-or-control-unavailable"),
+                    RuntimeCapability.Access.MUTATING,
+                    List.of("AgentRuntime#determinism", "DeterminismRegistry#check"),
+                    List.of("determinism-check"), DETERMINISM_TOOLS, Map.of(
+                            "retainedOperations", (long) determinismLimits.retainedOperations(),
+                            "maximumRepeats", (long) determinismLimits.maximumRepeats(),
+                            "maximumTicksPerRepeat",
+                            (long) determinismLimits.maximumTicksPerRepeat(),
+                            "maximumEntitiesPerFrame",
+                            (long) determinismLimits.maximumEntitiesPerFrame(),
+                            "maximumFactsPerFrame",
+                            (long) determinismLimits.maximumFactsPerFrame(),
+                            "maximumEncodedEvidenceBytes",
+                            (long) determinismLimits.maximumEncodedEvidenceBytes(),
+                            "maximumExecutionNanos",
+                            determinismLimits.maximumExecutionNanos()),
+                    List.of("application-owned", "bounded", "first-divergence", "inconclusive-safe"),
+                    List.of("command-dispatch", "simulation-control", "execution-epochs")));
+        }
         return List.copyOf(details);
     }
 
@@ -641,8 +684,13 @@ public final class RuntimeProtocolService {
         if (version.minor() >= 11 && runtime.uiCorrelations().available()) {
             tools = Stream.concat(tools, UI_CORRELATION_TOOLS.stream());
         }
-        return version.minor() >= 12 && runtime.commands().isPresent()
-                ? Stream.concat(tools, RECORDING_TOOLS.stream()).toList() : tools.toList();
+        if (version.minor() >= 12 && runtime.commands().isPresent()) {
+            tools = Stream.concat(tools, RECORDING_TOOLS.stream());
+        }
+        return version.minor() >= 13 && runtime.commands().isPresent()
+                && runtime.controls().available()
+                && runtime.scenarios().determinismAvailable()
+                ? Stream.concat(tools, DETERMINISM_TOOLS.stream()).toList() : tools.toList();
     }
 
     private static RuntimeResponse.Result assertion(
@@ -781,6 +829,24 @@ public final class RuntimeProtocolService {
                     Map.of("sessionId", runtime.sessionId().value(),
                             "capability", "runtime-ui-correlation"));
         }
+    }
+
+    private static RuntimeResponse.Result determinism(
+            AgentRuntime runtime, RuntimeCommand.DeterminismCheck command) {
+        requireControl(runtime, command.timeoutNanos());
+        if (runtime.commands().isEmpty() || !runtime.scenarios().determinismAvailable()) {
+            throw new ProtocolFailure(ProtocolErrorCode.CAPABILITY_UNAVAILABLE,
+                    "determinism comparison is unavailable",
+                    Map.of("sessionId", runtime.sessionId().value(),
+                            "capability", "determinism-comparison"));
+        }
+        var spec = new io.github.teemuki8.libgdx.agent.runtime.core.DeterminismSpec(
+                command.scenarioId(), command.randomSeed(), command.configuration(),
+                command.repeatCount(), command.ticksPerRepeat(), command.deltaNanos(),
+                command.profile());
+        return new RuntimeResponse.Result.Determinism(runtime.determinism().check(
+                spec, command.determinismRequestId(),
+                Duration.ofNanos(command.timeoutNanos())));
     }
 
     private static RuntimeResponse.Result recordingStart(

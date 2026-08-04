@@ -9,7 +9,7 @@ strict closed input schemas (`additionalProperties: false`), and a maximum reque
 | Tool | Required fields | Optional fields |
 | --- | --- | --- |
 | `runtime_sessions` | none | none |
-| `runtime_capabilities` | `sessionId` | `protocolMinor` (`0` through `12`; default `0`) |
+| `runtime_capabilities` | `sessionId` | `protocolMinor` (`0` through `13`; default `0`) |
 | `runtime_frames` | `sessionId` | `fromFrame`, `toFrame`, `limit` |
 | `runtime_snapshot` | `sessionId` | `frameId`, `entityId`, `entityIdPrefix`, `entityType`, `entityTypePrefix`, `limit` |
 | `runtime_entity` | `sessionId`, `entityId` | `fromFrame`, `toFrame`, `limit` |
@@ -40,6 +40,7 @@ strict closed input schemas (`additionalProperties: false`), and a maximum reque
 | `runtime_recording_start`******** | `sessionId`, `recordingId`, `recordingRequestId`, `configuration`, `replayGuaranteed`, `timeoutNanos` | `scenarioId`, `checkpointId`, `randomSeed` |
 | `runtime_recording_stop`******** | `sessionId`, `recordingId`, `recordingRequestId`, `timeoutNanos` | none |
 | `runtime_recording_get`******** | `sessionId`, `recordingId`, `offset`, `limit` | none |
+| `runtime_determinism_check`********* | `sessionId`, `determinismRequestId`, `scenarioId`, `randomSeed`, `configuration`, `repeatCount`, `ticksPerRepeat`, `deltaNanos`, `profile`, `timeoutNanos` | none |
 
 \* Command tools are included in the server-start catalog only when at least one published runtime
 has explicitly registered application command dispatch. They use protocol 1.2.
@@ -68,13 +69,17 @@ explicit binding or frame mapping. They use protocol 1.11 and remain read-only.
 \*\*\*\*\*\*\*\* Recording tools are included only when application command dispatch is available.
 Start and stop use that dispatcher and protocol 1.12; retrieval returns immutable bounded chunks.
 
+\*\*\*\*\*\*\*\*\* Determinism comparison is included only when application command dispatch,
+simulation control, and a scenario with a deterministic reset handler are available. It uses
+protocol 1.13.
+
 Every identifier is a nonblank string of at most 256 UTF-16 code units. Frame fields are
 non-negative integers. Prefix matching is available only where the schema has an explicit prefix
 boolean; there are no regular expressions or generic expressions.
 
 ## Protocol and capabilities
 
-Protocol 1.0 retains the exact original capabilities result. Set `protocolMinor` from `1` to `11`
+Protocol 1.0 retains the exact original capabilities result. Set `protocolMinor` from `1` to `13`
 on `runtime_capabilities` to request extension metadata. The baseline read-only MCP tools continue
 to use 1.0. Command status and cancellation use protocol 1.2; epoch queries use protocol 1.3;
 scenario catalog and reset use protocol 1.4.
@@ -245,6 +250,21 @@ JSON/MCP transport encoding. Item, tick-span, duration, or encoded-size exhausti
 reports the exact dimension, observed value, retained value, configured limit, and
 incomplete-reproduction flag. Retention eviction returns `RECORDING_EVICTED`. The runtime does not
 record raw platform events and does not replay a manifest.
+
+## Determinism comparison
+
+`runtime_determinism_check` starts or polls one at-most-once repeated-scenario operation. Each
+repeat resets the same registered scenario with the application-acknowledged `randomSeed` and
+closed scalar `configuration`, creates a separate execution epoch, and advances
+`ticksPerRepeat` exact controlled ticks of `deltaNanos`. The closed `profile.comparisonScope`
+selects entities, properties, events, and decisions; `includeUiCorrelations` additionally compares
+explicit runtime/UI mappings. The application must keep servicing its command queue while paused.
+
+Results are `EQUAL`, `DIVERGED`, or `INCONCLUSIVE`. A divergence identifies its epoch-relative tick,
+both epochs and frames, and the first stable typed difference. Equality means only that the
+configured observable evidence matched. Bounds and messages report completed repeats, compared
+frames/entities/properties, execution time, truncation, eviction, timeout, and incomplete evidence.
+The runtime does not inspect unregistered state or prove whole-program determinism.
 
 ## Errors and bounds
 

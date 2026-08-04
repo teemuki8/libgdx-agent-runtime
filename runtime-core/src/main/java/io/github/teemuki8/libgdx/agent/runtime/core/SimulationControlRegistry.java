@@ -206,6 +206,66 @@ public final class SimulationControlRegistry {
         return snapshot(evidence, lookup);
     }
 
+    boolean pauseForDeterminism() {
+        SimulationControllerSpec spec = requireController();
+        synchronized (this) {
+            if (paused) {
+                return true;
+            }
+        }
+        spec.pause().run();
+        synchronized (this) {
+            paused = true;
+        }
+        return false;
+    }
+
+    void restorePauseAfterDeterminism(boolean previouslyPaused) {
+        if (previouslyPaused) {
+            return;
+        }
+        SimulationControllerSpec spec = requireController();
+        spec.resume().run();
+        synchronized (this) {
+            paused = false;
+        }
+    }
+
+    FrameSnapshot tickForDeterminism(long deltaNanos) {
+        SimulationControllerSpec spec = requireController();
+        long tick;
+        synchronized (this) {
+            if (!paused) {
+                throw new AgentRuntimeException(
+                        RuntimeErrorCode.INVALID_LIFECYCLE,
+                        "determinism execution requires paused simulation");
+            }
+            tick = Math.addExact(currentTick, 1);
+        }
+        FrameId expected = runtime.latestFrame().map(frame ->
+                new FrameId(Math.addExact(frame.frameId().value(), 1))).orElse(new FrameId(0));
+        try {
+            runtime.frame(deltaNanos, () -> {
+                runtime.inputs().executeTick(tick, runtime.currentEpoch());
+                spec.tick().accept(deltaNanos);
+            });
+            runtime.inputs().completeTick(tick, expected);
+        } catch (RuntimeException | Error failure) {
+            if (runtime.frame(expected).isPresent()) {
+                runtime.inputs().completeTick(tick, expected);
+            } else {
+                runtime.inputs().failTick(tick);
+            }
+            throw failure;
+        }
+        synchronized (this) {
+            currentTick = tick;
+        }
+        runtime.recordings().recordTick(
+                tick, deltaNanos, runtime.currentEpoch(), expected);
+        return runtime.frame(expected).orElseThrow();
+    }
+
     private boolean satisfied(Evidence evidence, Signature signature) {
         if (signature.conditionId.isPresent()) {
             SimulationControllerSpec.Condition condition;

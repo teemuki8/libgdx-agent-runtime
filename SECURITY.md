@@ -23,6 +23,10 @@ schemas and allowlisted configuration; input recording policy can omit or redact
 runtime installs no global or operating-system input hook, serializes no application object, and
 provides no replay executor. Manifest configuration is closed scalar data; opaque checkpoint handles,
 callbacks, and arbitrary payloads never cross Java, protocol, or MCP boundaries.
+Determinism comparison accepts only a registered scenario ID, an application-acknowledged seed,
+closed scalar configuration, exact controlled ticks, and a closed observable profile. It executes
+no caller code, expression, reflection, or replay manifest. `EQUAL` covers only registered,
+configured evidence and is not a claim about hidden application or platform state.
 Checkpoint payloads remain opaque application-owned handles inside the runtime. MCP exposes only
 bounded descriptors and operation evidence; it cannot serialize, traverse, name, or restore an
 arbitrary object supplied by a caller.

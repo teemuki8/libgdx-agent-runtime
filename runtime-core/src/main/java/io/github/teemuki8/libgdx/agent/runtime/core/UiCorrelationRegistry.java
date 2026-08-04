@@ -97,6 +97,18 @@ public final class UiCorrelationRegistry {
         return framePage(value -> value.correlationToken().filter(token::equals).isPresent(), limit);
     }
 
+    synchronized List<UiFrameCorrelation> correlationsFor(
+            ExecutionEpochId epochId, FrameId frameId) {
+        return frames.stream()
+                .filter(value -> value.runtimeEpochId().equals(epochId)
+                        && value.runtimeFrameId().equals(frameId))
+                .toList();
+    }
+
+    synchronized long evictedFrameCount() {
+        return evictedFrames;
+    }
+
     /** Returns configured effective limits. */
     public UiCorrelationLimits limits() {
         return limits;

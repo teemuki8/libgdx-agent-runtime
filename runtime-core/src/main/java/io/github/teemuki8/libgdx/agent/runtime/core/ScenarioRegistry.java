@@ -25,13 +25,36 @@ public final class ScenarioRegistry {
         register(new ScenarioDescriptor(id, Optional.empty()), reset);
     }
 
+    /** Registers one stable scenario that accepts explicit deterministic reset inputs. */
+    public synchronized void register(String id, ScenarioResetHandler reset) {
+        register(new ScenarioDescriptor(id, Optional.empty()), reset);
+    }
+
     /** Registers one described scenario and its application-owned reset callback. */
     public synchronized void register(String id, String description, Runnable reset) {
         register(new ScenarioDescriptor(id, description), reset);
     }
 
+    /** Registers one described scenario that accepts explicit deterministic reset inputs. */
+    public synchronized void register(
+            String id, String description, ScenarioResetHandler reset) {
+        register(new ScenarioDescriptor(id, description), reset);
+    }
+
     /** Registers one scenario descriptor. Duplicate IDs are rejected. */
     public synchronized void register(ScenarioDescriptor descriptor, Runnable reset) {
+        Objects.requireNonNull(reset, "reset");
+        register(descriptor, ignored -> reset.run(), false);
+    }
+
+    /** Registers a descriptor and deterministic reset-input handler. */
+    public synchronized void register(
+            ScenarioDescriptor descriptor, ScenarioResetHandler reset) {
+        register(descriptor, reset, true);
+    }
+
+    private void register(
+            ScenarioDescriptor descriptor, ScenarioResetHandler reset, boolean deterministic) {
         runtime.requireScenarioRegistration();
         Objects.requireNonNull(descriptor, "descriptor");
         Objects.requireNonNull(reset, "reset");
@@ -42,12 +65,17 @@ public final class ScenarioRegistry {
             throw new AgentRuntimeException(RuntimeErrorCode.LIMIT_EXCEEDED,
                     "registered scenario limit reached");
         }
-        entries.put(descriptor.id(), new Entry(descriptor, reset));
+        entries.put(descriptor.id(), new Entry(descriptor, reset, deterministic));
     }
 
     /** Lists immutable metadata in registration order. */
     public synchronized List<ScenarioDescriptor> list() {
         return entries.values().stream().map(Entry::descriptor).toList();
+    }
+
+    /** Reports whether any scenario acknowledges deterministic reset inputs. */
+    public synchronized boolean determinismAvailable() {
+        return entries.values().stream().anyMatch(Entry::deterministic);
     }
 
     /** Resets a registered scenario through application command dispatch. */
@@ -84,7 +112,8 @@ public final class ScenarioRegistry {
                     Optional.ofNullable(baseline).map(Baseline::frame));
         }
         CommandLookup lookup = dispatch.submit(requestId, timeout, () -> {
-            FrameId frame = runtime.executeScenarioReset(entry.reset());
+            FrameId frame = runtime.executeScenarioReset(
+                    () -> entry.reset().reset(ScenarioResetContext.ordinary()));
             synchronized (ScenarioRegistry.this) {
                 completed.put(requestId, new Baseline(runtime.currentEpoch(), frame));
                 trim(completed);
@@ -97,6 +126,21 @@ public final class ScenarioRegistry {
         return new ScenarioReset(scenarioId, lookup,
                 Optional.ofNullable(baseline).map(Baseline::epoch),
                 Optional.ofNullable(baseline).map(Baseline::frame));
+    }
+
+    FrameId resetForDeterminism(String scenarioId, ScenarioResetContext context) {
+        Entry entry;
+        synchronized (this) {
+            entry = entries.get(scenarioId);
+        }
+        if (entry == null) {
+            throw new IllegalArgumentException("unknown scenario id");
+        }
+        if (!entry.deterministic()) {
+            throw new IllegalArgumentException(
+                    "scenario does not acknowledge deterministic reset inputs");
+        }
+        return runtime.executeScenarioReset(() -> entry.reset().reset(context));
     }
 
     public ScenarioLimits limits() {
@@ -125,6 +169,7 @@ public final class ScenarioRegistry {
         }
     }
 
-    private record Entry(ScenarioDescriptor descriptor, Runnable reset) {}
+    private record Entry(ScenarioDescriptor descriptor, ScenarioResetHandler reset,
+            boolean deterministic) {}
     private record Baseline(ExecutionEpochId epoch, FrameId frame) {}
 }

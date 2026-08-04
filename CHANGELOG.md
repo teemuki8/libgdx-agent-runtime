@@ -27,6 +27,8 @@ All notable changes follow Keep a Changelog structure.
   seed/configuration reset, exact controlled ticks in separate execution epochs, configurable
   observables, stable first-divergence evidence, and explicit inconclusive/truncation/eviction
   evidence across Java, protocol, MCP, and the deterministic fixture.
+- Deterministic optional-control conformance coverage across public Java, protocol JSON, closed MCP
+  schemas, application-thread dispatch, and the real Xvfb-backed LWJGL3 lifecycle fixture.
 
 ## [0.1.0] - Unreleased
 

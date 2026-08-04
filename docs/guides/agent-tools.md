@@ -285,5 +285,11 @@ On Linux with Xvfb:
 xvfb-run -a ./gradlew -q :runtime-fixtures:runMcpFixture
 ```
 
-The fixture and MCP server share one JVM and session `deterministic-fixture`. It advances to frame
-45, then retains stable state until the MCP client closes stdin.
+The fixture and MCP server share one JVM and session `deterministic-fixture`. The unpublished
+conformance target covers the public Java API, typed protocol, closed MCP tools, application-owned
+render-thread dispatch, pause/resume, exact fixed-delta ticks, condition waits, scenario and
+checkpoint baselines, semantic actions, registered inputs, attribution, assertions, recordings,
+determinism comparison, and explicit UI correlation. The hidden LWJGL3 fixture drives control
+commands through `Gdx.app.postRunnable`, verifies their callbacks on the render/capture thread,
+advances deterministically to frame 45 without sleep-based correctness, and exits. The stdio MCP
+fixture retains stable frame-45 state until its client closes stdin.

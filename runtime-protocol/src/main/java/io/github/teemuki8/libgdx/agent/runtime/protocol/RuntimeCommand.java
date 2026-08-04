@@ -32,7 +32,9 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
     @JsonSubTypes.Type(value = RuntimeCommand.Input.class, name = "input"),
     @JsonSubTypes.Type(value = RuntimeCommand.Checkpoints.class, name = "checkpoints"),
     @JsonSubTypes.Type(value = RuntimeCommand.CheckpointCreate.class, name = "checkpointCreate"),
-    @JsonSubTypes.Type(value = RuntimeCommand.CheckpointRestore.class, name = "checkpointRestore")
+    @JsonSubTypes.Type(value = RuntimeCommand.CheckpointRestore.class, name = "checkpointRestore"),
+    @JsonSubTypes.Type(value = RuntimeCommand.UiBindings.class, name = "uiBindings"),
+    @JsonSubTypes.Type(value = RuntimeCommand.UiFrames.class, name = "uiFrames")
 })
 public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeCommand.Capabilities,
         RuntimeCommand.Frames, RuntimeCommand.Snapshot, RuntimeCommand.Entity,
@@ -43,7 +45,8 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
         RuntimeCommand.Actions, RuntimeCommand.Action, RuntimeCommand.Assert,
         RuntimeCommand.Control, RuntimeCommand.Advance, RuntimeCommand.Wait,
         RuntimeCommand.Inputs, RuntimeCommand.Input, RuntimeCommand.Checkpoints,
-        RuntimeCommand.CheckpointCreate, RuntimeCommand.CheckpointRestore {
+        RuntimeCommand.CheckpointCreate, RuntimeCommand.CheckpointRestore,
+        RuntimeCommand.UiBindings, RuntimeCommand.UiFrames {
     /** Lists published sessions. */
     record Sessions() implements RuntimeCommand {}
 
@@ -377,6 +380,45 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
             ProtocolJson.requireIdentifier(checkpointId, "checkpointId");
             ProtocolJson.requireIdentifier(checkpointRequestId, "checkpointRequestId");
             requirePositive(timeoutNanos, "timeoutNanos");
+        }
+    }
+
+    /** Resolves explicit runtime-to-UI or UI-to-runtime bindings at one validity point. */
+    record UiBindings(String entityId, String property, String uiSessionId, String uiControlId,
+            long executionEpochId, long runtimeFrameId, String uiGeneration, int limit)
+            implements RuntimeCommand {
+        public UiBindings {
+            requireOptionalIdentifier(entityId, "entityId");
+            requireOptionalIdentifier(property, "property");
+            requireOptionalIdentifier(uiSessionId, "uiSessionId");
+            requireOptionalIdentifier(uiControlId, "uiControlId");
+            requireOptionalIdentifier(uiGeneration, "uiGeneration");
+            boolean runtimeDirection = entityId != null;
+            boolean uiDirection = uiSessionId != null && uiControlId != null;
+            if (runtimeDirection == uiDirection
+                    || (!runtimeDirection && (entityId != null || property != null))
+                    || (!uiDirection && (uiSessionId != null || uiControlId != null))) {
+                throw new IllegalArgumentException(
+                        "UI binding query requires exactly one complete direction selector");
+            }
+            if (executionEpochId < 0 || runtimeFrameId < 0) {
+                throw new IllegalArgumentException("UI binding validity point must be non-negative");
+            }
+            validateLimit(limit);
+        }
+    }
+
+    /** Queries explicit cross-system frame mappings by UI session or shared token. */
+    record UiFrames(String uiSessionId, String correlationToken, int limit)
+            implements RuntimeCommand {
+        public UiFrames {
+            requireOptionalIdentifier(uiSessionId, "uiSessionId");
+            requireOptionalIdentifier(correlationToken, "correlationToken");
+            if ((uiSessionId == null) == (correlationToken == null)) {
+                throw new IllegalArgumentException(
+                        "UI frame query requires exactly one UI session or correlation token");
+            }
+            validateLimit(limit);
         }
     }
 

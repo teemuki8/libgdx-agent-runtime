@@ -101,7 +101,7 @@ final class RuntimeProtocolTest {
                 service.execute(new RuntimeRequest(
                         new ProtocolVersion(2, 0), "v", null, new RuntimeCommand.Sessions())));
         assertEquals(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED, version.error().code());
-        assertEquals("1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10",
+        assertEquals("1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10,1.11",
                 version.error().details().get("supported"));
 
         RuntimeResponse.Failure missing = assertInstanceOf(RuntimeResponse.Failure.class,
@@ -670,6 +670,63 @@ final class RuntimeProtocolTest {
                                     "checkpoint-protocol", restore))).result());
             assertEquals(7, state[0]);
             assertEquals(new FrameId(2), restored.operation().baselineFrameId().orElseThrow());
+        }
+    }
+
+    @Test
+    void uiCorrelationCapabilityAndQueriesRoundTripWithBoundedEvidence() {
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("ui-correlation-protocol")).build();
+        runtime.uiCorrelations().register(new io.github.teemuki8.libgdx.agent.runtime.core.UiBinding(
+                "health-binding", EntityId.of("enemy-1"), Optional.of("health"),
+                "battle-ui", "health-bar",
+                        new io.github.teemuki8.libgdx.agent.runtime.core.UiBindingValidity(
+                                Optional.empty(), Optional.empty(), Optional.empty())));
+        runtime.start();
+        runtime.uiCorrelations().recordFrame(
+                new io.github.teemuki8.libgdx.agent.runtime.core.UiFrameCorrelation(
+                        runtime.currentEpoch(), new FrameId(0), "battle-ui",
+                        Optional.of("ui-frame-9"), Optional.of("render-token-9")));
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime)) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            RuntimeProtocolService service = new RuntimeProtocolService(registry);
+            RuntimeCapability capability = capabilities(service, ProtocolVersion.V1_11,
+                    "ui-capabilities", "ui-correlation-protocol")
+                    .capabilityReport().orElseThrow().capabilities().stream()
+                    .filter(value -> value.id().equals("runtime-ui-correlation"))
+                    .findFirst().orElseThrow();
+            assertEquals(RuntimeCapability.Availability.AVAILABLE, capability.availability());
+
+            RuntimeCommand.UiBindings query = new RuntimeCommand.UiBindings(
+                    "enemy-1", "health", null, null, 0, 0, null, 8);
+            RuntimeCommand.UiBindings decoded = assertInstanceOf(RuntimeCommand.UiBindings.class,
+                    ProtocolJson.decodeRequest(ProtocolJson.encode(new RuntimeRequest(
+                            ProtocolVersion.V1_11, "ui-json",
+                            "ui-correlation-protocol", query))).command());
+            RuntimeResponse.Result.UiBindings bindings = assertInstanceOf(
+                    RuntimeResponse.Result.UiBindings.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V1_11, "ui-query",
+                                    "ui-correlation-protocol", decoded))).result());
+            assertEquals(io.github.teemuki8.libgdx.agent.runtime.core.UiBindingStatus.MATCHED,
+                    bindings.result().status());
+            assertEquals("health-bar", bindings.result().bindings().getFirst().uiControlId());
+
+            RuntimeResponse.Result.UiFrames frames = assertInstanceOf(
+                    RuntimeResponse.Result.UiFrames.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V1_11, "ui-frames",
+                                    "ui-correlation-protocol",
+                                    new RuntimeCommand.UiFrames(
+                                            null, "render-token-9", 8)))).result());
+            assertEquals(new FrameId(0), frames.page().items().getFirst().runtimeFrameId());
+
+            RuntimeResponse.Failure oldVersion = assertInstanceOf(RuntimeResponse.Failure.class,
+                    service.execute(new RuntimeRequest(ProtocolVersion.V1_10, "ui-old",
+                            "ui-correlation-protocol", query)));
+            assertEquals(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
+                    oldVersion.error().code());
         }
     }
 

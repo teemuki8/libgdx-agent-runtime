@@ -20,6 +20,9 @@ application-selected redaction can omit parameter values from retained evidence.
 Checkpoint payloads remain opaque application-owned handles inside the runtime. MCP exposes only
 bounded descriptors and operation evidence; it cannot serialize, traverse, name, or restore an
 arbitrary object supplied by a caller.
+Runtime/UI correlation accepts only explicit bounded semantic identifiers, validity constraints,
+and frame mappings registered by application code. It performs no DOM, scene-graph, accessibility,
+widget-object, pixel, reflection, or arbitrary object traversal.
 
 Do not publish credentials, tokens, secrets, private user data, or filesystem information as entity
 properties, event attributes, decision attributes, names, or diagnostics.

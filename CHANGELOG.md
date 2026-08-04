@@ -17,6 +17,8 @@ All notable changes follow Keep a Changelog structure.
   MCP schemas, at-most-once correlation, redaction, and tick/epoch/frame evidence.
 - Protocol 1.10 application-owned opaque checkpoint creation and restore with bounded retention,
   cleanup callbacks, closed MCP tools, and completed restore-baseline evidence.
+- Protocol 1.11 explicit bidirectional runtime/UI bindings and frame mappings with stale,
+  ambiguous, truncation, and retention-eviction evidence through Java, protocol, MCP, and fixture.
 
 ## [0.1.0] - Unreleased
 

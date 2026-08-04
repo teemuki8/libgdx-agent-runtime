@@ -24,6 +24,8 @@ import io.github.teemuki8.libgdx.agent.runtime.core.ActionInvocation;
 import io.github.teemuki8.libgdx.agent.runtime.core.AssertionResult;
 import io.github.teemuki8.libgdx.agent.runtime.core.ControlOperation;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationControlDescriptor;
+import io.github.teemuki8.libgdx.agent.runtime.core.UiBindingResult;
+import io.github.teemuki8.libgdx.agent.runtime.core.UiFrameCorrelationPage;
 import io.github.teemuki8.libgdx.agent.runtime.core.InputDescriptor;
 import io.github.teemuki8.libgdx.agent.runtime.core.InputInjection;
 import java.util.List;
@@ -88,13 +90,16 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         @JsonSubTypes.Type(value = Result.Inputs.class, name = "inputs"),
         @JsonSubTypes.Type(value = Result.Input.class, name = "input"),
         @JsonSubTypes.Type(value = Result.Checkpoints.class, name = "checkpoints"),
-        @JsonSubTypes.Type(value = Result.Checkpoint.class, name = "checkpoint")
+        @JsonSubTypes.Type(value = Result.Checkpoint.class, name = "checkpoint"),
+        @JsonSubTypes.Type(value = Result.UiBindings.class, name = "uiBindings"),
+        @JsonSubTypes.Type(value = Result.UiFrames.class, name = "uiFrames")
     })
     sealed interface Result permits Result.Sessions, Result.Capabilities, Result.Frames,
             Result.Snapshot, Result.Entity, Result.Changes, Result.Events, Result.Decisions,
             Result.CommandStatus, Result.CommandCancellation, Result.EpochFrames,
             Result.Scenarios, Result.Reset, Result.Actions, Result.Action, Result.Assertion,
-            Result.Control, Result.Inputs, Result.Input, Result.Checkpoints, Result.Checkpoint {
+            Result.Control, Result.Inputs, Result.Input, Result.Checkpoints, Result.Checkpoint,
+            Result.UiBindings, Result.UiFrames {
         /** Published session catalog. */
         record Sessions(List<SessionInfo> sessions) implements Result {
             /** Copies sessions. */
@@ -262,6 +267,20 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         record Checkpoint(CheckpointOperation operation) implements Result {
             public Checkpoint {
                 Objects.requireNonNull(operation, "operation");
+            }
+        }
+
+        /** Explicit runtime/UI binding lookup outcome and truncation evidence. */
+        record UiBindings(UiBindingResult result) implements Result {
+            public UiBindings {
+                Objects.requireNonNull(result, "result");
+            }
+        }
+
+        /** Bounded cross-system frame mappings with retention evidence. */
+        record UiFrames(UiFrameCorrelationPage page) implements Result {
+            public UiFrames {
+                Objects.requireNonNull(page, "page");
             }
         }
     }

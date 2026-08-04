@@ -35,6 +35,7 @@ import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
@@ -553,6 +554,53 @@ final class RuntimeMcpTest {
         }
     }
 
+
+    @Test
+    void uiCorrelationToolsUseDirectionalClosedSchemasAndReturnExplicitEvidence() {
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("mcp-ui")).build();
+        runtime.uiCorrelations().register(
+                new io.github.teemuki8.libgdx.agent.runtime.core.UiBinding(
+                        "health-binding", EntityId.of("enemy-1"), Optional.of("health"),
+                        "battle-ui", "health-bar",
+                        new io.github.teemuki8.libgdx.agent.runtime.core.UiBindingValidity(
+                                Optional.empty(), Optional.empty(), Optional.empty())));
+        runtime.start();
+        runtime.uiCorrelations().recordFrame(
+                new io.github.teemuki8.libgdx.agent.runtime.core.UiFrameCorrelation(
+                        runtime.currentEpoch(), new io.github.teemuki8.libgdx.agent.runtime.core.FrameId(0),
+                        "battle-ui", Optional.of("ui-frame-4"), Optional.of("render-token-4")));
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime);
+                RuntimeToolHandler handler =
+                        new RuntimeToolHandler(new RuntimeProtocolService(registry))) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            McpSchema.CallToolResult bindings = handler.handle(call("runtime_ui_bindings", Map.of(
+                    "sessionId", "mcp-ui", "entityId", "enemy-1", "property", "health",
+                    "executionEpochId", 0, "runtimeFrameId", 0, "limit", 8)))
+                    .block(Duration.ofSeconds(5));
+            assertFalse(bindings.isError());
+            assertEquals("MATCHED",
+                    ((Map<?, ?>) structured(bindings).get("result")).get("status"));
+
+            McpSchema.CallToolResult frames = handler.handle(call("runtime_ui_frames", Map.of(
+                    "sessionId", "mcp-ui", "correlationToken", "render-token-4", "limit", 8)))
+                    .block(Duration.ofSeconds(5));
+            assertFalse(frames.isError());
+            Map<?, ?> page = (Map<?, ?>) structured(frames).get("page");
+            assertEquals(1, ((List<?>) page.get("items")).size());
+
+            assertTrue(handler.handle(call("runtime_ui_bindings", Map.of(
+                    "sessionId", "mcp-ui", "entityId", "enemy-1",
+                    "uiSessionId", "battle-ui", "uiControlId", "health-bar",
+                    "executionEpochId", 0, "runtimeFrameId", 0, "limit", 8)))
+                    .block(Duration.ofSeconds(5)).isError());
+            assertTrue(handler.handle(call("runtime_ui_frames", Map.of(
+                    "sessionId", "mcp-ui", "correlationToken", "render-token-4",
+                    "uiSessionId", "battle-ui", "limit", 8, "script", "run()")))
+                    .block(Duration.ofSeconds(5)).isError());
+        }
+    }
 
     @Test
     @Timeout(10)

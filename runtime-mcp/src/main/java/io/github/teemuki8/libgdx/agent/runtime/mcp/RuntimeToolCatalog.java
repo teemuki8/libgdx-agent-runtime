@@ -57,7 +57,7 @@ public final class RuntimeToolCatalog {
                         object(Map.of(), List.of())),
                 tool("runtime_capabilities",
                         "Report capabilities; protocolMinor defaults to frozen V1.0",
-                        sessionInput(Map.of("protocolMinor", integer(0, 10)), List.of())),
+                        sessionInput(Map.of("protocolMinor", integer(0, 11)), List.of())),
                 tool("runtime_frames",
                         "List frame summaries; fromFrame defaults to 0, toFrame to max, limit to 100",
                         queryInput(Map.of(), List.of())),
@@ -218,6 +218,16 @@ public final class RuntimeToolCatalog {
                             "timeoutNanos", integer(1, Long.MAX_VALUE)),
                             List.of("checkpointId", "checkpointRequestId", "timeoutNanos"))));
         }
+        if (supported.contains("runtime_ui_bindings")) {
+            selected.add(tool("runtime_ui_bindings",
+                    "Resolve an explicit runtime entity/property or semantic UI control binding",
+                    uiBindingInput()));
+        }
+        if (supported.contains("runtime_ui_frames")) {
+            selected.add(tool("runtime_ui_frames",
+                    "Query explicit runtime/UI frame mappings by UI session or shared token",
+                    uiFrameInput()));
+        }
         selected.removeIf(tool -> !supported.contains(tool.name()));
         tools = List.copyOf(selected);
         LinkedHashMap<String, McpSchema.Tool> index = new LinkedHashMap<>();
@@ -345,6 +355,39 @@ public final class RuntimeToolCatalog {
                     "sessionId", "input", "inputRequestId", "parameters", "timeoutNanos"));
         }).toList();
         return Map.of("oneOf", branches);
+    }
+
+    private static Map<String, Object> uiBindingInput() {
+        LinkedHashMap<String, Object> common = new LinkedHashMap<>();
+        common.put("sessionId", string());
+        common.put("executionEpochId", integer(0, Long.MAX_VALUE));
+        common.put("runtimeFrameId", integer(0, Long.MAX_VALUE));
+        common.put("uiGeneration", string());
+        common.put("limit", integer(1, MAX_RESULTS));
+
+        LinkedHashMap<String, Object> runtime = new LinkedHashMap<>(common);
+        runtime.put("entityId", string());
+        runtime.put("property", string());
+        LinkedHashMap<String, Object> ui = new LinkedHashMap<>(common);
+        ui.put("uiSessionId", string());
+        ui.put("uiControlId", string());
+        return Map.of("oneOf", List.of(
+                object(runtime, List.of("sessionId", "entityId", "executionEpochId",
+                        "runtimeFrameId", "limit")),
+                object(ui, List.of("sessionId", "uiSessionId", "uiControlId",
+                        "executionEpochId", "runtimeFrameId", "limit"))));
+    }
+
+    private static Map<String, Object> uiFrameInput() {
+        Map<String, Object> common = Map.of(
+                "sessionId", string(), "limit", integer(1, MAX_RESULTS));
+        LinkedHashMap<String, Object> session = new LinkedHashMap<>(common);
+        session.put("uiSessionId", string());
+        LinkedHashMap<String, Object> token = new LinkedHashMap<>(common);
+        token.put("correlationToken", string());
+        return Map.of("oneOf", List.of(
+                object(session, List.of("sessionId", "uiSessionId", "limit")),
+                object(token, List.of("sessionId", "correlationToken", "limit"))));
     }
 
     private static Map<String, Object> assertionInput() {

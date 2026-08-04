@@ -38,6 +38,7 @@ public final class AgentRuntime implements AutoCloseable {
     private final SimulationControlRegistry controls;
     private final InputRegistry inputs;
     private final CheckpointRegistry checkpoints;
+    private final UiCorrelationRegistry uiCorrelations;
     private final EntityRegistry entities = new EntityRegistry(this);
     private final LinkedHashMap<EntityId, InspectableEntity> staticEntities = new LinkedHashMap<>();
     private final LinkedHashMap<String, Supplier<? extends Stream<InspectableEntity>>> sources =
@@ -77,6 +78,7 @@ public final class AgentRuntime implements AutoCloseable {
         controls = new SimulationControlRegistry(this, builder.controlLimits);
         inputs = new InputRegistry(this, builder.inputLimits);
         checkpoints = new CheckpointRegistry(this, builder.checkpointLimits);
+        uiCorrelations = new UiCorrelationRegistry(this, builder.uiCorrelationLimits);
     }
 
     /** Creates a runtime builder owned by the calling thread by default. */
@@ -137,6 +139,11 @@ public final class AgentRuntime implements AutoCloseable {
     /** Returns the optional application-owned opaque checkpoint registry. */
     public CheckpointRegistry checkpoints() {
         return checkpoints;
+    }
+
+    /** Returns explicit bounded bidirectional runtime/UI correlation evidence. */
+    public UiCorrelationRegistry uiCorrelations() {
+        return uiCorrelations;
     }
 
     /**
@@ -472,6 +479,7 @@ public final class AgentRuntime implements AutoCloseable {
             checkpointFailure = failure;
         }
         staticEntities.clear();
+        uiCorrelations.close();
         sources.clear();
         pendingCauses.clear();
         pendingEvents.clear();
@@ -839,6 +847,10 @@ public final class AgentRuntime implements AutoCloseable {
         requireMutableRegistration();
     }
 
+    void requireUiCorrelationMutation() {
+        requireMutableRegistration();
+    }
+
     long monotonicTimeNanos() {
         return monotonicClock.nanoTime();
     }
@@ -1114,6 +1126,8 @@ public final class AgentRuntime implements AutoCloseable {
         private ControlLimits controlLimits = ControlLimits.developmentDefaults();
         private InputLimits inputLimits = InputLimits.developmentDefaults();
         private CheckpointLimits checkpointLimits = CheckpointLimits.developmentDefaults();
+        private UiCorrelationLimits uiCorrelationLimits =
+                UiCorrelationLimits.developmentDefaults();
 
         private Builder() {}
 
@@ -1186,6 +1200,12 @@ public final class AgentRuntime implements AutoCloseable {
         /** Configures hard bounds for retained opaque checkpoints and operation evidence. */
         public Builder checkpointLimits(CheckpointLimits value) {
             checkpointLimits = Objects.requireNonNull(value, "value");
+            return this;
+        }
+
+        /** Configures hard bounds for runtime/UI bindings and frame mappings. */
+        public Builder uiCorrelationLimits(UiCorrelationLimits value) {
+            uiCorrelationLimits = Objects.requireNonNull(value, "value");
             return this;
         }
 

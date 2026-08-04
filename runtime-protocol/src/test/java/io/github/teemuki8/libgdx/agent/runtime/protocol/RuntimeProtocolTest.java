@@ -11,9 +11,11 @@ import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
 import io.github.teemuki8.libgdx.agent.runtime.core.ActionSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.BaselineKind;
 import io.github.teemuki8.libgdx.agent.runtime.core.CommandState;
+import io.github.teemuki8.libgdx.agent.runtime.core.AssertionStatus;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityType;
 import io.github.teemuki8.libgdx.agent.runtime.core.EventSpec;
+import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeAssertion;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import io.github.teemuki8.libgdx.agent.runtime.core.SessionId;
 import java.nio.charset.StandardCharsets;
@@ -91,7 +93,8 @@ final class RuntimeProtocolTest {
                 service.execute(new RuntimeRequest(
                         new ProtocolVersion(2, 0), "v", null, new RuntimeCommand.Sessions())));
         assertEquals(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED, version.error().code());
-        assertEquals("1.0,1.1,1.2,1.3,1.4,1.5,1.6", version.error().details().get("supported"));
+        assertEquals("1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7",
+                version.error().details().get("supported"));
 
         RuntimeResponse.Failure missing = assertInstanceOf(RuntimeResponse.Failure.class,
                 service.execute(new RuntimeRequest(ProtocolVersion.V1, "s", "missing",
@@ -496,6 +499,37 @@ final class RuntimeProtocolTest {
             assertEquals("enemy-1", target[0]);
             assertEquals(1, completed.invocation().completedFrameId().orElseThrow().value());
             assertEquals("attack-172", completed.invocation().correlationId().orElseThrow());
+        }
+    }
+
+    @Test
+    void declarativeAssertionRoundTripsWithClosedNestedSchema() {
+        AgentRuntime runtime = verticalRuntime();
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime)) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            RuntimeCommand.Assert command = new RuntimeCommand.Assert(
+                    new RuntimeAssertion.PropertyEquals(EntityId.of("enemy-1"), "health",
+                            RuntimeValues.integer(75)),
+                    0, 1, 0, 8);
+            RuntimeCommand.Assert decoded = assertInstanceOf(RuntimeCommand.Assert.class,
+                    ProtocolJson.decodeRequest(ProtocolJson.encode(new RuntimeRequest(
+                            ProtocolVersion.V1_7, "assert-roundtrip", "fixture", command))).command());
+            RuntimeResponse.Result.Assertion result = assertInstanceOf(
+                    RuntimeResponse.Result.Assertion.class,
+                    assertInstanceOf(RuntimeResponse.Success.class,
+                            new RuntimeProtocolService(registry).execute(new RuntimeRequest(
+                                    ProtocolVersion.V1_7, "assert", "fixture", decoded))).result());
+
+            assertEquals(AssertionStatus.PASS, result.result().status());
+            assertThrows(ProtocolJson.ProtocolJsonException.class, () ->
+                    ProtocolJson.decodeRequest(("""
+                            {"version":{"major":1,"minor":7},"requestId":"bad","sessionId":"fixture",
+                             "command":{"type":"assert","fromFrame":0,"toFrame":1,
+                             "executionEpochId":0,"evidenceLimit":8,
+                             "assertion":{"assertionType":"entityExists",
+                             "entityId":{"value":"enemy-1"},"unknown":true}}}
+                            """).getBytes(StandardCharsets.UTF_8)));
         }
     }
 

@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
 import io.github.teemuki8.libgdx.agent.runtime.core.CommandState;
 import io.github.teemuki8.libgdx.agent.runtime.core.BaselineKind;
+import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeAssertion;
 import io.github.teemuki8.libgdx.agent.runtime.mcp.RuntimeToolHandler;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.ProtocolJson;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.ProtocolVersion;
@@ -163,6 +164,40 @@ final class FixtureProtocolAndMcpTest {
             assertTrue(mcp.structuredContent().toString().contains("SCENARIO_RESET"));
         }
         runtime.close();
+    }
+
+    @Test
+    void fixtureAssertionHasMatchingProtocolAndMcpSemantics() {
+        Fixture fixture = fixture();
+        try (PublishedRuntime publication = fixture.registry.publish(fixture.runtime);
+                RuntimeToolHandler handler =
+                        new RuntimeToolHandler(new RuntimeProtocolService(fixture.registry))) {
+            assertEquals(fixture.runtime.sessionId(), publication.sessionId());
+            RuntimeResponse response = new RuntimeProtocolService(fixture.registry).execute(
+                    new RuntimeRequest(ProtocolVersion.V1_7, "fixture-assert",
+                            DeterministicSimulation.SESSION_ID.value(),
+                            new RuntimeCommand.Assert(
+                                    new RuntimeAssertion.EventOccurs(
+                                            io.github.teemuki8.libgdx.agent.runtime.core.EventType
+                                                    .of("projectile.hit")),
+                                    0, 45, 0, 8)));
+            RuntimeResponse.Result.Assertion protocol = assertInstanceOf(
+                    RuntimeResponse.Result.Assertion.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, response).result());
+            McpSchema.CallToolResult mcp = handler.handle(call("runtime_assert", Map.of(
+                    "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                    "fromFrame", 0, "toFrame", 45, "executionEpochId", 0,
+                    "evidenceLimit", 8, "assertion", Map.of(
+                            "assertionType", "eventOccurs",
+                            "eventType", "projectile.hit")))).block(Duration.ofSeconds(5));
+
+            assertEquals(io.github.teemuki8.libgdx.agent.runtime.core.AssertionStatus.PASS,
+                    protocol.result().status());
+            assertNotNull(mcp);
+            assertFalse(mcp.isError());
+            assertTrue(mcp.structuredContent().toString().contains("PASS"));
+        }
+        fixture.runtime.close();
     }
 
     private static McpSchema.CallToolRequest call(

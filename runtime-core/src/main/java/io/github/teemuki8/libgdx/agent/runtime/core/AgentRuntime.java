@@ -34,6 +34,7 @@ public final class AgentRuntime implements AutoCloseable {
     private final Optional<CommandDispatch> commands;
     private final ScenarioRegistry scenarios;
     private final ActionRegistry actions;
+    private final AssertionEvaluator assertions;
     private final EntityRegistry entities = new EntityRegistry(this);
     private final LinkedHashMap<EntityId, InspectableEntity> staticEntities = new LinkedHashMap<>();
     private final LinkedHashMap<String, Supplier<? extends Stream<InspectableEntity>>> sources =
@@ -69,6 +70,7 @@ public final class AgentRuntime implements AutoCloseable {
                         monotonicClock, captureThread));
         scenarios = new ScenarioRegistry(this, builder.scenarioLimits);
         actions = new ActionRegistry(this, builder.actionLimits);
+        assertions = new AssertionEvaluator(this);
     }
 
     /** Creates a runtime builder owned by the calling thread by default. */
@@ -109,6 +111,11 @@ public final class AgentRuntime implements AutoCloseable {
     /** Returns the explicit registry for bounded typed semantic actions. */
     public ActionRegistry actions() {
         return actions;
+    }
+
+    /** Returns the read-only declarative assertion evaluator. */
+    public AssertionEvaluator assertions() {
+        return assertions;
     }
 
     /**

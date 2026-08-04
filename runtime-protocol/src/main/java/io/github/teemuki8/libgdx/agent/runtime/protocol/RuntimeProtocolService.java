@@ -42,12 +42,13 @@ public final class RuntimeProtocolService {
             "runtime_attributed_changes", "runtime_attributed_events",
             "runtime_attributed_decisions");
     private static final List<String> ACTION_TOOLS = List.of("runtime_actions", "runtime_action");
+    private static final List<String> ASSERTION_TOOLS = List.of("runtime_assert");
     private static final List<String> FEATURES = List.of(
             "entities", "frames", "changes", "events", "decisions");
     private static final List<ProtocolVersion> SUPPORTED_VERSIONS =
             List.of(ProtocolVersion.V1, ProtocolVersion.V1_1, ProtocolVersion.V1_2,
                     ProtocolVersion.V1_3, ProtocolVersion.V1_4, ProtocolVersion.V1_5,
-                    ProtocolVersion.V1_6);
+                    ProtocolVersion.V1_6, ProtocolVersion.V1_7);
     private final RuntimeRegistry registry;
 
     /** Creates a service over an isolated or global registry. */
@@ -59,9 +60,9 @@ public final class RuntimeProtocolService {
     public List<String> toolNames() {
         boolean commandDispatch = registry.sessions().stream()
                 .anyMatch(runtime -> runtime.commands().isPresent());
-        Stream<String> tools = Stream.concat(
+        Stream<String> tools = Stream.concat(Stream.concat(
                 Stream.concat(BASE_TOOLS.stream(), EPOCH_TOOLS.stream()),
-                ATTRIBUTION_TOOLS.stream());
+                ATTRIBUTION_TOOLS.stream()), ASSERTION_TOOLS.stream());
         if (commandDispatch) {
             tools = Stream.concat(tools, COMMAND_TOOLS.stream());
         }
@@ -94,7 +95,7 @@ public final class RuntimeProtocolService {
         if (!SUPPORTED_VERSIONS.contains(request.version())) {
             return failure(request, ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                     "protocol version is unsupported", Map.of(
-                            "supported", "1.0,1.1,1.2,1.3,1.4,1.5,1.6",
+                            "supported", "1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7",
                             "requested", request.version().major() + "." + request.version().minor()));
         }
         try {
@@ -108,7 +109,8 @@ public final class RuntimeProtocolService {
                     && !(ProtocolVersion.V1_3.equals(request.version())
                     || ProtocolVersion.V1_4.equals(request.version())
                     || ProtocolVersion.V1_5.equals(request.version())
-                    || ProtocolVersion.V1_6.equals(request.version()))) {
+                    || ProtocolVersion.V1_6.equals(request.version())
+                    || ProtocolVersion.V1_7.equals(request.version()))) {
                 throw new ProtocolFailure(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                         "command requires protocol version 1.3", Map.of());
             }
@@ -117,6 +119,11 @@ public final class RuntimeProtocolService {
                     && !ProtocolVersion.V1_6.equals(request.version())) {
                 throw new ProtocolFailure(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                         "command requires protocol version 1.6", Map.of());
+            }
+            if (request.command() instanceof RuntimeCommand.Assert
+                    && !ProtocolVersion.V1_7.equals(request.version())) {
+                throw new ProtocolFailure(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
+                        "command requires protocol version 1.7", Map.of());
             }
             if ((request.command() instanceof RuntimeCommand.AttributedChanges
                     || request.command() instanceof RuntimeCommand.AttributedEvents
@@ -187,6 +194,7 @@ public final class RuntimeProtocolService {
             case RuntimeCommand.Actions ignored ->
                     new RuntimeResponse.Result.Actions(runtime.actions().list());
             case RuntimeCommand.Action command -> action(runtime, command);
+            case RuntimeCommand.Assert command -> assertion(runtime, command);
             case RuntimeCommand.Sessions ignored ->
                     throw new AssertionError("sessions handled before runtime lookup");
         };
@@ -252,7 +260,7 @@ public final class RuntimeProtocolService {
                         List.of("exact", "latest", "range"), List.of())));
         if (ProtocolVersion.V1_2.equals(version) || ProtocolVersion.V1_3.equals(version)
                 || ProtocolVersion.V1_4.equals(version) || ProtocolVersion.V1_5.equals(version)
-                || ProtocolVersion.V1_6.equals(version)) {
+                || ProtocolVersion.V1_6.equals(version) || ProtocolVersion.V1_7.equals(version)) {
             boolean available = runtime.commands().isPresent();
             Map<String, Long> commandLimits = runtime.commands().map(commands -> Map.of(
                     "queuedCommands", (long) commands.limits().queuedCommands(),
@@ -273,7 +281,8 @@ public final class RuntimeProtocolService {
                     List.of("application-owned", "at-most-once", "bounded"), List.of()));
         }
         if (ProtocolVersion.V1_3.equals(version) || ProtocolVersion.V1_4.equals(version)
-                || ProtocolVersion.V1_5.equals(version) || ProtocolVersion.V1_6.equals(version)) {
+                || ProtocolVersion.V1_5.equals(version) || ProtocolVersion.V1_6.equals(version)
+                || ProtocolVersion.V1_7.equals(version)) {
             details.add(new RuntimeCapability(
                     "execution-epochs", ProtocolVersion.V1_3,
                     runtime.configuration().enabled()
@@ -290,7 +299,7 @@ public final class RuntimeProtocolService {
                     List.of("baseline", "epoch-filter"), List.of("frames")));
         }
         if (ProtocolVersion.V1_4.equals(version) || ProtocolVersion.V1_5.equals(version)
-                || ProtocolVersion.V1_6.equals(version)) {
+                || ProtocolVersion.V1_6.equals(version) || ProtocolVersion.V1_7.equals(version)) {
             boolean registered = !runtime.scenarios().list().isEmpty();
             boolean available = registered && runtime.commands().isPresent();
             details.add(new RuntimeCapability(
@@ -311,7 +320,8 @@ public final class RuntimeProtocolService {
                             "reset-parameters-unsupported", "seed-control-unsupported"),
                     List.of("command-dispatch", "execution-epochs")));
         }
-        if (ProtocolVersion.V1_5.equals(version) || ProtocolVersion.V1_6.equals(version)) {
+        if (ProtocolVersion.V1_5.equals(version) || ProtocolVersion.V1_6.equals(version)
+                || ProtocolVersion.V1_7.equals(version)) {
             details.add(new RuntimeCapability(
                     "explicit-fact-attribution", ProtocolVersion.V1_5,
                     runtime.configuration().enabled()
@@ -332,7 +342,7 @@ public final class RuntimeProtocolService {
                     List.of("explicit", "exact-filter", "unverified-source-label"),
                     List.of("changes", "events", "decisions")));
         }
-        if (ProtocolVersion.V1_6.equals(version)) {
+        if (ProtocolVersion.V1_6.equals(version) || ProtocolVersion.V1_7.equals(version)) {
             boolean registered = !runtime.actions().list().isEmpty();
             boolean available = registered && runtime.commands().isPresent();
             details.add(new RuntimeCapability(
@@ -356,30 +366,65 @@ public final class RuntimeProtocolService {
                     List.of("application-owned", "closed-schema", "at-most-once"),
                     List.of("command-dispatch", "explicit-fact-attribution")));
         }
+        if (ProtocolVersion.V1_7.equals(version)) {
+            boolean available = runtime.configuration().enabled();
+            details.add(new RuntimeCapability(
+                    "declarative-assertions", ProtocolVersion.V1_7,
+                    available ? RuntimeCapability.Availability.AVAILABLE
+                            : RuntimeCapability.Availability.UNAVAILABLE,
+                    available ? Optional.empty() : Optional.of("runtime-disabled"),
+                    RuntimeCapability.Access.READ_ONLY,
+                    List.of("AgentRuntime#assertions", "AssertionEvaluator#evaluate"),
+                    List.of("assert"), ASSERTION_TOOLS, Map.of(
+                            "evaluatedFrames",
+                            (long) io.github.teemuki8.libgdx.agent.runtime.core.AssertionScope
+                                    .MAX_FRAMES,
+                            "supportingEvidence",
+                            (long) io.github.teemuki8.libgdx.agent.runtime.core.AssertionScope
+                                    .MAX_EVIDENCE),
+                    List.of("closed-schema", "deterministic", "bounded"),
+                    List.of("execution-epochs", "completed-frames")));
+        }
         return List.copyOf(details);
     }
 
     private static List<String> toolsFor(AgentRuntime runtime, ProtocolVersion version) {
         Stream<String> tools = BASE_TOOLS.stream();
         if (ProtocolVersion.V1_3.equals(version) || ProtocolVersion.V1_4.equals(version)
-                || ProtocolVersion.V1_5.equals(version) || ProtocolVersion.V1_6.equals(version)) {
+                || ProtocolVersion.V1_5.equals(version) || ProtocolVersion.V1_6.equals(version)
+                || ProtocolVersion.V1_7.equals(version)) {
             tools = Stream.concat(tools, EPOCH_TOOLS.stream());
         }
         if (runtime.commands().isPresent() && (ProtocolVersion.V1_2.equals(version)
                 || ProtocolVersion.V1_3.equals(version) || ProtocolVersion.V1_4.equals(version)
-                || ProtocolVersion.V1_5.equals(version) || ProtocolVersion.V1_6.equals(version))) {
+                || ProtocolVersion.V1_5.equals(version) || ProtocolVersion.V1_6.equals(version)
+                || ProtocolVersion.V1_7.equals(version))) {
             tools = Stream.concat(tools, COMMAND_TOOLS.stream());
         }
         if ((ProtocolVersion.V1_4.equals(version) || ProtocolVersion.V1_5.equals(version)
-                || ProtocolVersion.V1_6.equals(version))
+                || ProtocolVersion.V1_6.equals(version) || ProtocolVersion.V1_7.equals(version))
                 && !runtime.scenarios().list().isEmpty()) {
             tools = Stream.concat(tools, SCENARIO_TOOLS.stream());
         }
-        if (ProtocolVersion.V1_5.equals(version) || ProtocolVersion.V1_6.equals(version)) {
+        if (ProtocolVersion.V1_5.equals(version) || ProtocolVersion.V1_6.equals(version)
+                || ProtocolVersion.V1_7.equals(version)) {
             tools = Stream.concat(tools, ATTRIBUTION_TOOLS.stream());
         }
-        return ProtocolVersion.V1_6.equals(version) && !runtime.actions().list().isEmpty()
-                ? Stream.concat(tools, ACTION_TOOLS.stream()).toList() : tools.toList();
+        if ((ProtocolVersion.V1_6.equals(version) || ProtocolVersion.V1_7.equals(version))
+                && !runtime.actions().list().isEmpty()) {
+            tools = Stream.concat(tools, ACTION_TOOLS.stream());
+        }
+        return ProtocolVersion.V1_7.equals(version)
+                ? Stream.concat(tools, ASSERTION_TOOLS.stream()).toList() : tools.toList();
+    }
+
+    private static RuntimeResponse.Result assertion(
+            AgentRuntime runtime, RuntimeCommand.Assert command) {
+        return new RuntimeResponse.Result.Assertion(runtime.assertions().evaluate(
+                command.assertion(),
+                new io.github.teemuki8.libgdx.agent.runtime.core.AssertionScope(
+                        new ExecutionEpochId(command.executionEpochId()),
+                        range(command.fromFrame(), command.toFrame()), command.evidenceLimit())));
     }
 
     private static RuntimeResponse.Result epochFrames(

@@ -9,7 +9,7 @@ strict closed input schemas (`additionalProperties: false`), and a maximum reque
 | Tool | Required fields | Optional fields |
 | --- | --- | --- |
 | `runtime_sessions` | none | none |
-| `runtime_capabilities` | `sessionId` | `protocolMinor` (`0` through `6`; default `0`) |
+| `runtime_capabilities` | `sessionId` | `protocolMinor` (`0` through `7`; default `0`) |
 | `runtime_frames` | `sessionId` | `fromFrame`, `toFrame`, `limit` |
 | `runtime_snapshot` | `sessionId` | `frameId`, `entityId`, `entityIdPrefix`, `entityType`, `entityTypePrefix`, `limit` |
 | `runtime_entity` | `sessionId`, `entityId` | `fromFrame`, `toFrame`, `limit` |
@@ -26,6 +26,7 @@ strict closed input schemas (`additionalProperties: false`), and a maximum reque
 | `runtime_attributed_decisions` | `sessionId` | range, decision filters, `sourceSubsystem`, `correlationId`, `limit` |
 | `runtime_actions`*** | `sessionId` | none |
 | `runtime_action`*** | `sessionId`, `action`, `actionRequestId`, `parameters`, `timeoutNanos` | `correlationId` |
+| `runtime_assert` | `sessionId`, range, `executionEpochId`, `evidenceLimit`, `assertion` | assertion-specific closed fields |
 
 \* Command tools are included in the server-start catalog only when at least one published runtime
 has explicitly registered application command dispatch. They use protocol 1.2.
@@ -42,7 +43,7 @@ boolean; there are no regular expressions or generic expressions.
 
 ## Protocol and capabilities
 
-Protocol 1.0 retains the exact original capabilities result. Set `protocolMinor` from `1` to `6`
+Protocol 1.0 retains the exact original capabilities result. Set `protocolMinor` from `1` to `7`
 on `runtime_capabilities` to request extension metadata. The read-only MCP tools continue to use
 1.0. Command status and cancellation use protocol 1.2; epoch queries use protocol 1.3; scenario
 catalog and reset use protocol 1.4.
@@ -54,6 +55,13 @@ List `runtime_actions` before invoking an action. `runtime_action.parameters` is
 registered closed schema and rejects missing, unknown, or wrong-type values before handler dispatch.
 Reuse the same `actionRequestId`, action, parameters, and correlation ID to poll a retained outcome;
 changing any of them is rejected. A handler runs at most once while request evidence is retained.
+
+`runtime_assert` uses protocol 1.7 and evaluates only completed retained frames in one explicit
+execution epoch. Its discriminated assertion objects and nested comparison scope are closed.
+Results are `PASS`, `FAIL`, or `INCONCLUSIVE`; missing frames, diagnostics, aborted decisions, or
+truncation produce `INCONCLUSIVE` whenever they could change the answer. Negative, exact-count,
+range-remains, and equivalence assertions require complete evidence. The evaluator never advances
+simulation, sleeps, interprets expressions, or executes code.
 
 Scenario resets are idempotently correlated by `resetRequestId`. The first response may be queued;
 repeat the same reset request or read `runtime_command_status` until it is terminal. A successful

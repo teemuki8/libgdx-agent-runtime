@@ -154,12 +154,7 @@ public final class RuntimeToolCatalog {
         if (supported.contains("runtime_control")) {
             selected.add(tool("runtime_control",
                     "Read control state or submit/poll an idempotent pause or resume",
-                    sessionInput(Map.of(
-                            "action", Map.of("type", "string",
-                                    "enum", List.of("STATUS", "PAUSE", "RESUME")),
-                            "controlRequestId", string(),
-                            "timeoutNanos", integer(1, Long.MAX_VALUE)),
-                            List.of("action"))));
+                    controlInput()));
         }
         if (supported.contains("runtime_advance")) {
             selected.add(tool("runtime_advance",
@@ -225,6 +220,20 @@ public final class RuntimeToolCatalog {
         requiredFields.add("sessionId");
         requiredFields.addAll(required);
         return object(properties, requiredFields);
+    }
+
+    private static Map<String, Object> controlInput() {
+        Map<String, Object> status = object(Map.of(
+                "sessionId", string(),
+                "action", Map.of("type", "string", "const", "STATUS")),
+                List.of("sessionId", "action"));
+        Map<String, Object> mutation = object(Map.of(
+                "sessionId", string(),
+                "action", Map.of("type", "string", "enum", List.of("PAUSE", "RESUME")),
+                "controlRequestId", string(),
+                "timeoutNanos", integer(1, Long.MAX_VALUE)),
+                List.of("sessionId", "action", "controlRequestId", "timeoutNanos"));
+        return Map.of("type", "object", "oneOf", List.of(status, mutation));
     }
 
     private static Map<String, Object> queryInput(

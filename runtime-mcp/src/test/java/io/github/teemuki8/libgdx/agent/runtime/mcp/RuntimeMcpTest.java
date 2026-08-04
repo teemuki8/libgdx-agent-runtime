@@ -379,6 +379,15 @@ final class RuntimeMcpTest {
                     new RuntimeToolCatalog(new RuntimeProtocolService(registry).toolNames());
             assertFalse((Boolean) catalog.tool("runtime_wait")
                     .inputSchema().get("additionalProperties"));
+            assertEquals(2, ((List<?>) catalog.tool("runtime_control")
+                    .inputSchema().get("oneOf")).size());
+            assertTrue(handler.handle(call("runtime_control", Map.of(
+                    "sessionId", "mcp-control", "action", "PAUSE")))
+                    .block(Duration.ofSeconds(5)).isError());
+            assertTrue(handler.handle(call("runtime_control", Map.of(
+                    "sessionId", "mcp-control", "action", "STATUS",
+                    "controlRequestId", "not-allowed", "timeoutNanos", 1_000)))
+                    .block(Duration.ofSeconds(5)).isError());
 
             Map<String, Object> pause = Map.of(
                     "sessionId", "mcp-control", "action", "PAUSE",

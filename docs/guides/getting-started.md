@@ -55,6 +55,9 @@ retained.
 Close on the capture thread from `dispose()`. Completed immutable history remains readable after
 close, but providers are released and no more capture is accepted.
 
+To make registered values visible to the UI harness, record one explicit frame correlation per
+rendered frame — see [Frame correlation](frame-correlation.md).
+
 ## Disabled runtime
 
 Use `RuntimeConfiguration.disabled()`. Registration returns no-op handles, `frame` only executes its

@@ -123,7 +123,8 @@ produce `EXPIRED` rather than being inferred. Results report `MATCHED`, `MISSING
 `AMBIGUOUS` with observed/retained counts and truncation. `runtime_ui_frames` exposes separately
 registered runtime-frame-to-UI-frame or shared-token mappings with bounded retention and eviction
 evidence. The runtime does not inspect DOMs, scene graphs, pixels, accessibility trees, or widget
-objects.
+objects. How the application records these correlations and pairs the token with harness-side
+bindings is documented in [Frame correlation](frame-correlation.md).
 
 `runtime_control` reports availability, current pause state, registered condition IDs/descriptions,
 and effective limits. `PAUSE` and `RESUME` use an idempotent `controlRequestId`.

@@ -4,6 +4,14 @@ All notable changes follow Keep a Changelog structure.
 
 ## [Unreleased]
 
+### Changed
+
+- Documentation: state that stdio MCP hosting is exclusive (one stdio server per process) and
+  describe the harness co-existence pattern via `ui_runtime_compare` (#37).
+- Documentation: add the frame-correlation contract guide covering `UiFrameCorrelation`,
+  one-correlation-per-frame recording, token pairing, and the `ui_runtime_compare` loop-order
+  requirement; document the token contract on the `UiFrameCorrelation` Javadoc (#38).
+
 ## [1.0.0] - 2026-08-04
 
 First production-supported release and stable 1.x compatibility baseline.

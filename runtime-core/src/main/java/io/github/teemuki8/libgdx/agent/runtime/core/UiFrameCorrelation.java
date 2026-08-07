@@ -12,7 +12,7 @@ import java.util.Optional;
  * non-secret token, and attach the same token to the harness-side binding. A token
  * mismatch or a missing correlation degrades comparisons to {@code UNCORRELATED}/
  * {@code STALE} rather than raising an error, so keep the token stable and identical on
- * both sides. Exactly one of {@code uiFrameId} and {@code correlationToken} must be
+ * both sides. At least one of {@code uiFrameId} and {@code correlationToken} must be
  * present.
  *
  * @param runtimeEpochId the runtime execution epoch the frame belongs to

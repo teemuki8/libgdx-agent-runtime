@@ -20,7 +20,9 @@ Applications retain control of `ApplicationListener`, update, render, input, and
 
 [`libgdx-ui-harness`](https://github.com/teemuki8/libgdx-ui-harness) addresses Scene2D UI
 inspection and operation. This project addresses game state, changes, events, frames, and explicit
-decisions. Neither is a dependency of the other.
+decisions. Neither is a dependency of the other. When a game embeds both, runtime values reach the
+harness through explicit per-frame correlation and the harness `ui_runtime_compare` tool; see
+[docs/guides/frame-correlation.md](docs/guides/frame-correlation.md).
 
 ## V1 scope
 
@@ -89,6 +91,17 @@ RuntimeMcpServer server = RuntimeMcpServer.open(
 
 Keep both handles for the launcher lifetime and close `server`, `publication`, then `runtime`.
 Do not use stdout for game logging while it carries MCP JSON-RPC; use stderr or a file.
+
+The stdio transport is exclusive: one process serves one stdio MCP server on
+`System.in`/`System.out`. This `RuntimeMcpServer` is the runtime-only launcher surface for the
+`runtime_*` tools. A game embedding the full stack (this runtime plus
+[`libgdx-ui-harness`](https://github.com/teemuki8/libgdx-ui-harness)) serves the **harness** MCP
+server and exposes runtime values in-band through the harness `ui_runtime_compare` tool — it must
+not attempt to open `RuntimeMcpServer` on the same stdio pair as `HarnessMcpServer`, because both
+transports require exclusive use of the same streams. That pattern is described in
+[docs/guides/frame-correlation.md](docs/guides/frame-correlation.md). Co-serving both MCP surfaces
+in one process is not supported by the current transports and would need a multiplexed-transport
+or merged-catalog design (an ADR) before it could be documented as an option.
 
 This repository includes a same-JVM deterministic development launcher. On Linux, an MCP client
 configuration can point to:

@@ -172,6 +172,7 @@ publishes.
 
 - [Getting started](docs/guides/getting-started.md)
 - [Instrumenting game state](docs/guides/instrumenting-game-state.md)
+- [Frame correlation](docs/guides/frame-correlation.md)
 - [Decision tracing](docs/guides/decision-tracing.md)
 - [Agent tools](docs/guides/agent-tools.md)
 - [Releasing to Maven Central](docs/guides/releasing.md)

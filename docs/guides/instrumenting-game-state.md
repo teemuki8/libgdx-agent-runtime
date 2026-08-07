@@ -71,3 +71,12 @@ and property, exception class, and bounded message. Stack traces are not seriali
 property is omitted and diagnostics make that omission explicit.
 
 Only registered fields are visible. The runtime never traverses arbitrary object fields.
+
+## Making values visible to the UI harness
+
+Registered entities and properties become visible to the harness only through an explicit
+per-frame correlation recorded under a stable token, matched by a harness-side binding, and
+compared by the harness `ui_runtime_compare` tool. Without a provable correlation the harness
+reports `UNCORRELATED`/`STALE`, never a guess. See
+[Frame correlation](frame-correlation.md) for the full contract, the loop-order requirement for
+`EQUAL`, and the markup preview reference implementation.

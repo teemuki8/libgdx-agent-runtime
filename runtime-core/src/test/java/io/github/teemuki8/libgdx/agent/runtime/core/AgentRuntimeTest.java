@@ -8,13 +8,18 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.IntStream;
@@ -695,6 +700,180 @@ final class AgentRuntimeTest {
                 FrameRange.of(0, 1), Optional.of("wave."), true,
                 Optional.empty(), Optional.empty(), 10)).items().size() == 2);
     }
+
+    @Test
+    void closeReleasesCallbacksAndPendingWorkWhileRetainingCatalogsAndEvidence() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        AtomicInteger resets = new AtomicInteger();
+        AtomicInteger actionRuns = new AtomicInteger();
+        AtomicInteger inputRuns = new AtomicInteger();
+        AtomicInteger tickRuns = new AtomicInteger();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("close-release"))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .build();
+        runtime.scenarios().register("reset", "Restores state", context -> resets.incrementAndGet());
+        runtime.actions().register(ActionSpec.builder("attack")
+                .description("Attacks one target")
+                .handler(ignored -> actionRuns.incrementAndGet()).build());
+        runtime.inputs().register(InputSpec.builder("key")
+                .description("Pressed key")
+                .requiredString("key")
+                .handler(ignored -> inputRuns.incrementAndGet()).build());
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {}).resume(() -> {}).tick(delta -> tickRuns.incrementAndGet())
+                .condition("ready", "Ready state", () -> false).build());
+        runtime.start();
+        runtime.frame(1, () -> {});
+
+        runtime.controls().control(true, "pause-1", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        RuntimeValue.ObjectValue parameters = RuntimeValues.object(
+                RuntimeValues.field("key", RuntimeValues.string("X")));
+        runtime.inputs().inject("key", "input-1", parameters, OptionalLong.empty(),
+                Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        assertEquals(1, runtime.inputs().retainedPendingInjections());
+        runtime.scenarios().reset("reset", "reset-1", Duration.ofSeconds(1));
+        runtime.actions().invoke("attack", "action-1", RuntimeValues.object(),
+                Optional.empty(), Duration.ofSeconds(1));
+        assertEquals(1, runtime.controls().retainedControlOperations());
+
+        runtime.close();
+
+        assertEquals(RuntimeStatus.CLOSED, runtime.status());
+        // Immutable catalogs remain queryable after close.
+        assertEquals(List.of("reset"),
+                runtime.scenarios().list().stream().map(ScenarioDescriptor::id).toList());
+        assertTrue(runtime.scenarios().determinismAvailable());
+        assertEquals(List.of("attack"),
+                runtime.actions().list().stream().map(ActionDescriptor::id).toList());
+        assertEquals(List.of("key"),
+                runtime.inputs().list().stream().map(InputDescriptor::id).toList());
+        assertEquals(List.of("ready"),
+                runtime.controls().conditions().stream().map(ControlConditionDescriptor::id).toList());
+        assertFalse(runtime.controls().descriptor().available());
+        // Completed immutable history remains queryable.
+        assertTrue(runtime.latestFrame().isPresent());
+        // Every application callback and pending-work store is empty.
+        assertEquals(0, runtime.scenarios().retainedResetCallbacks());
+        assertEquals(0, runtime.scenarios().retainedPendingResets());
+        assertEquals(0, runtime.actions().retainedActionHandlers());
+        assertEquals(0, runtime.actions().retainedPendingInvocations());
+        assertEquals(0, runtime.inputs().retainedInputHandlers());
+        assertEquals(0, runtime.inputs().retainedPendingInjections());
+        assertEquals(0, runtime.controls().retainedControlCallbacks());
+        assertEquals(0, runtime.controls().retainedControlOperations());
+        // Queued application work cannot execute after close.
+        queue.forEach(Runnable::run);
+        assertEquals(0, resets.get());
+        assertEquals(0, actionRuns.get());
+        assertEquals(0, inputRuns.get());
+        assertEquals(0, tickRuns.get());
+        // Terminal command evidence remains queryable.
+        assertEquals(CommandState.REJECTED, runtime.commands().orElseThrow()
+                .status("reset-1").status().orElseThrow().state());
+        // New submissions reject the closed runtime.
+        assertClosedSubmission(() -> runtime.scenarios().reset(
+                "reset", "reset-2", Duration.ofSeconds(1)));
+        assertClosedSubmission(() -> runtime.actions().invoke("attack", "action-2",
+                RuntimeValues.object(), Optional.empty(), Duration.ofSeconds(1)));
+        assertClosedSubmission(() -> runtime.inputs().inject("key", "input-2", parameters,
+                OptionalLong.empty(), Duration.ofSeconds(1)));
+        assertClosedSubmission(() -> runtime.controls().control(true, "pause-2",
+                Duration.ofSeconds(1)));
+        assertClosedSubmission(() -> runtime.controls().advance(
+                "advance-2", 1, 1, Duration.ofSeconds(1)));
+    }
+
+    @Test
+    void closeAttemptsEveryHookSuppressesLaterFailuresAndStaysIdempotent() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        List<Integer> disposed = new ArrayList<>();
+        AtomicInteger created = new AtomicInteger();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("close-suppression"))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .checkpointLimits(new CheckpointLimits(2, 8, 642))
+                .build();
+        runtime.scenarios().register("reset", "Reset", context -> {});
+        runtime.actions().register(ActionSpec.builder("attack").handler(ignored -> {}).build());
+        runtime.inputs().register(InputSpec.builder("key").handler(ignored -> {}).build());
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {}).resume(() -> {}).tick(delta -> {}).build());
+        runtime.checkpoints().register(new CheckpointProvider() {
+            @Override
+            public CheckpointHandle create() {
+                return new CloseHandle(created.incrementAndGet());
+            }
+
+            @Override
+            public void restore(CheckpointHandle handle) {}
+
+            @Override
+            public void dispose(CheckpointHandle handle) {
+                int value = ((CloseHandle) handle).value();
+                disposed.add(value);
+                if (value == 1) {
+                    throw new IllegalStateException("dispose failed");
+                }
+            }
+        });
+        runtime.start();
+        runtime.checkpoints().create("one", null, "create-one", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        runtime.checkpoints().create("two", null, "create-two", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class, runtime::close);
+        assertEquals("dispose failed", failure.getMessage());
+        assertEquals(List.of(1, 2), disposed,
+                "the second checkpoint must still be disposed after the first failure");
+        assertEquals(RuntimeStatus.CLOSED, runtime.status());
+        assertEquals(0, runtime.scenarios().retainedResetCallbacks());
+        assertEquals(0, runtime.actions().retainedActionHandlers());
+        assertEquals(0, runtime.inputs().retainedInputHandlers());
+        assertEquals(0, runtime.controls().retainedControlCallbacks());
+        assertEquals(0, runtime.checkpoints().retainedCheckpoints());
+        assertEquals(0, runtime.checkpoints().retainedOperations());
+        // A second close is a no-op.
+        runtime.close();
+        assertEquals(RuntimeStatus.CLOSED, runtime.status());
+    }
+
+    @Test
+    void repeatedCreateRegisterStartCloseRetainsNoCallbacks() {
+        for (int iteration = 0; iteration < 3; iteration++) {
+            ArrayDeque<Runnable> queue = new ArrayDeque<>();
+            AgentRuntime runtime = AgentRuntime.builder()
+                    .sessionId(SessionId.of("loop-" + iteration))
+                    .clock(() -> 1)
+                    .commandDispatcher(queue::addLast)
+                    .build();
+            runtime.scenarios().register("reset", "Reset", context -> {});
+            runtime.actions().register(ActionSpec.builder("attack").handler(ignored -> {}).build());
+            runtime.inputs().register(InputSpec.builder("key").handler(ignored -> {}).build());
+            runtime.controls().register(SimulationControllerSpec.builder()
+                    .pause(() -> {}).resume(() -> {}).tick(delta -> {}).build());
+            runtime.start();
+            runtime.close();
+            assertEquals(0, runtime.scenarios().retainedResetCallbacks());
+            assertEquals(0, runtime.actions().retainedActionHandlers());
+            assertEquals(0, runtime.inputs().retainedInputHandlers());
+            assertEquals(0, runtime.controls().retainedControlCallbacks());
+            assertEquals(0, runtime.commands().orElseThrow().retainedLiveCommands());
+            assertEquals(0, runtime.commands().orElseThrow().retainedPendingDispatches());
+        }
+    }
+
+    private static void assertClosedSubmission(org.junit.jupiter.api.function.Executable submission) {
+        AgentRuntimeException failure = assertThrows(AgentRuntimeException.class, submission);
+        assertEquals(RuntimeErrorCode.RUNTIME_CLOSED, failure.code());
+    }
+
+    private record CloseHandle(int value) implements CheckpointHandle {}
 
     private static AgentRuntime runtime(RuntimeLimits limits) {
         AtomicLong time = new AtomicLong();

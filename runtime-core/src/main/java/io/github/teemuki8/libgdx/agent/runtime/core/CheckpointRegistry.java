@@ -69,6 +69,7 @@ public final class CheckpointRegistry {
     }
 
     private CheckpointOperation submit(Request request, String requestId, Duration timeout) {
+        runtime.requireSubmissionsOpen();
         CommandDispatch dispatch = runtime.commands().orElseThrow(() ->
                 new IllegalStateException("checkpoint mutation requires application command dispatch"));
         requireValidTimeout(timeout, dispatch.limits().maximumTimeoutNanos());
@@ -232,6 +233,16 @@ public final class CheckpointRegistry {
         if (firstFailure instanceof Error failure) {
             throw failure;
         }
+    }
+
+    /** Package-private close observation: number of retained checkpoint descriptors. */
+    synchronized int retainedCheckpoints() {
+        return checkpoints.size();
+    }
+
+    /** Package-private close observation: number of retained pending checkpoint operations. */
+    synchronized int retainedOperations() {
+        return operations.size();
     }
 
     private CheckpointProvider requireProvider() {

@@ -95,3 +95,14 @@ This document makes lifecycle and evidence edge cases explicit.
 
 Closing during a frame is rejected. `frame` completes capture and rethrows callback failure.
 Disabled runtimes retain no providers or frames and perform no serialization.
+
+31. Closing a runtime releases every live application reference: scenario reset handlers, action
+    handlers, simulation pause/resume/tick callbacks and condition predicates, input handlers, and
+    queued/scheduled injection state, checkpoint providers and opaque handles (each retained handle
+    is disposed), pending command closures, pending control/input/recording/checkpoint operations,
+    and static entity/source providers. Every registry close hook runs even when an earlier hook
+    fails; the runtime still publishes `CLOSED` and rethrows only the first failure with later
+    failures suppressed. Immutable catalogs (scenario/action/input descriptors, condition
+    descriptors), completed frame history, retained terminal command/checkpoint/recording evidence,
+    and closed recording manifests remain queryable after close. New submissions reject the closed
+    runtime with `RUNTIME_CLOSED`; repeated `close()` is a no-op.

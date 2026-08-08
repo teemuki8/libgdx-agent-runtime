@@ -11,7 +11,8 @@ import java.util.Optional;
 public final class ScenarioRegistry {
     private final AgentRuntime runtime;
     private final ScenarioLimits limits;
-    private final LinkedHashMap<String, Entry> entries = new LinkedHashMap<>();
+    private final LinkedHashMap<String, CatalogEntry> entries = new LinkedHashMap<>();
+    private final LinkedHashMap<String, ScenarioResetHandler> resetHandlers = new LinkedHashMap<>();
     private final LinkedHashMap<String, String> requests = new LinkedHashMap<>();
     private final LinkedHashMap<String, Baseline> completed = new LinkedHashMap<>();
 
@@ -65,22 +66,25 @@ public final class ScenarioRegistry {
             throw new AgentRuntimeException(RuntimeErrorCode.LIMIT_EXCEEDED,
                     "registered scenario limit reached");
         }
-        entries.put(descriptor.id(), new Entry(descriptor, reset, deterministic));
+        entries.put(descriptor.id(), new CatalogEntry(descriptor, deterministic));
+        resetHandlers.put(descriptor.id(), reset);
     }
 
     /** Lists immutable metadata in registration order. */
     public synchronized List<ScenarioDescriptor> list() {
-        return entries.values().stream().map(Entry::descriptor).toList();
+        return entries.values().stream().map(CatalogEntry::descriptor).toList();
     }
 
     /** Reports whether any scenario acknowledges deterministic reset inputs. */
     public synchronized boolean determinismAvailable() {
-        return entries.values().stream().anyMatch(Entry::deterministic);
+        return entries.values().stream().anyMatch(CatalogEntry::deterministic);
     }
 
     /** Resets a registered scenario through application command dispatch. */
     public ScenarioReset reset(String scenarioId, String requestId, Duration timeout) {
-        Entry entry;
+        runtime.requireSubmissionsOpen();
+        CatalogEntry entry;
+        ScenarioResetHandler reset;
         boolean existing;
         CommandDispatch dispatch = runtime.commands().orElseThrow(() ->
                 new IllegalStateException("scenario reset requires application command dispatch"));
@@ -90,6 +94,7 @@ public final class ScenarioRegistry {
             if (entry == null) {
                 throw new IllegalArgumentException("unknown scenario id");
             }
+            reset = resetHandlers.get(scenarioId);
             String previous = requests.get(requestId);
             existing = previous != null;
             if (previous != null && !previous.equals(scenarioId)) {
@@ -113,7 +118,7 @@ public final class ScenarioRegistry {
         }
         CommandLookup lookup = dispatch.submit(requestId, timeout, () -> {
             FrameId frame = runtime.executeScenarioReset(
-                    () -> entry.reset().reset(ScenarioResetContext.ordinary()));
+                    () -> reset.reset(ScenarioResetContext.ordinary()));
             synchronized (ScenarioRegistry.this) {
                 completed.put(requestId, new Baseline(runtime.currentEpoch(), frame));
                 trim(completed);
@@ -129,22 +134,39 @@ public final class ScenarioRegistry {
     }
 
     FrameId resetForDeterminism(String scenarioId, ScenarioResetContext context) {
-        Entry entry;
+        ScenarioResetHandler reset;
         synchronized (this) {
-            entry = entries.get(scenarioId);
+            CatalogEntry entry = entries.get(scenarioId);
+            if (entry == null) {
+                throw new IllegalArgumentException("unknown scenario id");
+            }
+            if (!entry.deterministic()) {
+                throw new IllegalArgumentException(
+                        "scenario does not acknowledge deterministic reset inputs");
+            }
+            reset = resetHandlers.get(scenarioId);
         }
-        if (entry == null) {
-            throw new IllegalArgumentException("unknown scenario id");
-        }
-        if (!entry.deterministic()) {
-            throw new IllegalArgumentException(
-                    "scenario does not acknowledge deterministic reset inputs");
-        }
-        return runtime.executeScenarioReset(() -> entry.reset().reset(context));
+        return runtime.executeScenarioReset(() -> reset.reset(context));
     }
 
     public ScenarioLimits limits() {
         return limits;
+    }
+
+    /** Package-private close observation: number of retained application reset handlers. */
+    synchronized int retainedResetCallbacks() {
+        return resetHandlers.size();
+    }
+
+    /** Package-private close observation: number of retained pending reset requests. */
+    synchronized int retainedPendingResets() {
+        return requests.size();
+    }
+
+    /** Releases application reset callbacks and pending reset requests, keeping the catalog. */
+    synchronized void close() {
+        resetHandlers.clear();
+        requests.clear();
     }
 
     private static void requireValidTimeout(Duration timeout, long maximumNanos) {
@@ -169,7 +191,6 @@ public final class ScenarioRegistry {
         }
     }
 
-    private record Entry(ScenarioDescriptor descriptor, ScenarioResetHandler reset,
-            boolean deterministic) {}
+    private record CatalogEntry(ScenarioDescriptor descriptor, boolean deterministic) {}
     private record Baseline(ExecutionEpochId epoch, FrameId frame) {}
 }

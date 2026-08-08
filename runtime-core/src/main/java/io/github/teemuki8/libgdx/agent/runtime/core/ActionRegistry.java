@@ -6,13 +6,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Consumer;
 
 /** Explicit bounded registry and dispatcher for typed semantic actions. */
 public final class ActionRegistry {
     private final AgentRuntime runtime;
     private final ActionLimits limits;
     private final Object submissionLock = new Object();
-    private final LinkedHashMap<String, ActionSpec> actions = new LinkedHashMap<>();
+    private final LinkedHashMap<String, ActionDescriptor> actions = new LinkedHashMap<>();
+    private final LinkedHashMap<String, Consumer<ActionParameters>> handlers = new LinkedHashMap<>();
     private final LinkedHashMap<String, RequestEvidence> requests = new LinkedHashMap<>();
 
     ActionRegistry(AgentRuntime runtime, ActionLimits limits) {
@@ -31,11 +33,12 @@ public final class ActionRegistry {
             throw new AgentRuntimeException(RuntimeErrorCode.LIMIT_EXCEEDED,
                     "action registration limit reached");
         }
-        actions.put(spec.descriptor().id(), spec);
+        actions.put(spec.descriptor().id(), spec.descriptor());
+        handlers.put(spec.descriptor().id(), spec.handler());
     }
 
     public synchronized List<ActionDescriptor> list() {
-        return actions.values().stream().map(ActionSpec::descriptor).toList();
+        return List.copyOf(actions.values());
     }
 
     public ActionInvocation invoke(String actionId, String requestId,
@@ -49,21 +52,24 @@ public final class ActionRegistry {
     private ActionInvocation invokeOrdered(String actionId, String requestId,
             RuntimeValue.ObjectValue parameters, Optional<String> correlationId,
             Duration timeout) {
+        runtime.requireSubmissionsOpen();
         Objects.requireNonNull(parameters, "parameters");
         correlationId = Objects.requireNonNull(correlationId, "correlationId");
         correlationId.ifPresent(value -> IdentifierSupport.validate(value, "correlation id"));
         CommandDispatch dispatch = runtime.commands().orElseThrow(() ->
                 new IllegalStateException("semantic actions require application command dispatch"));
         requireValidTimeout(timeout, dispatch.limits().maximumTimeoutNanos());
-        ActionSpec spec;
+        ActionDescriptor descriptor;
+        Consumer<ActionParameters> handler;
         RequestEvidence evidence;
         boolean existing;
         synchronized (this) {
-            spec = actions.get(actionId);
-            if (spec == null) {
+            descriptor = actions.get(actionId);
+            if (descriptor == null) {
                 throw new IllegalArgumentException("unknown action id");
             }
-            validate(spec.descriptor(), parameters);
+            handler = handlers.get(actionId);
+            validate(descriptor, parameters);
             evidence = requests.get(requestId);
             existing = evidence != null;
             if (evidence != null && (!evidence.actionId.equals(actionId)
@@ -88,7 +94,7 @@ public final class ActionRegistry {
         RequestEvidence retained = evidence;
         ActionParameters validated = new ActionParameters(parameters);
         CommandLookup lookup = dispatch.submit(requestId, timeout, () -> {
-            spec.handler().accept(validated);
+            handler.accept(validated);
             retained.completedFrame = runtime.latestFrame().map(FrameSnapshot::frameId);
         });
         return record(new ActionInvocation(actionId, requestId, lookup, evidence.submittedFrame,
@@ -97,6 +103,22 @@ public final class ActionRegistry {
 
     public ActionLimits limits() {
         return limits;
+    }
+
+    /** Package-private close observation: number of retained application action handlers. */
+    synchronized int retainedActionHandlers() {
+        return handlers.size();
+    }
+
+    /** Package-private close observation: number of retained pending action invocations. */
+    synchronized int retainedPendingInvocations() {
+        return requests.size();
+    }
+
+    /** Releases application handlers and pending invocation evidence, keeping the catalog. */
+    synchronized void close() {
+        handlers.clear();
+        requests.clear();
     }
 
     synchronized Optional<ActionInvocation> recording(String requestId) {

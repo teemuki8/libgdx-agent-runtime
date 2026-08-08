@@ -5,10 +5,49 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.time.Duration;
 import java.util.ArrayDeque;
+import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 final class SimulationControlTest {
+    @Test
+    void closeReleasesCallbacksAndPendingOperationsButRetainsConditionMetadata() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        int[] ticks = {0};
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("control-close"))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .build();
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {})
+                .resume(() -> {})
+                .tick(deltaNanos -> ticks[0]++)
+                .condition("ready", "Ready state", () -> false)
+                .build());
+        runtime.start();
+        runtime.controls().control(true, "pause-1", Duration.ofSeconds(1));
+        assertEquals(1, runtime.controls().retainedControlOperations());
+
+        runtime.close();
+
+        assertEquals(List.of("ready"),
+                runtime.controls().conditions().stream()
+                        .map(ControlConditionDescriptor::id).toList());
+        assertEquals(0, runtime.controls().retainedControlCallbacks());
+        assertEquals(0, runtime.controls().retainedControlOperations());
+        queue.forEach(Runnable::run);
+        assertEquals(0, ticks[0]);
+        AgentRuntimeException closed = assertThrows(AgentRuntimeException.class,
+                () -> runtime.controls().control(true, "pause-2",
+                        Duration.ofSeconds(1)));
+        assertEquals(RuntimeErrorCode.RUNTIME_CLOSED, closed.code());
+        AgentRuntimeException advanced = assertThrows(AgentRuntimeException.class,
+                () -> runtime.controls().advance(
+                        "advance-2", 1, 1, Duration.ofSeconds(1)));
+        assertEquals(RuntimeErrorCode.RUNTIME_CLOSED, advanced.code());
+    }
+
     @Test
     void pausesAdvancesExactTicksAndStopsBoundedConditionWaitWithoutSleeping() {
         ArrayDeque<Runnable> queue = new ArrayDeque<>();

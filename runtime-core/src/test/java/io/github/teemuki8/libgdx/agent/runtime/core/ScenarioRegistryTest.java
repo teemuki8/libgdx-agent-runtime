@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.util.ArrayDeque;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
@@ -39,6 +40,34 @@ final class ScenarioRegistryTest {
                 runtime.latestFrame().orElseThrow().baselineKind().orElseThrow());
         assertEquals("Known combat state",
                 runtime.scenarios().list().getFirst().description().orElseThrow());
+    }
+
+    @Test
+    void closeReleasesHandlersAndPendingRequestsButRetainsTheCatalog() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        AtomicInteger resets = new AtomicInteger();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("scenario-close"))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .build();
+        runtime.scenarios().register("basic-combat", "Known combat state", resets::incrementAndGet);
+        runtime.start();
+        runtime.scenarios().reset("basic-combat", "reset-1", Duration.ofSeconds(1));
+        assertEquals(1, runtime.scenarios().retainedPendingResets());
+
+        runtime.close();
+
+        assertEquals(List.of("basic-combat"), runtime.scenarios().list().stream()
+                .map(ScenarioDescriptor::id).toList());
+        assertEquals(0, runtime.scenarios().retainedResetCallbacks());
+        assertEquals(0, runtime.scenarios().retainedPendingResets());
+        queue.forEach(Runnable::run);
+        assertEquals(0, resets.get());
+        AgentRuntimeException closed = assertThrows(AgentRuntimeException.class,
+                () -> runtime.scenarios().reset("basic-combat", "reset-2",
+                        Duration.ofSeconds(1)));
+        assertEquals(RuntimeErrorCode.RUNTIME_CLOSED, closed.code());
     }
 
     @Test

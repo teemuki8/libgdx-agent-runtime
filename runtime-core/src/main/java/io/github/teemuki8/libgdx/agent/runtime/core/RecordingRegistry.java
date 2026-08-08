@@ -154,8 +154,14 @@ public final class RecordingRegistry {
         operations.clear();
     }
 
+    /** Package-private close observation: number of retained pending recording operations. */
+    synchronized int retainedOperations() {
+        return operations.size();
+    }
+
     private RecordingOperation submit(RecordingOperation.Kind kind, String recordingId,
             String requestId, Duration timeout, Optional<RecordingSpec> spec, Runnable callback) {
+        runtime.requireSubmissionsOpen();
         requireString(requestId, "recording request id");
         CommandDispatch dispatch = runtime.commands().orElseThrow(() ->
                 new IllegalStateException("recordings require application command dispatch"));

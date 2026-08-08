@@ -355,6 +355,32 @@ final class RecordingRegistryTest {
         return runtime;
     }
 
+    @Test
+    void closeStopsActiveRecordingReleasesPendingOperationsAndRejectsNewStarts() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("recording-close-operations"))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .recordingLimits(RecordingLimits.developmentDefaults())
+                .build();
+        runtime.start();
+        runtime.recordings().start(spec("closed-ops"), "start-close-ops",
+                Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        assertEquals(1, runtime.recordings().retainedOperations());
+
+        runtime.close();
+
+        assertEquals(RecordingStopReason.RUNTIME_CLOSED,
+                runtime.recordings().get("closed-ops", 0, 4).metadata().stopReason());
+        assertEquals(0, runtime.recordings().retainedOperations());
+        AgentRuntimeException closed = assertThrows(AgentRuntimeException.class,
+                () -> runtime.recordings().start(spec("after-close"), "start-after-close",
+                        Duration.ofSeconds(1)));
+        assertEquals(RuntimeErrorCode.RUNTIME_CLOSED, closed.code());
+    }
+
     private static RecordingSpec spec(String id) {
         return new RecordingSpec(id, "1.12", List.of(), Optional.empty(), Optional.empty(),
                 OptionalLong.empty(), RuntimeValues.object(), false);

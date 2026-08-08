@@ -158,6 +158,17 @@ public final class CommandDispatch {
                 });
     }
 
+    /** Package-private close observation: number of retained entries still holding closures. */
+    synchronized int retainedLiveCommands() {
+        return (int) retained.values().stream()
+                .filter(entry -> entry.command != null).count();
+    }
+
+    /** Package-private close observation: number of commands still awaiting dispatch. */
+    synchronized int retainedPendingDispatches() {
+        return pendingDispatch.size();
+    }
+
     private void execute(Entry entry) {
         Runnable command;
         synchronized (this) {

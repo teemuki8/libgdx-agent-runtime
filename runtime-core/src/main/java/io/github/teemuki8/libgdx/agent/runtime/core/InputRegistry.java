@@ -10,13 +10,15 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.TreeMap;
+import java.util.function.Consumer;
 
 /** Explicit bounded registry and deterministic controlled-tick scheduler for input facts. */
 public final class InputRegistry {
     private final Object submissionLock = new Object();
     private final AgentRuntime runtime;
     private final InputLimits limits;
-    private final LinkedHashMap<String, InputSpec> inputs = new LinkedHashMap<>();
+    private final LinkedHashMap<String, InputDescriptor> inputs = new LinkedHashMap<>();
+    private final LinkedHashMap<String, Consumer<InputParameters>> handlers = new LinkedHashMap<>();
     private final LinkedHashMap<String, Evidence> requests = new LinkedHashMap<>();
     private final TreeMap<Long, ArrayDeque<Evidence>> scheduled = new TreeMap<>();
     private final Map<Long, List<Evidence>> executedByTick = new LinkedHashMap<>();
@@ -39,17 +41,40 @@ public final class InputRegistry {
             throw new AgentRuntimeException(
                     RuntimeErrorCode.LIMIT_EXCEEDED, "input registration limit reached");
         }
-        inputs.put(spec.descriptor().id(), spec);
+        inputs.put(spec.descriptor().id(), spec.descriptor());
+        handlers.put(spec.descriptor().id(), spec.handler());
     }
 
     /** Returns registered input descriptors in stable registration order. */
     public synchronized List<InputDescriptor> list() {
-        return inputs.values().stream().map(InputSpec::descriptor).toList();
+        return List.copyOf(inputs.values());
     }
 
     /** Returns configured hard input bounds. */
     public InputLimits limits() {
         return limits;
+    }
+
+    /** Package-private close observation: number of retained application input handlers. */
+    synchronized int retainedInputHandlers() {
+        return handlers.size();
+    }
+
+    /** Package-private close observation: number of retained queued/scheduled injections. */
+    synchronized int retainedPendingInjections() {
+        return outstanding;
+    }
+
+    /**
+     * Releases application input handlers and queued/scheduled injection state while keeping the
+     * immutable input catalog.
+     */
+    synchronized void close() {
+        handlers.clear();
+        requests.clear();
+        scheduled.clear();
+        executedByTick.clear();
+        outstanding = 0;
     }
 
     /**
@@ -59,6 +84,7 @@ public final class InputRegistry {
     public InputInjection inject(String inputId, String requestId,
             RuntimeValue.ObjectValue parameters, OptionalLong requestedTargetTick,
             Duration timeout) {
+        runtime.requireSubmissionsOpen();
         synchronized (submissionLock) {
             return injectOrdered(
                     inputId, requestId, parameters, requestedTargetTick, timeout);
@@ -74,15 +100,17 @@ public final class InputRegistry {
         CommandDispatch dispatch = runtime.commands().orElseThrow(() ->
                 new IllegalStateException("input injection requires application command dispatch"));
         requireValidTimeout(timeout, dispatch.limits().maximumTimeoutNanos());
-        InputSpec spec;
+        InputDescriptor descriptor;
+        Consumer<InputParameters> handler;
         Evidence evidence;
         boolean existing;
         synchronized (this) {
-            spec = inputs.get(inputId);
-            if (spec == null) {
+            descriptor = inputs.get(inputId);
+            if (descriptor == null) {
                 throw new IllegalArgumentException("unknown input id");
             }
-            validate(spec.descriptor(), parameters);
+            handler = handlers.get(inputId);
+            validate(descriptor, parameters);
             evidence = requests.get(requestId);
             existing = evidence != null;
             if (evidence != null && (!evidence.inputId.equals(inputId)
@@ -108,7 +136,7 @@ public final class InputRegistry {
                 evidence = new Evidence(inputId, requestId, parameters, requestedTargetTick,
                         targetTick, runtime.currentEpoch(),
                         runtime.latestFrame().map(FrameSnapshot::frameId),
-                        spec.descriptor().redactionPolicy()
+                        descriptor.redactionPolicy()
                                 == InputRedactionPolicy.OMIT_PARAMETERS);
                 requests.put(requestId, evidence);
                 outstanding++;
@@ -118,7 +146,7 @@ public final class InputRegistry {
             return snapshot(evidence, dispatch.status(requestId));
         }
         Evidence retained = evidence;
-        retained.spec = spec;
+        retained.handler = handler;
         CommandLookup lookup = dispatch.submit(requestId, timeout, () -> {
             try {
                 schedule(retained);
@@ -151,7 +179,7 @@ public final class InputRegistry {
             evidence.recordedParameters = evidence.parametersRedacted
                     ? Optional.empty() : Optional.of(evidence.parameters);
             try {
-                evidence.spec.handler().accept(new InputParameters(evidence.parameters));
+                evidence.handler.accept(new InputParameters(evidence.parameters));
                 evidence.state = InputInjectionState.EXECUTED;
             } catch (RuntimeException failure) {
                 evidence.state = InputInjectionState.FAILED;
@@ -367,7 +395,7 @@ public final class InputRegistry {
         private final ExecutionEpochId executionEpochId;
         private final Optional<FrameId> submittedFrameId;
         private final boolean parametersRedacted;
-        private InputSpec spec;
+        private Consumer<InputParameters> handler;
         private InputInjectionState state = InputInjectionState.QUEUED;
         private OptionalLong actualTick = OptionalLong.empty();
         private Optional<FrameId> resultingFrameId = Optional.empty();

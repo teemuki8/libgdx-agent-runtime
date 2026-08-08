@@ -480,9 +480,11 @@ public final class AgentRuntime implements AutoCloseable {
     }
 
     /**
-     * Closes capture and releases all live provider references.
+     * Closes capture and releases every live provider and pending executable state.
      *
-     * <p>Completed immutable history remains queryable.
+     * <p>Every registry close hook runs even when an earlier hook fails; the first failure is
+     * rethrown after the runtime publishes {@code CLOSED} and suppresses later failures.
+     * Completed immutable history, catalogs, and terminal evidence remain queryable.
      */
     @Override
     public void close() {
@@ -493,28 +495,47 @@ public final class AgentRuntime implements AutoCloseable {
         if (activeFrame != null) {
             throw lifecycle("runtime cannot close while a frame is open");
         }
-        recordings.close();
-        determinism.close();
-        commands.ifPresent(CommandDispatch::close);
-        Throwable checkpointFailure = null;
-        try {
-            checkpoints.close();
-        } catch (RuntimeException | Error failure) {
-            checkpointFailure = failure;
-        }
+        Throwable firstFailure = closeHooks();
         staticEntities.clear();
-        uiCorrelations.close();
         sources.clear();
         pendingCauses.clear();
         pendingEvents.clear();
         pendingDecisions.clear();
         openDecision = null;
         status = RuntimeStatus.CLOSED;
-        if (checkpointFailure instanceof RuntimeException failure) {
-            throw failure;
+        rethrow(firstFailure);
+    }
+
+    private Throwable closeHooks() {
+        Throwable firstFailure = null;
+        firstFailure = attempt(firstFailure, recordings::close);
+        firstFailure = attempt(firstFailure, determinism::close);
+        firstFailure = attempt(firstFailure,
+                () -> commands.ifPresent(CommandDispatch::close));
+        firstFailure = attempt(firstFailure, checkpoints::close);
+        firstFailure = attempt(firstFailure, uiCorrelations::close);
+        firstFailure = attempt(firstFailure, scenarios::close);
+        firstFailure = attempt(firstFailure, actions::close);
+        firstFailure = attempt(firstFailure, controls::close);
+        firstFailure = attempt(firstFailure, inputs::close);
+        return firstFailure;
+    }
+
+    private static Throwable attempt(Throwable firstFailure, Runnable hook) {
+        try {
+            hook.run();
+            return firstFailure;
+        } catch (RuntimeException | Error failure) {
+            return firstFailure == null ? failure : firstFailure;
         }
-        if (checkpointFailure instanceof Error failure) {
-            throw failure;
+    }
+
+    private static void rethrow(Throwable failure) {
+        if (failure instanceof RuntimeException runtimeFailure) {
+            throw runtimeFailure;
+        }
+        if (failure instanceof Error error) {
+            throw error;
         }
     }
 
@@ -887,6 +908,13 @@ public final class AgentRuntime implements AutoCloseable {
 
     void requireRecordingMutation() {
         requireMutableRegistration();
+    }
+
+    /** Rejects new submissions once the runtime has closed. */
+    void requireSubmissionsOpen() {
+        if (status == RuntimeStatus.CLOSED) {
+            throw new AgentRuntimeException(RuntimeErrorCode.RUNTIME_CLOSED, "runtime is closed");
+        }
     }
 
     long monotonicTimeNanos() {

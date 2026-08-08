@@ -25,13 +25,15 @@ All notable changes follow Keep a Changelog structure.
 ### Fixed
 
 - Determinism evidence limits are now enforced before retention instead of after allocation:
-  each frame's selected entities and facts are counted with bounded iteration and its exact
-  canonical type-tagged encoded byte size is computed without `toString()` or temporary byte
-  arrays, so a frame that would exceed `maximumEntitiesPerFrame`, `maximumFactsPerFrame`, or the
-  cumulative `maximumEncodedEvidenceBytes` is never copied or retained. Capture stops immediately
-  with a specific `INCONCLUSIVE` reason and no later tick or scenario reset runs; observed entity
-  and fact counters saturate at their own configured limits and reported encoded bytes stay at or
-  below the configured maximum (#43).
+  each frame's selected entities and facts are counted incrementally with bounded iteration and
+  admission stops at the first item whose cumulative observed total would exceed
+  `maximumEntitiesPerFrame` or `maximumFactsPerFrame` (the over-limit item is not sized and no
+  later entity, property, event, decision, or UI correlation is visited; observed counters
+  saturate at those maxima). A frame is retained only when its exact canonical type-tagged
+  encoded byte size plus the retained total stays within `maximumEncodedEvidenceBytes`,
+  computed without `toString()` or temporary byte arrays. Capture stops immediately with a
+  specific `INCONCLUSIVE` reason, no later tick or scenario reset runs, and reported encoded
+  bytes never exceed the configured maximum (#43).
 - Open-frame events, decisions, and explicit change causes are now bounded at insertion:
   `emit` retains at most `retainedEvents`, `beginDecision` at most `decisionsPerFrame`, and the
   new `FrameStagingLimits.causesPerFrame` caps `causeNextChange` map entries. Excess facts only

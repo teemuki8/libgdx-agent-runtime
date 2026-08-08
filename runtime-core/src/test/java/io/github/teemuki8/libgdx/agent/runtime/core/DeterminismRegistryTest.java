@@ -260,7 +260,66 @@ final class DeterminismRegistryTest {
         assertTrue(result.message().contains("limit"));
         assertEquals(0, result.bounds().completedRepeats());
         assertEquals(1, result.bounds().observedEntities());
-        assertEquals(2, result.bounds().observedFacts());
+        assertEquals(1, result.bounds().observedFacts());
+        assertEquals(0, result.bounds().encodedEvidenceBytes());
+        assertEquals(1, resets[0]);
+        assertEquals(0, ticks[0]);
+    }
+
+    @Test
+    void entityOverrunStopsBeforeVisitingLaterEntitiesOrTicking() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        long[] value = {0};
+        int[] resets = {0};
+        int[] ticks = {0};
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("determinism-entity-overrun"))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .determinismLimits(new DeterminismLimits(
+                        1, 2, 2, 1, 100, 1_024, Duration.ofSeconds(1).toNanos()))
+                .build();
+        runtime.entities().register(EntityId.of("counter"), EntityType.of("state"),
+                () -> "Counter", inspector -> inspector.property("value", () -> value[0]));
+        runtime.entities().register(EntityId.of("overrun"), EntityType.of("state"),
+                () -> "Overrun", inspector -> inspector.property("points", () -> 100L));
+        runtime.entities().register(EntityId.of("sibling"), EntityType.of("state"),
+                () -> "Sibling",
+                inspector -> inspector.property("probe", () -> 1_000L));
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {}).resume(() -> {})
+                .tick(delta -> {
+                    ticks[0]++;
+                    throw new IllegalStateException("tick after entity overrun");
+                })
+                .build());
+        runtime.scenarios().register("seeded", context -> {
+            resets[0]++;
+            if (resets[0] > 1) {
+                throw new IllegalStateException("reset after entity overrun");
+            }
+            value[0] = context.randomSeed().orElseThrow();
+        });
+        runtime.start();
+        DeterminismSpec spec = new DeterminismSpec(
+                "seeded", 1, RuntimeValues.object(), 2, 2, 1,
+                new DeterminismProfile(new SnapshotComparisonScope(
+                        List.of(EntityId.of("counter"), EntityId.of("overrun"),
+                                EntityId.of("sibling")),
+                        List.of("value", "points", "probe"), List.of(), false, false), false));
+
+        runtime.determinism().check(spec, "entity-overrun", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        DeterminismResult result = runtime.determinism().check(
+                spec, "entity-overrun", Duration.ofSeconds(1)).result().orElseThrow();
+
+        assertEquals(DeterminismStatus.INCONCLUSIVE, result.status());
+        assertTrue(result.message().contains("entity"));
+        assertTrue(result.message().contains("limit"));
+        assertFalse(result.message().contains("determinism.execute"));
+        assertEquals(0, result.bounds().completedRepeats());
+        assertEquals(1, result.bounds().observedEntities());
+        assertEquals(1, result.bounds().observedFacts());
         assertEquals(0, result.bounds().encodedEvidenceBytes());
         assertEquals(1, resets[0]);
         assertEquals(0, ticks[0]);
@@ -310,6 +369,68 @@ final class DeterminismRegistryTest {
         assertEquals(DeterminismStatus.INCONCLUSIVE, result.status());
         assertTrue(result.message().contains("fact"));
         assertTrue(result.message().contains("limit"));
+        assertEquals(0, result.bounds().completedRepeats());
+        assertEquals(1, result.bounds().observedEntities());
+        assertEquals(1, result.bounds().observedFacts());
+        assertEquals(0, result.bounds().encodedEvidenceBytes());
+        assertEquals(1, resets[0]);
+        assertEquals(0, ticks[0]);
+    }
+
+    @Test
+    void factOverrunStopsBeforeVisitingLaterFactsOrTicking() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        long[] value = {0};
+        int[] resets = {0};
+        int[] ticks = {0};
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("determinism-fact-overrun"))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .determinismLimits(new DeterminismLimits(
+                        1, 2, 2, 10, 1, 1_024, Duration.ofSeconds(1).toNanos()))
+                .build();
+        runtime.entities().register(EntityId.of("counter"), EntityType.of("state"),
+                () -> "Counter", inspector -> {
+                    inspector.property("value", () -> value[0]);
+                    inspector.property("over", () -> 2L);
+                    inspector.property("later1", () -> 3L);
+                    inspector.property("later2", () -> 4L);
+                });
+        runtime.entities().register(EntityId.of("sibling"), EntityType.of("state"),
+                () -> "Sibling",
+                inspector -> inspector.property("probe", () -> 5L));
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {}).resume(() -> {})
+                .tick(delta -> {
+                    ticks[0]++;
+                    throw new IllegalStateException("tick after fact overrun");
+                })
+                .build());
+        runtime.scenarios().register("seeded", context -> {
+            resets[0]++;
+            if (resets[0] > 1) {
+                throw new IllegalStateException("reset after fact overrun");
+            }
+            value[0] = context.randomSeed().orElseThrow();
+        });
+        runtime.start();
+        DeterminismSpec spec = new DeterminismSpec(
+                "seeded", 1, RuntimeValues.object(), 2, 2, 1,
+                new DeterminismProfile(new SnapshotComparisonScope(
+                        List.of(EntityId.of("counter"), EntityId.of("sibling")),
+                        List.of("value", "over", "later1", "later2", "probe"),
+                        List.of(), false, false), false));
+
+        runtime.determinism().check(spec, "fact-overrun", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        DeterminismResult result = runtime.determinism().check(
+                spec, "fact-overrun", Duration.ofSeconds(1)).result().orElseThrow();
+
+        assertEquals(DeterminismStatus.INCONCLUSIVE, result.status());
+        assertTrue(result.message().contains("fact"));
+        assertTrue(result.message().contains("limit"));
+        assertFalse(result.message().contains("determinism.execute"));
         assertEquals(0, result.bounds().completedRepeats());
         assertEquals(1, result.bounds().observedEntities());
         assertEquals(1, result.bounds().observedFacts());

@@ -147,6 +147,8 @@ public final class DeterminismRegistry {
     private Optional<FrameEvidence> capture(
             FrameSnapshot frame, DeterminismProfile profile, Counters counters) {
         SnapshotComparisonScope scope = profile.comparisonScope();
+        int entityLimit = limits.maximumEntitiesPerFrame();
+        int factLimit = limits.maximumFactsPerFrame();
         int selectedEntities = 0;
         long selectedFacts = 0;
         long entitiesBytes = 0;
@@ -155,6 +157,10 @@ public final class DeterminismRegistry {
                 continue;
             }
             selectedEntities++;
+            if (counters.observedEntities + selectedEntities > entityLimit) {
+                return countOverrun(counters, selectedEntities, selectedFacts,
+                        "determinism entity count limit exceeded");
+            }
             entitiesBytes = DeterminismCanonicalSize.add(entitiesBytes,
                     DeterminismCanonicalSize.entity(
                             entity.id(), entity.type(), entity.displayName()));
@@ -164,6 +170,10 @@ public final class DeterminismRegistry {
                         || scope.properties().contains(property.name()))
                         && !scope.excludedProperties().contains(property.name())) {
                     selectedFacts++;
+                    if (counters.observedFacts + selectedFacts > factLimit) {
+                        return countOverrun(counters, selectedEntities, selectedFacts,
+                                "determinism fact count limit exceeded");
+                    }
                     propertyBytes = DeterminismCanonicalSize.add(propertyBytes,
                             DeterminismCanonicalSize.field(property));
                 }
@@ -177,38 +187,42 @@ public final class DeterminismRegistry {
         long eventsBytes = 0;
         if (scope.includeEvents()) {
             for (RuntimeEvent event : frame.events()) {
+                selectedFacts++;
+                if (counters.observedFacts + selectedFacts > factLimit) {
+                    return countOverrun(counters, selectedEntities, selectedFacts,
+                            "determinism fact count limit exceeded");
+                }
                 eventsBytes = DeterminismCanonicalSize.add(eventsBytes,
                         DeterminismCanonicalSize.event(event));
-                selectedFacts++;
             }
         }
         long decisionsBytes = 0;
         if (scope.includeDecisions()) {
             for (DecisionTrace decision : frame.decisions()) {
+                selectedFacts++;
+                if (counters.observedFacts + selectedFacts > factLimit) {
+                    return countOverrun(counters, selectedEntities, selectedFacts,
+                            "determinism fact count limit exceeded");
+                }
                 decisionsBytes = DeterminismCanonicalSize.add(decisionsBytes,
                         DeterminismCanonicalSize.decision(decision));
-                selectedFacts++;
             }
         }
         long uiBytes = 0;
         if (profile.includeUiCorrelations()) {
             for (UiFrameCorrelation correlation : runtime.uiCorrelations().correlationsFor(
                     frame.executionEpochId(), frame.frameId())) {
+                selectedFacts++;
+                if (counters.observedFacts + selectedFacts > factLimit) {
+                    return countOverrun(counters, selectedEntities, selectedFacts,
+                            "determinism fact count limit exceeded");
+                }
                 uiBytes = DeterminismCanonicalSize.add(uiBytes,
                         DeterminismCanonicalSize.ui(correlation));
-                selectedFacts++;
             }
         }
-        counters.observeEntities(selectedEntities, limits.maximumEntitiesPerFrame());
-        counters.observeFacts(selectedFacts, limits.maximumFactsPerFrame());
-        if (selectedEntities > limits.maximumEntitiesPerFrame()
-                || selectedFacts > limits.maximumFactsPerFrame()) {
-            counters.incompleteReason = Optional.of(
-                    selectedEntities > limits.maximumEntitiesPerFrame()
-                            ? "determinism entity count limit exceeded"
-                            : "determinism fact count limit exceeded");
-            return Optional.empty();
-        }
+        counters.observeEntities(selectedEntities, entityLimit);
+        counters.observeFacts(selectedFacts, factLimit);
         long candidateBytes = DeterminismCanonicalSize.frame(frame.frameId(),
                 entitiesBytes, eventsBytes, decisionsBytes, uiBytes);
         long observedBytes = DeterminismCanonicalSize.add(counters.encodedBytes, candidateBytes);
@@ -526,6 +540,14 @@ public final class DeterminismRegistry {
             return limit;
         }
         return current + delta;
+    }
+
+    private Optional<FrameEvidence> countOverrun(Counters counters,
+            int selectedEntities, long selectedFacts, String reason) {
+        counters.observeEntities(selectedEntities, limits.maximumEntitiesPerFrame());
+        counters.observeFacts(selectedFacts, limits.maximumFactsPerFrame());
+        counters.incompleteReason = Optional.of(reason);
+        return Optional.empty();
     }
 
     private record RunEvidence(ExecutionEpochId epoch, List<FrameEvidence> frames) {}

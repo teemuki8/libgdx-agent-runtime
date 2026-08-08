@@ -585,13 +585,19 @@ final class FixtureProtocolAndMcpTest {
                             "commandRequestId", "fixture-failure")))
                     .block(Duration.ofSeconds(5));
             assertFalse(failed.isError());
-            assertTrue(failed.structuredContent().toString().contains("FAILED"));
-            assertTrue(failed.structuredContent().toString().contains(
-                    "deterministic-fixture|failure-1|command.failed"
-                            + "|java.lang.IllegalStateException"),
-                    () -> failed.structuredContent().toString());
-            assertFalse(failed.structuredContent().toString().contains(
-                    "fixture callback rejected"));
+            Map<?, ?> failedContent = assertInstanceOf(Map.class, failed.structuredContent());
+            Map<?, ?> failedCommand = assertInstanceOf(Map.class, failedContent.get("command"));
+            Map<?, ?> failedStatus = assertInstanceOf(Map.class, failedCommand.get("status"));
+            assertEquals(CommandState.FAILED.name(), failedStatus.get("state"));
+            assertEquals("deterministic-fixture|failure-1|command.failed"
+                    + "|java.lang.IllegalStateException", failedStatus.get("diagnostic"));
+            String failedJson;
+            try {
+                failedJson = ProtocolJson.mapper().writeValueAsString(failed.structuredContent());
+            } catch (com.fasterxml.jackson.core.JsonProcessingException serializationFailure) {
+                throw new AssertionError("structured content must serialize", serializationFailure);
+            }
+            assertFalse(failedJson.contains("fixture callback rejected"), failedJson);
 
             runtime.commands().orElseThrow().submit("fixture-timeout", 0, () -> {});
             McpSchema.CallToolResult timedOut = handler.handle(call(

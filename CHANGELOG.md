@@ -14,6 +14,13 @@ All notable changes follow Keep a Changelog structure.
 
 ### Security
 
+- Stdio JSON-RPC frames are now bounded before parsing: a fixed `ProtocolJson.MAX_REQUEST_BYTES + 1`
+  byte framer replaces `BufferedReader.readLine`, strict-UTF-8 decoding (`CodingErrorAction.REPORT`)
+  rejects malformed input instead of silently replacing it, and the MCP mapper enforces the protocol
+  codec's depth 32 / string 16,384 / number 128 stream constraints on stdio. Oversized and malformed
+  frames are drained through their newline, answered with one bounded null-id parse error, and do not
+  terminate later valid requests; only an unterminated frame at EOF ends the reader exceptionally
+  without parsing (#44).
 - Application callback failures expose structured `ApplicationFailureEvidence` (stable category,
   exception class, session-prefixed correlation identifier such as
   `sessionId|failure-N`, optional sanitized detail) instead of raw exception messages or stack

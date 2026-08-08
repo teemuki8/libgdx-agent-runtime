@@ -66,6 +66,23 @@ runtime.causeNextChange(
 Close a registration handle outside a frame on the capture thread. The next frame records
 `ENTITY_REMOVED`; historical versions remain until frame eviction.
 
+Removed entities stay queryable while any retained frame holds their immutable snapshot:
+
+```java
+EntityHistoryPage page = runtime.entityHistory(
+        EntityId.of("enemy-1"), FrameRange.of(1, 60), 0, 25);
+// page.current() is empty once removed; page.finalRetainedState() is the bounded final
+// pre-removal snapshot; versions page independently via nextVersionOffset/hasMoreVersions.
+```
+
+`current` reports newest-frame presence only, `finalRetainedState` is sourced from retained frame
+snapshots (never synthesized from the removal change), and version pagination is independent from
+change pagination. After the entity's last retained frame is evicted, the query throws
+`ENTITY_HISTORY_NOT_RETAINED` instead of inventing state. The existing two-argument
+`entityHistory(EntityId, FrameRange)` and the `runtime_entity` protocol/MCP tool keep their frozen
+V1 behavior; the protocol-2.0 `runtime_entity_history` command and MCP tool expose the paginated
+page.
+
 Provider failures do not escape the render loop. The frame retains provider name, optional entity
 and property, and structured failure evidence: a stable category, the exception class, a
 deterministic session-prefixed correlation identifier, and optional sanitized detail. Raw

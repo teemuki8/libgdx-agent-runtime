@@ -38,7 +38,8 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
     @JsonSubTypes.Type(value = RuntimeCommand.RecordingStart.class, name = "recordingStart"),
     @JsonSubTypes.Type(value = RuntimeCommand.RecordingStop.class, name = "recordingStop"),
     @JsonSubTypes.Type(value = RuntimeCommand.RecordingGet.class, name = "recordingGet"),
-    @JsonSubTypes.Type(value = RuntimeCommand.DeterminismCheck.class, name = "determinismCheck")
+    @JsonSubTypes.Type(value = RuntimeCommand.DeterminismCheck.class, name = "determinismCheck"),
+    @JsonSubTypes.Type(value = RuntimeCommand.EntityHistory.class, name = "entityHistory")
 })
 public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeCommand.Capabilities,
         RuntimeCommand.Frames, RuntimeCommand.Snapshot, RuntimeCommand.Entity,
@@ -52,7 +53,8 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
         RuntimeCommand.CheckpointCreate, RuntimeCommand.CheckpointRestore,
         RuntimeCommand.UiBindings, RuntimeCommand.UiFrames,
         RuntimeCommand.RecordingStart, RuntimeCommand.RecordingStop,
-        RuntimeCommand.RecordingGet, RuntimeCommand.DeterminismCheck {
+        RuntimeCommand.RecordingGet, RuntimeCommand.DeterminismCheck,
+        RuntimeCommand.EntityHistory {
     /** Lists published sessions. */
     record Sessions() implements RuntimeCommand {}
 
@@ -99,6 +101,20 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
             ProtocolJson.requireIdentifier(entityId, "entityId");
             validateRange(fromFrame, toFrame);
             validateLimit(limit);
+        }
+    }
+
+    /** Reads paginated retained history for one exact entity ID, including removed entities. */
+    record EntityHistory(String entityId, long fromFrame, long toFrame,
+            long versionOffset, int versionLimit) implements RuntimeCommand {
+        /** Validates fields. */
+        public EntityHistory {
+            ProtocolJson.requireIdentifier(entityId, "entityId");
+            validateRange(fromFrame, toFrame);
+            if (versionOffset < 0) {
+                throw new IllegalArgumentException("versionOffset must be non-negative");
+            }
+            validateLimit(versionLimit);
         }
     }
 

@@ -35,6 +35,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.stream.IntStream;
+import java.util.stream.Stream;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import org.junit.jupiter.api.Test;
@@ -103,10 +104,15 @@ final class RuntimeProtocolTest {
         RuntimeProtocolService service = new RuntimeProtocolService(new RuntimeRegistry());
         RuntimeResponse.Failure version = assertInstanceOf(RuntimeResponse.Failure.class,
                 service.execute(new RuntimeRequest(
-                        new ProtocolVersion(2, 0), "v", null, new RuntimeCommand.Sessions())));
+                        new ProtocolVersion(2, 1), "v", null, new RuntimeCommand.Sessions())));
         assertEquals(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED, version.error().code());
-        assertEquals("1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10,1.11,1.12,1.13",
+        assertEquals("1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10,1.11,1.12,1.13,2.0",
                 version.error().details().get("supported"));
+
+        RuntimeResponse.Failure future = assertInstanceOf(RuntimeResponse.Failure.class,
+                service.execute(new RuntimeRequest(
+                        new ProtocolVersion(3, 0), "f", null, new RuntimeCommand.Sessions())));
+        assertEquals(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED, future.error().code());
 
         RuntimeResponse.Failure missing = assertInstanceOf(RuntimeResponse.Failure.class,
                 service.execute(new RuntimeRequest(ProtocolVersion.V1, "s", "missing",
@@ -1263,6 +1269,521 @@ final class RuntimeProtocolTest {
                     + "|java.lang.IllegalStateException",
                     status.get("diagnostic").asText());
         }
+    }
+
+    @Test
+    void protocolOneThroughThirteenFixturesRemainByteForByte() throws Exception {
+        AgentRuntime runtime = verticalRuntime();
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime)) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            RuntimeProtocolService service = new RuntimeProtocolService(registry);
+            assertFrozen(service, ProtocolVersion.V1,
+                    "4c20fab177bca505eb384bd56049624f91a0ed9bf4c28cbc84a3980fc0a907de",
+                    "78dc43e0ed20292a1ff8a9472e278262be9536ab137a9cba3ce02e1034ad7edd",
+                    "b42390475ac5fb0c091ca918dace1f146d5e2146db842e3f4117ecc64f6aeeec");
+            assertFrozen(service, ProtocolVersion.V1_1,
+                    "6babdab1b227fe68d1440e3f25fe44d1e4c1fdb9903d72c121057ab131924703",
+                    "c3b39a6d7a57bc5e1e0ab2ca5610b827631488c8e4731c2aea472d33fe8f71c6",
+                    "6057f328648a0e56ccfb555095cf024be6e939ec9f5f3e8af614d401304ee43f");
+            assertFrozen(service, ProtocolVersion.V1_2,
+                    "0eebfc403e5c140aa2b967910c0c3f3b7bc72b35639433aa94d5bbb13b69b5fd",
+                    "47817f02a1a8a1a03960774b46ff87fb8a102b393c1b3607c4c02243d7b453fd",
+                    "99d4ccac7315705e41e90ebe697fb1aa54ed1fb1a3991e68d35ea17dcf84cd0f");
+            assertFrozen(service, ProtocolVersion.V1_3,
+                    "f7fcf176b660fcb12a822505292f0c827bd277e6ff33df11b3aee0ca3fc46603",
+                    "c61d151a1d21d8e42efeaab83500ed4c642703ee400a85d0aa317464b7f0dd13",
+                    "281f7f86da67a71e393b8437353f873a187a671271946490869ee26e17dbce1b");
+            assertFrozen(service, ProtocolVersion.V1_4,
+                    "66474a4f930893fca4701039e397aa3d6793b68d18904df02092f9dd82c29919",
+                    "e43277ea45547b6764fba2f5e91b29590a563a8c8d13c0695f8d1ef44c0546c8",
+                    "70ce9d5c8817b198e0cff59d76e38bc535a1a8cf7d0bad4a64ead7705129cbe6");
+            assertFrozen(service, ProtocolVersion.V1_5,
+                    "93c6a3fe3a66ccb638202a5f429d8a36e70ee96357dea0727688c0db54a06440",
+                    "3a85836e1b12d6a8e790e26fca9cfe3ad31c0bbc014161eb0fefa51376aaa3ea",
+                    "d809c74e3635d212e043a5ed6dc8c40d49dd348728cb0be4e4cd59a04988cf3d");
+            assertFrozen(service, ProtocolVersion.V1_6,
+                    "c930b5b07fd7f2a74b137ab055e84cb64e7c13a3235a05ccacb2a5477abf8f22",
+                    "a6f99b3518a869fca405b64b06a33ff01a8b0e1924306a69f54f2c2d9451c744",
+                    "bcced65294c91780f3548df06e4721a608352fc80753d4a8bfe0db1438d79979");
+            assertFrozen(service, ProtocolVersion.V1_7,
+                    "61831e9f8d976aeb6dd5ed2b8c4ecf3e6e31c81c70786c0409338bba5d0e7209",
+                    "68859b847c34f670bebb1a3b448451747939233327eb82ab70cade5562bb970d",
+                    "be1127c104975e92938fb84102c374076afe26c09a9abfc5eb3a92a127a9f597");
+            assertFrozen(service, ProtocolVersion.V1_8,
+                    "c7978ff0c2e774f56b6fc8416a2426848af90a41bfae2443ca7c2dc8791336c8",
+                    "e12efb9f852191e6efc8c1661e5d0681a3e0cacfcb737201f3a0b48e586ea745",
+                    "fd83b6e67305d1aaecfba7c8e73b1ac27f231d76a3616398157761128e87ea36");
+            assertFrozen(service, ProtocolVersion.V1_9,
+                    "a8a66349de68f44554b6673b43af75712bf5e7dd925f0936c8e9574a9d4ad4de",
+                    "646e55ee74923745537e41452741777a25d606d94a76c21249b0519755e39f06",
+                    "992dca2d8740bbf300b46b044c96c9c0cccdd6e7080e59d2948ef9c132fcfb4d");
+            assertFrozen(service, ProtocolVersion.V1_10,
+                    "a54a20fff79248a3ae9caf669808c92295c5cb7972f1d460499f4b3efb2a2521",
+                    "4b44346d80f8a675ce6284670c8f2ad436d9689d0c6b39c51894831805a2e2a0",
+                    "2fd500545f1ad6b446c74d70841561106d3250f5bb2129cf5ccee637dec21d7d");
+            assertFrozen(service, ProtocolVersion.V1_11,
+                    "59f3c4e68025b7fa51ab7c6b4ed90588b69f99cd49f2f041d9bf463efa1d8c07",
+                    "06042a492b9382f61a2f2cdd3dfaa4d56909954a123b23a166116e949e86d730",
+                    "a44797153e274f97bb671aead84d48bca714d59c59234eee1cc87636bbc14cb3");
+            assertFrozen(service, ProtocolVersion.V1_12,
+                    "b70ccff81abcbd4edeeb29a9043de0a864b3f45173d2cf8e1f4beb8bde2c3e9e",
+                    "85ee0595e3907d330f9212f9358626cfd107ec4eb34bda3d51a568d80791be2d",
+                    "adc80b048344d18f1ea56c3229d999ccc4613b54dda61b049f56cbe06d36e405");
+            assertFrozen(service, ProtocolVersion.V1_13,
+                    "3c89a7f23a041dbed53098acc35913e3db7b2e1b30f3e64ce94660682817a9b6",
+                    "24bbe455c9652024c9890f91de508cc218792686abf15277bf41564cf1b378a4",
+                    "c30e2106920951fe77b6991ea0d50b182f7128ae3d9e7b090a8b220d0e91c48a");
+        }
+    }
+
+    private static void assertFrozen(RuntimeProtocolService service, ProtocolVersion version,
+            String capabilitiesSha, String entitySha, String errorSha) throws Exception {
+        RuntimeResponse capabilities = service.execute(new RuntimeRequest(
+                version, "cap", "fixture", new RuntimeCommand.Capabilities()));
+        assertEquals(capabilitiesSha, sha256(ProtocolJson.encode(capabilities)),
+                "capabilities bytes for " + version);
+        RuntimeResponse entity = service.execute(new RuntimeRequest(
+                version, "entity", "fixture",
+                new RuntimeCommand.Entity("enemy-1", 0, 1, 10)));
+        assertEquals(entitySha, sha256(ProtocolJson.encode(entity)),
+                "entity bytes for " + version);
+        RuntimeResponse missing = service.execute(new RuntimeRequest(
+                version, "missing", "fixture",
+                new RuntimeCommand.Entity("absent", 0, 1, 10)));
+        assertEquals(errorSha, sha256(ProtocolJson.encode(missing)),
+                "error bytes for " + version);
+    }
+
+    private static String sha256(byte[] value) throws Exception {
+        java.security.MessageDigest digest =
+                java.security.MessageDigest.getInstance("SHA-256");
+        return java.util.HexFormat.of().formatHex(digest.digest(value));
+    }
+
+    @Test
+    void protocolTwoZeroNegotiatesAndReportsTheFullCapabilityMatrix() {
+        RuntimeProtocolService service = new RuntimeProtocolService(new RuntimeRegistry());
+        RuntimeResponse.Result.Sessions sessions = assertInstanceOf(
+                RuntimeResponse.Result.Sessions.class,
+                assertInstanceOf(RuntimeResponse.Success.class, service.execute(new RuntimeRequest(
+                        ProtocolVersion.V2, "sessions", null,
+                        new RuntimeCommand.Sessions()))).result());
+        assertEquals(0, sessions.sessions().size());
+
+        AgentRuntime runtime = verticalRuntime();
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime)) {
+            service = new RuntimeProtocolService(registry);
+            RuntimeResponse.Result.Capabilities current = capabilities(
+                    service, ProtocolVersion.V2, "capabilities-v2", "fixture");
+            assertEquals(ProtocolVersion.V2, current.protocolVersion());
+            // The additive V2 tool is always available; base tools stay present.
+            assertTrue(current.supportedTools().containsAll(List.of(
+                    "runtime_entity", "runtime_frames", "runtime_entity_history")));
+            // Every V1.13 capability is reported under V2.0 regardless of registration state.
+            List<String> capabilityIds = current.capabilityReport().orElseThrow()
+                    .capabilities().stream().map(RuntimeCapability::id).toList();
+            assertTrue(capabilityIds.containsAll(List.of(
+                    "command-dispatch", "execution-epochs", "resettable-scenarios",
+                    "explicit-fact-attribution", "semantic-actions", "declarative-assertions",
+                    "simulation-control", "registered-inputs", "checkpoints",
+                    "runtime-ui-correlation", "recording", "determinism-comparison",
+                    "removed-entity-history")));
+            assertEquals(RuntimeCapability.Availability.AVAILABLE,
+                    current.capabilityReport().orElseThrow().capabilities().stream()
+                            .filter(capability -> capability.id().equals("removed-entity-history"))
+                            .findFirst().orElseThrow().availability());
+            assertEquals(RuntimeCapability.Availability.AVAILABLE,
+                    current.capabilityReport().orElseThrow().capabilities().stream()
+                            .filter(capability -> capability.id().equals("execution-epochs"))
+                            .findFirst().orElseThrow().availability());
+        }
+    }
+
+    @Test
+    void protocolTwoZeroRunsEveryV1CommandWithFrozenResultShapes() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        int[] ticks = {0};
+        int[] state = {7};
+        int[] executions = {0};
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("matrix"))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .build();
+        runtime.entities().register(EntityId.of("enemy-1"), EntityType.of("enemy"),
+                () -> "Enemy", inspector -> inspector.property("health", () -> 75L));
+        runtime.actions().register(ActionSpec.builder("player.attack")
+                .description("Attack one target").requiredEntityId("targetEntity")
+                .handler(parameters -> {
+                    executions[0]++;
+                    runtime.frame(1, () -> {});
+                }).build());
+        runtime.inputs().register(InputSpec.builder("key-down")
+                .description("Registered key input")
+                .requiredString("key")
+                .handler(parameters -> {}).build());
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {})
+                .resume(() -> {})
+                .tick(deltaNanos -> ticks[0]++)
+                .condition("three-ticks", "Three ticks completed", () -> ticks[0] >= 3)
+                .build());
+        runtime.checkpoints().register(new CheckpointProvider() {
+            @Override public CheckpointHandle create() {
+                return new TestCheckpoint(state[0]);
+            }
+            @Override public void restore(CheckpointHandle handle) {
+                state[0] = ((TestCheckpoint) handle).value();
+            }
+            @Override public void dispose(CheckpointHandle handle) {}
+        });
+        runtime.scenarios().register(new io.github.teemuki8.libgdx.agent.runtime.core
+                .ScenarioDescriptor("basic", Optional.of("Basic scenario")),
+                context -> state[0] = 1);
+        runtime.uiCorrelations().register(new io.github.teemuki8.libgdx.agent.runtime.core
+                .UiBinding("health-binding", EntityId.of("enemy-1"), Optional.of("health"),
+                        "battle-ui", "health-bar",
+                        new io.github.teemuki8.libgdx.agent.runtime.core.UiBindingValidity(
+                                Optional.empty(), Optional.empty(), Optional.empty())));
+        runtime.uiCorrelations().recordFrame(
+                new io.github.teemuki8.libgdx.agent.runtime.core.UiFrameCorrelation(
+                        runtime.currentEpoch(), new FrameId(0), "battle-ui",
+                        Optional.of("ui-frame-9"), Optional.of("render-token-9")));
+        runtime.start();
+        runtime.frame(1, () -> {});
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime)) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            RuntimeProtocolService service = new RuntimeProtocolService(registry);
+            assertV2(service, new RuntimeCommand.Frames(0, 1, 10),
+                    RuntimeResponse.Result.Frames.class);
+            assertV2(service, new RuntimeCommand.Snapshot(null, null, false, null, false, 10),
+                    RuntimeResponse.Result.Snapshot.class);
+            assertV2(service, new RuntimeCommand.Entity("enemy-1", 0, 1, 10),
+                    RuntimeResponse.Result.Entity.class);
+            assertV2(service, new RuntimeCommand.Changes(0, 1, "enemy-1", "enemy", "health", 10),
+                    RuntimeResponse.Result.Changes.class);
+            assertV2(service, new RuntimeCommand.Events(
+                            0, 1, "damage.", true, "enemy-1", "projectile-3", 10),
+                    RuntimeResponse.Result.Events.class);
+            assertV2(service, new RuntimeCommand.Decisions(
+                            0, 1, "target-selection", "tower-1", "enemy-1", "nearest", 10),
+                    RuntimeResponse.Result.Decisions.class);
+            assertV2(service, new RuntimeCommand.EpochFrames(0, 10),
+                    RuntimeResponse.Result.EpochFrames.class);
+            assertV2(service, new RuntimeCommand.Scenarios(),
+                    RuntimeResponse.Result.Scenarios.class);
+            assertV2(service, new RuntimeCommand.Reset("basic", "reset-1", 1_000),
+                    RuntimeResponse.Result.Reset.class);
+            queue.removeFirst().run();
+            assertV2(service, new RuntimeCommand.Reset("basic", "reset-1", 1_000),
+                    RuntimeResponse.Result.Reset.class);
+            assertV2(service, new RuntimeCommand.AttributedChanges(
+                            0, 1, "enemy-1", "enemy", "health", null, null, 10),
+                    RuntimeResponse.Result.Changes.class);
+            assertV2(service, new RuntimeCommand.AttributedEvents(
+                            0, 1, "damage.", true, "enemy-1", "projectile-3", null, null, 10),
+                    RuntimeResponse.Result.Events.class);
+            assertV2(service, new RuntimeCommand.AttributedDecisions(
+                            0, 1, "target-selection", "tower-1", "enemy-1", "nearest",
+                            null, null, 10),
+                    RuntimeResponse.Result.Decisions.class);
+            assertV2(service, new RuntimeCommand.Actions(), RuntimeResponse.Result.Actions.class);
+            RuntimeCommand.Action action = new RuntimeCommand.Action("player.attack", "attack-1",
+                    RuntimeValues.object(RuntimeValues.field(
+                            "targetEntity", RuntimeValues.string("enemy-1"))),
+                    "attack-172", 1_000);
+            assertV2(service, action, RuntimeResponse.Result.Action.class);
+            queue.removeFirst().run();
+            assertV2(service, action, RuntimeResponse.Result.Action.class);
+            assertV2(service, new RuntimeCommand.Assert(
+                            new RuntimeAssertion.PropertyEquals(EntityId.of("enemy-1"), "health",
+                                    RuntimeValues.integer(75)),
+                            0, 1, 0, 8),
+                    RuntimeResponse.Result.Assertion.class);
+            assertV2(service, new RuntimeCommand.Control(
+                            RuntimeCommand.ControlAction.STATUS, null, 0),
+                    RuntimeResponse.Result.Control.class);
+            RuntimeCommand.Control pause = new RuntimeCommand.Control(
+                    RuntimeCommand.ControlAction.PAUSE, "pause-1", 1_000);
+            assertV2(service, pause, RuntimeResponse.Result.Control.class);
+            queue.removeFirst().run();
+            assertV2(service, pause, RuntimeResponse.Result.Control.class);
+            RuntimeCommand.Advance advance =
+                    new RuntimeCommand.Advance("advance-1", 2, 16_666_667, 1_000);
+            assertV2(service, advance, RuntimeResponse.Result.Control.class);
+            queue.removeFirst().run();
+            RuntimeCommand.Wait wait = new RuntimeCommand.Wait(
+                    "wait-1", "three-ticks", null, 2, 16_666_667, 8, 1_000);
+            assertV2(service, wait, RuntimeResponse.Result.Control.class);
+            queue.removeFirst().run();
+            assertV2(service, wait, RuntimeResponse.Result.Control.class);
+            assertV2(service, new RuntimeCommand.Inputs(), RuntimeResponse.Result.Inputs.class);
+            RuntimeCommand.Input input = new RuntimeCommand.Input(
+                    "key-down", "key-1",
+                    RuntimeValues.object(RuntimeValues.field(
+                            "key", RuntimeValues.string("SPACE"))),
+                    null, 1_000);
+            assertV2(service, input, RuntimeResponse.Result.Input.class);
+            queue.removeFirst().run();
+            assertV2(service, new RuntimeCommand.Advance("input-tick", 1, 16_666_667, 1_000),
+                    RuntimeResponse.Result.Control.class);
+            queue.removeFirst().run();
+            assertV2(service, input, RuntimeResponse.Result.Input.class);
+            assertV2(service, new RuntimeCommand.Checkpoints(),
+                    RuntimeResponse.Result.Checkpoints.class);
+            RuntimeCommand.CheckpointCreate create = new RuntimeCommand.CheckpointCreate(
+                    "save-1", "Before change", "create-1", 1_000);
+            assertV2(service, create, RuntimeResponse.Result.Checkpoint.class);
+            queue.removeFirst().run();
+            assertV2(service, create, RuntimeResponse.Result.Checkpoint.class);
+            RuntimeCommand.CheckpointRestore restore =
+                    new RuntimeCommand.CheckpointRestore("save-1", "restore-1", 1_000);
+            assertV2(service, restore, RuntimeResponse.Result.Checkpoint.class);
+            queue.removeFirst().run();
+            assertV2(service, restore, RuntimeResponse.Result.Checkpoint.class);
+            assertV2(service, new RuntimeCommand.UiBindings(
+                            "enemy-1", "health", null, null, 0, 0, null, 8),
+                    RuntimeResponse.Result.UiBindings.class);
+            assertV2(service, new RuntimeCommand.UiFrames(null, "render-token-9", 8),
+                    RuntimeResponse.Result.UiFrames.class);
+            RuntimeCommand.RecordingStart start = new RuntimeCommand.RecordingStart(
+                    "run-1", "record-start-1", "basic", null, 42L,
+                    RuntimeValues.object(), false, 1_000_000_000);
+            assertV2(service, start, RuntimeResponse.Result.RecordingOperationResult.class);
+            queue.removeFirst().run();
+            assertV2(service, start, RuntimeResponse.Result.RecordingOperationResult.class);
+            runtime.frame(1, () -> {});
+            RuntimeCommand.RecordingStop stop = new RuntimeCommand.RecordingStop(
+                    "run-1", "record-stop-1", 1_000_000_000);
+            assertV2(service, stop, RuntimeResponse.Result.RecordingOperationResult.class);
+            queue.removeFirst().run();
+            assertV2(service, new RuntimeCommand.RecordingGet("run-1", 0, 10),
+                    RuntimeResponse.Result.RecordingChunkResult.class);
+            RuntimeCommand.DeterminismCheck determinism = new RuntimeCommand.DeterminismCheck(
+                    "determinism-1", "basic", 7, RuntimeValues.object(), 2, 2, 1,
+                    new io.github.teemuki8.libgdx.agent.runtime.core.DeterminismProfile(
+                            new io.github.teemuki8.libgdx.agent.runtime.core
+                                    .SnapshotComparisonScope(
+                                            List.of(EntityId.of("counter")), List.of("value"),
+                                            List.of(), false, false),
+                            false),
+                    1_000_000_000);
+            assertV2(service, determinism, RuntimeResponse.Result.Determinism.class);
+            queue.removeFirst().run();
+            assertV2(service, determinism, RuntimeResponse.Result.Determinism.class);
+
+            // A queued command status keeps its frozen 1.x bytes under 2.0 (no evidence).
+            RuntimeCommand.CommandStatus status = new RuntimeCommand.CommandStatus("reset-1");
+            RuntimeResponse.Success legacyStatus = assertInstanceOf(RuntimeResponse.Success.class,
+                    service.execute(new RuntimeRequest(ProtocolVersion.V1_2, "status-1",
+                            "matrix", status)));
+            RuntimeResponse.Success v2Status = assertInstanceOf(RuntimeResponse.Success.class,
+                    service.execute(new RuntimeRequest(ProtocolVersion.V2, "status-2",
+                            "matrix", status)));
+            assertArrayEquals(ProtocolJson.encode(new RuntimeResponse.Success(
+                            ProtocolVersion.V2, "status", legacyStatus.result())),
+                    ProtocolJson.encode(new RuntimeResponse.Success(
+                            ProtocolVersion.V2, "status", v2Status.result())));
+        }
+    }
+
+    private static void assertV2(RuntimeProtocolService service, RuntimeCommand command,
+            Class<? extends RuntimeResponse.Result> resultType) {
+        assertInstanceOf(resultType, v2Result(service, command));
+    }
+
+    private static RuntimeResponse.Result v2Result(
+            RuntimeProtocolService service, RuntimeCommand command) {
+        RuntimeResponse.Success success = assertInstanceOf(RuntimeResponse.Success.class,
+                service.execute(new RuntimeRequest(
+                        ProtocolVersion.V2, "v2-" + command.getClass().getSimpleName(),
+                        "matrix", command)));
+        assertEquals(ProtocolVersion.V2, success.version());
+        return success.result();
+    }
+
+    @Test
+    void protocolTwoZeroEntityHistoryPagesRemovedEntityWithTypedExpiration() {
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("removed-history"))
+                .clock(() -> 1)
+                .build();
+        boolean[] include = {true};
+        long[] health = {100};
+        runtime.entities().registerSource("enemies", () -> include[0]
+                ? Stream.of(io.github.teemuki8.libgdx.agent.runtime.core.InspectableEntity.of(
+                        EntityId.of("enemy-1"), EntityType.of("enemy"),
+                        () -> "Enemy", inspector -> inspector.property("health", () -> health[0])))
+                : Stream.empty());
+        runtime.start();
+        for (int frame = 1; frame <= 5; frame++) {
+            int value = frame;
+            runtime.frame(1, () -> health[0] = 100 - value * 5);
+        }
+        include[0] = false;
+        runtime.frame(1, () -> {});
+        runtime.frame(1, () -> {});
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime)) {
+            RuntimeProtocolService service = new RuntimeProtocolService(registry);
+            RuntimeResponse.Result.EntityHistory first = assertInstanceOf(
+                    RuntimeResponse.Result.EntityHistory.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V2, "page-1", "removed-history",
+                                    new RuntimeCommand.EntityHistory("enemy-1", 1, 7, 0, 2))))
+                            .result());
+            assertTrue(first.page().current().isEmpty());
+            assertEquals(RuntimeValues.integer(75), first.page().finalRetainedState()
+                    .orElseThrow().property("health").orElseThrow());
+            assertEquals(List.of(1L, 2L), first.page().versions().stream()
+                    .map(version -> version.frameId().value()).toList());
+            assertEquals(2, first.page().nextVersionOffset());
+            assertTrue(first.page().hasMoreVersions());
+            assertFalse(first.page().requestedRangePartiallyEvicted());
+            assertEquals(Optional.of(new FrameId(0)), first.page().oldestRetainedFrame());
+            assertEquals(Optional.of(new FrameId(7)), first.page().newestRetainedFrame());
+
+            RuntimeResponse.Result.EntityHistory second = assertInstanceOf(
+                    RuntimeResponse.Result.EntityHistory.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V2, "page-2", "removed-history",
+                                    new RuntimeCommand.EntityHistory("enemy-1", 1, 7, 2, 2))))
+                            .result());
+            assertEquals(List.of(3L, 4L), second.page().versions().stream()
+                    .map(version -> version.frameId().value()).toList());
+            assertEquals(4, second.page().nextVersionOffset());
+            assertTrue(second.page().hasMoreVersions());
+
+            RuntimeResponse.Result.EntityHistory last = assertInstanceOf(
+                    RuntimeResponse.Result.EntityHistory.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V2, "page-3", "removed-history",
+                                    new RuntimeCommand.EntityHistory("enemy-1", 1, 7, 4, 2))))
+                            .result());
+            assertEquals(List.of(5L), last.page().versions().stream()
+                    .map(version -> version.frameId().value()).toList());
+            assertEquals(5, last.page().nextVersionOffset());
+            assertFalse(last.page().hasMoreVersions());
+
+            // The V1 runtime_entity command keeps rejecting the removed entity; only the
+            // additive 2.0 command preserves removed history.
+            RuntimeResponse.Failure legacy = assertInstanceOf(RuntimeResponse.Failure.class,
+                    service.execute(new RuntimeRequest(ProtocolVersion.V1_13, "legacy-entity",
+                            "removed-history",
+                            new RuntimeCommand.Entity("enemy-1", 1, 7, 10))));
+            assertEquals(ProtocolErrorCode.ENTITY_NOT_FOUND, legacy.error().code());
+
+            // The new command is gated to protocol 2.0.
+            RuntimeResponse.Failure oldVersion = assertInstanceOf(RuntimeResponse.Failure.class,
+                    service.execute(new RuntimeRequest(ProtocolVersion.V1_13, "old-command",
+                            "removed-history",
+                            new RuntimeCommand.EntityHistory("enemy-1", 1, 7, 0, 2))));
+            assertEquals(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
+                    oldVersion.error().code());
+        }
+    }
+
+    @Test
+    void protocolTwoZeroEntityHistoryReportsNotRetainedWhenEvicted() {
+        io.github.teemuki8.libgdx.agent.runtime.core.RuntimeLimits limits =
+                new io.github.teemuki8.libgdx.agent.runtime.core.RuntimeLimits(
+                        1, 2_000, 5_000, 128, 256, 256, 64, 4_096, 256, 16, 1_000);
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("evicted-history"))
+                .clock(() -> 1)
+                .configuration(new io.github.teemuki8.libgdx.agent.runtime.core
+                        .RuntimeConfiguration(true, limits))
+                .build();
+        boolean[] include = {true};
+        runtime.entities().registerSource("enemies", () -> include[0]
+                ? Stream.of(io.github.teemuki8.libgdx.agent.runtime.core.InspectableEntity.of(
+                        EntityId.of("enemy-1"), EntityType.of("enemy"),
+                        () -> "Enemy", inspector -> inspector.property("index", () -> 1L)))
+                : Stream.empty());
+        runtime.start();
+        runtime.frame(1, () -> {});
+        runtime.frame(1, () -> {});
+        include[0] = false;
+        runtime.frame(1, () -> {});
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime)) {
+            RuntimeProtocolService service = new RuntimeProtocolService(registry);
+            RuntimeResponse.Failure failure = assertInstanceOf(RuntimeResponse.Failure.class,
+                    service.execute(new RuntimeRequest(ProtocolVersion.V2, "evicted",
+                            "evicted-history",
+                            new RuntimeCommand.EntityHistory("enemy-1", 1, 3, 0, 10))));
+            assertEquals(ProtocolErrorCode.ENTITY_HISTORY_NOT_RETAINED, failure.error().code());
+        }
+    }
+
+    @Test
+    void protocolTwoZeroCarriesStructuredFailureEvidenceOnFailingCommand() {
+        ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("evidence-command"))
+                .clock(() -> 1)
+                .commandDispatcher(applicationQueue::addLast)
+                .build();
+        runtime.start();
+        runtime.commands().orElseThrow().submit("fail-1", 100, () -> {
+            throw new IllegalStateException("token=secret-123 /home/private/save.dat");
+        });
+        applicationQueue.removeFirst().run();
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime)) {
+            RuntimeProtocolService service = new RuntimeProtocolService(registry);
+            RuntimeCommand.CommandStatus query = new RuntimeCommand.CommandStatus("fail-1");
+
+            RuntimeResponse.Result.CommandStatus legacy = assertInstanceOf(
+                    RuntimeResponse.Result.CommandStatus.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V1_2, "legacy", "evidence-command",
+                                    query))).result());
+            assertTrue(legacy.applicationFailure().isEmpty());
+            String legacyJson = new String(ProtocolJson.encode(service.execute(
+                    new RuntimeRequest(ProtocolVersion.V1_2, "legacy", "evidence-command", query))),
+                    StandardCharsets.UTF_8);
+            assertFalse(legacyJson.contains("applicationFailure"));
+            assertFalse(legacyJson.contains("sanitizedDetail"));
+            assertEquals("evidence-command|failure-1|command.failed"
+                    + "|java.lang.IllegalStateException",
+                    legacy.command().status().orElseThrow().diagnostic().orElseThrow());
+
+            RuntimeResponse.Result.CommandStatus v2 = assertInstanceOf(
+                    RuntimeResponse.Result.CommandStatus.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V2, "structured", "evidence-command",
+                                    query))).result());
+            ApplicationFailureEvidence evidence = v2.applicationFailure().orElseThrow();
+            assertEquals("command.failed", evidence.category());
+            assertEquals("java.lang.IllegalStateException", evidence.exceptionClass());
+            assertEquals("evidence-command|failure-1", evidence.correlationId());
+            String v2Json = new String(ProtocolJson.encode(service.execute(
+                    new RuntimeRequest(ProtocolVersion.V2, "structured", "evidence-command",
+                            query))), StandardCharsets.UTF_8);
+            assertTrue(v2Json.contains("\"applicationFailure\""));
+            assertFalse(v2Json.contains("token=secret-123"));
+            assertFalse(v2Json.contains("sanitizedDetail"));
+        }
+    }
+
+    @Test
+    void protocolTwoZeroRejectsUnknownEntityHistoryCommandFields() {
+        assertThrows(ProtocolJson.ProtocolJsonException.class, () ->
+                ProtocolJson.decodeRequest("""
+                        {"version":{"major":2,"minor":0},"requestId":"x","sessionId":"fixture",
+                         "command":{"type":"entityHistory","entityId":"enemy-1",
+                         "fromFrame":0,"toFrame":1,"versionOffset":0,"versionLimit":10,
+                         "unknown":true}}""".getBytes(StandardCharsets.UTF_8)));
+        assertThrows(ProtocolJson.ProtocolJsonException.class, () ->
+                ProtocolJson.decodeRequest("""
+                        {"version":{"major":2,"minor":0},"requestId":"x","sessionId":"fixture",
+                         "command":{"type":"entityHistory","entityId":"enemy-1",
+                         "fromFrame":0,"toFrame":1,"versionOffset":-1,"versionLimit":10}}"""
+                        .getBytes(StandardCharsets.UTF_8)));
     }
 
     private static AgentRuntime verticalRuntime() {

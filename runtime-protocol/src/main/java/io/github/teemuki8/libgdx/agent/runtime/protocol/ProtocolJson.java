@@ -148,6 +148,7 @@ public final class ProtocolJson {
                 .addModule(new Jdk8Module())
                 .addModule(new JavaTimeModule())
                 .build();
+        mapper.addMixIn(ApplicationFailureEvidence.class, ApplicationFailureEvidenceMixin.class);
         mapper.addMixIn(RuntimeValue.class, RuntimeValueMixin.class);
         mapper.addMixIn(RuntimeAssertion.class, RuntimeAssertionMixin.class);
         mapper.addMixIn(RecordingEntry.class, RecordingEntryMixin.class);
@@ -158,6 +159,15 @@ public final class ProtocolJson {
         mapper.addMixIn(DeterminismResult.class, DeterminismResultMixin.class);
         return mapper;
     }
+
+    /**
+     * Omits absent structured-evidence components from the protocol 2.0 wire so an empty
+     * {@code sanitizedDetail} never appears as a null field; protocol 1.x never serializes this
+     * record directly.
+     */
+    @com.fasterxml.jackson.annotation.JsonInclude(
+            com.fasterxml.jackson.annotation.JsonInclude.Include.NON_ABSENT)
+    private interface ApplicationFailureEvidenceMixin {}
 
     @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "valueType")
     @JsonSubTypes({

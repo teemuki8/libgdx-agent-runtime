@@ -14,6 +14,8 @@ public enum RuntimeErrorCode {
     FRAME_NOT_FOUND,
     /** Requested retained entity does not exist. */
     ENTITY_NOT_FOUND,
+    /** Requested entity history is not retained by the bounded runtime. */
+    ENTITY_HISTORY_NOT_RETAINED,
     /** Query fields are invalid. */
     INVALID_QUERY,
     /** A configured hard limit was exceeded by caller input. */

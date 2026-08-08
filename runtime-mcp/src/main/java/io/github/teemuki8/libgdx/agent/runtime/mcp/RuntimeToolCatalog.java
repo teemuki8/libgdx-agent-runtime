@@ -72,6 +72,17 @@ public final class RuntimeToolCatalog {
                 tool("runtime_entity",
                         "Read latest state and history; frame range defaults to all, limit to 100",
                         queryInput(Map.of("entityId", string()), List.of("entityId"))),
+                tool("runtime_entity_history",
+                        "Read paginated retained history for one entity, including removed "
+                                + "entities with retained evidence; version pagination is "
+                                + "independent from change limits",
+                        sessionInput(Map.of(
+                                "fromFrame", integer(0, Long.MAX_VALUE),
+                                "toFrame", integer(0, Long.MAX_VALUE),
+                                "entityId", string(),
+                                "versionOffset", integer(0, Long.MAX_VALUE),
+                                "versionLimit", integer(1, MAX_RESULTS)),
+                                List.of("entityId"))),
                 tool("runtime_changes",
                         "Query changes by exact entity ID, type, and property",
                         queryInput(Map.of(

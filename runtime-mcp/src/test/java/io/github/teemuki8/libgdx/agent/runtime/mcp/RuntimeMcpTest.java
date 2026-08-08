@@ -154,6 +154,131 @@ final class RuntimeMcpTest {
     }
 
     @Test
+    void entityHistoryToolUsesClosedVersionPaginationSchema() {
+        RuntimeToolCatalog serverCatalog = new RuntimeToolCatalog(
+                new RuntimeProtocolService(new RuntimeRegistry()).toolNames());
+        McpSchema.Tool history = serverCatalog.tool("runtime_entity_history");
+        assertEquals(false, history.inputSchema().get("additionalProperties"));
+        Map<?, ?> properties = (Map<?, ?>) history.inputSchema().get("properties");
+        assertTrue(properties.containsKey("entityId"));
+        assertTrue(properties.containsKey("versionOffset"));
+        assertTrue(properties.containsKey("versionLimit"));
+        assertTrue(properties.containsKey("fromFrame"));
+        assertTrue(properties.containsKey("toFrame"));
+        // The frozen V1 base catalog keeps exactly eight tools.
+        assertEquals(List.of(
+                "runtime_sessions", "runtime_capabilities", "runtime_frames", "runtime_snapshot",
+                "runtime_entity", "runtime_changes", "runtime_events", "runtime_decisions"),
+                new RuntimeToolCatalog().tools().stream().map(McpSchema.Tool::name).toList());
+    }
+
+    @Test
+    void entityHistoryToolPagesRemovedEntityAndRejectsUnknownOrInvalidArguments() {
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("mcp-removed")).build();
+        boolean[] include = {true};
+        long[] health = {100};
+        runtime.entities().registerSource("enemies", () -> include[0]
+                ? java.util.stream.Stream.of(io.github.teemuki8.libgdx.agent.runtime.core
+                        .InspectableEntity.of(EntityId.of("enemy-1"), EntityType.of("enemy"),
+                                () -> "Enemy",
+                                inspector -> inspector.property("health", () -> health[0])))
+                : java.util.stream.Stream.empty());
+        runtime.start();
+        for (int frame = 1; frame <= 5; frame++) {
+            int value = frame;
+            runtime.frame(1, () -> health[0] = 100 - value * 5);
+        }
+        include[0] = false;
+        runtime.frame(1, () -> {});
+        runtime.frame(1, () -> {});
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime);
+                RuntimeToolHandler handler =
+                        new RuntimeToolHandler(new RuntimeProtocolService(registry))) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            McpSchema.CallToolResult first = handler.handle(call(
+                    "runtime_entity_history", Map.of(
+                            "sessionId", "mcp-removed", "entityId", "enemy-1",
+                            "fromFrame", 1, "toFrame", 7, "versionOffset", 0,
+                            "versionLimit", 2))).block(Duration.ofSeconds(5));
+            assertNotNull(first);
+            assertFalse(first.isError());
+            Map<?, ?> page = assertInstanceOf(Map.class,
+                    structured(first).get("page"));
+            assertEquals(List.of(1L, 2L), ((List<?>) page.get("versions")).stream()
+                    .map(value -> ((Map<?, ?>) value).get("frameId"))
+                    .map(value -> (long) ((Map<?, ?>) value).get("value")).toList());
+            assertEquals(2L, ((Number) page.get("nextVersionOffset")).longValue());
+            assertEquals(true, page.get("hasMoreVersions"));
+            assertTrue(page.containsKey("finalRetainedState"));
+
+            McpSchema.CallToolResult second = handler.handle(call(
+                    "runtime_entity_history", Map.of(
+                            "sessionId", "mcp-removed", "entityId", "enemy-1",
+                            "fromFrame", 1, "toFrame", 7,
+                            "versionOffset", 4, "versionLimit", 2)))
+                    .block(Duration.ofSeconds(5));
+            assertFalse(second.isError());
+            Map<?, ?> secondPage = assertInstanceOf(Map.class,
+                    structured(second).get("page"));
+            assertEquals(1, ((List<?>) secondPage.get("versions")).size());
+            assertEquals(false, secondPage.get("hasMoreVersions"));
+
+            McpSchema.CallToolResult unknown = handler.handle(call(
+                    "runtime_entity_history", Map.of(
+                            "sessionId", "mcp-removed", "entityId", "enemy-1",
+                            "versionOffset", 0, "versionLimit", 2, "script", "run()")))
+                    .block(Duration.ofSeconds(5));
+            assertTrue(unknown.isError());
+            assertEquals("INVALID_QUERY", structured(unknown).get("code"));
+
+            McpSchema.CallToolResult invalid = handler.handle(call(
+                    "runtime_entity_history", Map.of(
+                            "sessionId", "mcp-removed", "entityId", "enemy-1",
+                            "versionOffset", -1, "versionLimit", 2)))
+                    .block(Duration.ofSeconds(5));
+            assertTrue(invalid.isError());
+            assertEquals("INVALID_QUERY", structured(invalid).get("code"));
+        }
+    }
+
+    @Test
+    void entityHistoryToolReportsNotRetainedAfterFullEviction() {
+        io.github.teemuki8.libgdx.agent.runtime.core.RuntimeLimits limits =
+                new io.github.teemuki8.libgdx.agent.runtime.core.RuntimeLimits(
+                        1, 2_000, 5_000, 128, 256, 256, 64, 4_096, 256, 16, 1_000);
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("mcp-evicted"))
+                .configuration(new io.github.teemuki8.libgdx.agent.runtime.core
+                        .RuntimeConfiguration(true, limits))
+                .build();
+        boolean[] include = {true};
+        runtime.entities().registerSource("enemies", () -> include[0]
+                ? java.util.stream.Stream.of(io.github.teemuki8.libgdx.agent.runtime.core
+                        .InspectableEntity.of(EntityId.of("enemy-1"), EntityType.of("enemy"),
+                                () -> "Enemy", inspector -> inspector.property("index", () -> 1L)))
+                : java.util.stream.Stream.empty());
+        runtime.start();
+        runtime.frame(1, () -> {});
+        runtime.frame(1, () -> {});
+        include[0] = false;
+        runtime.frame(1, () -> {});
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime);
+                RuntimeToolHandler handler =
+                        new RuntimeToolHandler(new RuntimeProtocolService(registry))) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            McpSchema.CallToolResult evicted = handler.handle(call(
+                    "runtime_entity_history", Map.of(
+                            "sessionId", "mcp-evicted", "entityId", "enemy-1")))
+                    .block(Duration.ofSeconds(5));
+            assertTrue(evicted.isError());
+            assertEquals("ENTITY_HISTORY_NOT_RETAINED", structured(evicted).get("code"));
+        }
+    }
+
+    @Test
     void registeredDispatchAddsClosedStatusAndCancellationTools() {
         ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
         int[] executions = {0};
@@ -171,7 +296,7 @@ final class RuntimeMcpTest {
             assertEquals(runtime.sessionId(), publication.sessionId());
             RuntimeToolCatalog catalog = new RuntimeToolCatalog(
                     new RuntimeProtocolService(registry).toolNames());
-            assertEquals(18, catalog.tools().size());
+            assertEquals(19, catalog.tools().size());
             assertEquals(false,
                     catalog.tool("runtime_command_cancel").inputSchema()
                             .get("additionalProperties"));

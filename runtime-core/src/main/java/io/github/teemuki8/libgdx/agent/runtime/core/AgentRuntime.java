@@ -525,6 +525,60 @@ public final class AgentRuntime implements AutoCloseable {
         }
     }
 
+    /**
+     * Returns one bounded paginated history page for an entity, including entities removed from
+     * the latest frame while any retained snapshot remains.
+     *
+     * <p>{@code current} reports newest-frame presence (empty once removed), {@code
+     * finalRetainedState} carries the newest retained immutable snapshot across every retained
+     * frame — the bounded final pre-removal evidence — and versions are paged by their own
+     * positional cursor independent from change pagination. When no retained frame contains the
+     * entity anywhere, {@link RuntimeErrorCode#ENTITY_HISTORY_NOT_RETAINED} is thrown.
+     */
+    public EntityHistoryPage entityHistory(
+            EntityId id, FrameRange range, long versionOffset, int versionLimit) {
+        Objects.requireNonNull(id, "id");
+        Objects.requireNonNull(range, "range");
+        if (versionOffset < 0) {
+            throw new AgentRuntimeException(RuntimeErrorCode.INVALID_QUERY,
+                    "versionOffset must be non-negative");
+        }
+        validateQueryLimit(versionLimit);
+        synchronized (historyLock) {
+            List<EntityHistory.Version> allVersions = history.stream()
+                    .filter(frame -> contains(range, frame.frameId()))
+                    .flatMap(frame -> frame.entity(id).stream()
+                            .map(entity -> new EntityHistory.Version(frame.frameId(), entity)))
+                    .toList();
+            List<EntitySnapshot> retainedStates = history.stream()
+                    .flatMap(frame -> frame.entity(id).stream())
+                    .toList();
+            if (retainedStates.isEmpty()) {
+                throw new AgentRuntimeException(RuntimeErrorCode.ENTITY_HISTORY_NOT_RETAINED,
+                        "entity history is not retained for " + id.value());
+            }
+            Optional<EntitySnapshot> finalRetainedState =
+                    Optional.of(retainedStates.getLast());
+            Optional<EntitySnapshot> current = Optional.ofNullable(history.peekLast())
+                    .flatMap(frame -> frame.entity(id));
+            boolean hasMoreVersions =
+                    versionOffset < allVersions.size() - Math.min(allVersions.size(), versionLimit);
+            List<EntityHistory.Version> versions = allVersions.stream()
+                    .skip(versionOffset)
+                    .limit(versionLimit)
+                    .toList();
+            long nextVersionOffset = saturatedAdd(versionOffset, versions.size());
+            Optional<FrameId> oldest =
+                    Optional.ofNullable(history.peekFirst()).map(FrameSnapshot::frameId);
+            Optional<FrameId> newest =
+                    Optional.ofNullable(history.peekLast()).map(FrameSnapshot::frameId);
+            boolean partiallyEvicted =
+                    oldest.map(frame -> range.from().compareTo(frame) < 0).orElse(false);
+            return new EntityHistoryPage(id, current, finalRetainedState, versions,
+                    nextVersionOffset, hasMoreVersions, partiallyEvicted, oldest, newest);
+        }
+    }
+
     /** Returns bounded chronological history for one entity. */
     public EntityHistory entityHistory(EntityId id, FrameRange range) {
         Objects.requireNonNull(id, "id");

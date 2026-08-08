@@ -123,6 +123,10 @@ public final class RuntimeToolHandler implements AutoCloseable {
                     limit);
             case "runtime_entity" -> new RuntimeCommand.Entity(
                     string(arguments, "entityId"), from, to, limit);
+            case "runtime_entity_history" -> new RuntimeCommand.EntityHistory(
+                    string(arguments, "entityId"), from, to,
+                    number(arguments, "versionOffset", 0),
+                    Math.toIntExact(number(arguments, "versionLimit", DEFAULT_LIMIT)));
             case "runtime_changes" -> new RuntimeCommand.Changes(
                     from, to, string(arguments, "entityId"),
                     string(arguments, "entityType"), string(arguments, "property"), limit);
@@ -248,6 +252,7 @@ public final class RuntimeToolHandler implements AutoCloseable {
             case "runtime_recording_start", "runtime_recording_stop",
                     "runtime_recording_get" -> ProtocolVersion.V1_12;
             case "runtime_determinism_check" -> ProtocolVersion.V1_13;
+            case "runtime_entity_history" -> ProtocolVersion.V2;
             default -> ProtocolVersion.V1;
         };
         return new RuntimeRequest(version,

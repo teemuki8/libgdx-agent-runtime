@@ -12,6 +12,7 @@ import io.github.teemuki8.libgdx.agent.runtime.core.CommandState;
 import io.github.teemuki8.libgdx.agent.runtime.core.CommandDispatchLimits;
 import io.github.teemuki8.libgdx.agent.runtime.core.BaselineKind;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
+import io.github.teemuki8.libgdx.agent.runtime.core.FrameId;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeAssertion;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import io.github.teemuki8.libgdx.agent.runtime.mcp.RuntimeToolHandler;
@@ -39,6 +40,7 @@ import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -465,6 +467,67 @@ final class FixtureProtocolAndMcpTest {
             assertNotNull(mcp);
             assertFalse(mcp.isError());
             assertTrue(mcp.structuredContent().toString().contains("PASS"));
+        }
+        fixture.runtime.close();
+    }
+
+    @Test
+    void fixtureRemovedEntityHistoryIsQueryableUnderProtocolTwo() {
+        Fixture fixture = fixture();
+        try (PublishedRuntime publication = fixture.registry.publish(fixture.runtime)) {
+            assertEquals(fixture.runtime.sessionId(), publication.sessionId());
+            RuntimeProtocolService service = new RuntimeProtocolService(fixture.registry);
+            RuntimeResponse.Result.EntityHistory page = assertInstanceOf(
+                    RuntimeResponse.Result.EntityHistory.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V2, "fixture-history",
+                                    DeterministicSimulation.SESSION_ID.value(),
+                                    new RuntimeCommand.EntityHistory(
+                                            "enemy-2", 1, 45, 0, 10)))).result());
+            assertTrue(page.page().current().isEmpty());
+            assertEquals(RuntimeValues.enumValue("DEAD"), page.page().finalRetainedState()
+                    .orElseThrow().property("state").orElseThrow());
+            assertEquals(10, page.page().versions().size());
+            assertEquals(10, page.page().nextVersionOffset());
+            assertTrue(page.page().hasMoreVersions());
+            assertFalse(page.page().requestedRangePartiallyEvicted());
+
+            RuntimeResponse.Result.EntityHistory second = assertInstanceOf(
+                    RuntimeResponse.Result.EntityHistory.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V2, "fixture-history-2",
+                                    DeterministicSimulation.SESSION_ID.value(),
+                                    new RuntimeCommand.EntityHistory(
+                                            "enemy-2", 1, 45, 10, 100)))).result());
+            assertEquals(29, second.page().versions().size());
+            assertFalse(second.page().hasMoreVersions());
+            assertEquals(39, second.page().versions().getLast().frameId().value());
+            assertEquals(Optional.of(new FrameId(0)), second.page().oldestRetainedFrame());
+        }
+        fixture.runtime.close();
+    }
+
+    @Test
+    void fixtureRemovedEntityHistoryIsQueryableThroughMcp() {
+        Fixture fixture = fixture();
+        try (PublishedRuntime publication = fixture.registry.publish(fixture.runtime);
+                RuntimeToolHandler handler =
+                        new RuntimeToolHandler(new RuntimeProtocolService(fixture.registry))) {
+            assertEquals(fixture.runtime.sessionId(), publication.sessionId());
+            McpSchema.CallToolResult first = handler.handle(call(
+                    "runtime_entity_history", Map.of(
+                            "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                            "entityId", "enemy-2", "fromFrame", 1, "toFrame", 45,
+                            "versionOffset", 0, "versionLimit", 8)))
+                    .block(Duration.ofSeconds(5));
+            assertNotNull(first);
+            assertFalse(first.isError());
+            Map<?, ?> content = assertInstanceOf(Map.class, first.structuredContent());
+            Map<?, ?> page = assertInstanceOf(Map.class, content.get("page"));
+            assertEquals(8, ((List<?>) page.get("versions")).size());
+            assertEquals(8L, ((Number) page.get("nextVersionOffset")).longValue());
+            assertEquals(true, page.get("hasMoreVersions"));
+            assertTrue(page.containsKey("finalRetainedState"));
         }
         fixture.runtime.close();
     }

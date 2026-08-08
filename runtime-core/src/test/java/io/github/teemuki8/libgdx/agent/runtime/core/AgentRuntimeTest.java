@@ -15,11 +15,13 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -1048,12 +1050,14 @@ final class AgentRuntimeTest {
     }
 
     @Test
+    @Timeout(15)
     void closeBarrierRejectsSubmissionTargetingRegistryAndNeverRepopulates() throws Exception {
         ArrayDeque<Runnable> queue = new ArrayDeque<>();
         AtomicBoolean armed = new AtomicBoolean();
         CountDownLatch dispatchEntered = new CountDownLatch(1);
         CountDownLatch releaseDispatch = new CountDownLatch(1);
-        CountDownLatch releaseSignal = new CountDownLatch(1);
+        CountDownLatch disposeEntered = new CountDownLatch(1);
+        CountDownLatch releaseDispose = new CountDownLatch(1);
         AtomicInteger executions = new AtomicInteger();
         AgentRuntime runtime = AgentRuntime.builder()
                 .sessionId(SessionId.of("input-close-barrier"))
@@ -1071,56 +1075,105 @@ final class AgentRuntimeTest {
                         }
                     }
                 })
+                .checkpointLimits(new CheckpointLimits(1, 8, 642))
                 .build();
         runtime.controls().register(SimulationControllerSpec.builder()
                 .pause(() -> {}).resume(() -> {}).tick(delta -> {}).build());
         runtime.inputs().register(InputSpec.builder("keyboard")
                 .requiredString("key")
                 .handler(ignored -> executions.incrementAndGet()).build());
+        runtime.checkpoints().register(new CheckpointProvider() {
+            @Override
+            public CheckpointHandle create() {
+                return new CloseHandle(1);
+            }
+
+            @Override
+            public void restore(CheckpointHandle handle) {}
+
+            @Override
+            public void dispose(CheckpointHandle handle) {
+                disposeEntered.countDown();
+                try {
+                    if (!releaseDispose.await(5, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("dispose latch timed out");
+                    }
+                } catch (InterruptedException failure) {
+                    throw new IllegalStateException(failure);
+                }
+            }
+        });
         runtime.start();
         runtime.controls().control(true, "pause-1", Duration.ofSeconds(1));
         queue.removeFirst().run();
+        runtime.checkpoints().create("one", null, "create-one", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        armed.set(true);
+        RuntimeValue.ObjectValue parameters = RuntimeValues.object(
+                RuntimeValues.field("key", RuntimeValues.string("X")));
+
+        FutureTask<InputInjection> admittedTask = new FutureTask<>(() -> runtime.inputs().inject(
+                "keyboard", "race-a", parameters, OptionalLong.empty(),
+                Duration.ofSeconds(1)));
+        FutureTask<InputInjection> queuedTask = new FutureTask<>(() -> runtime.inputs().inject(
+                "keyboard", "race-b", parameters, OptionalLong.empty(),
+                Duration.ofSeconds(1)));
+        Thread admittedThread = Thread.ofVirtual().name("race-a").unstarted(admittedTask);
+        Thread queuedThread = Thread.ofVirtual().name("race-b").unstarted(queuedTask);
+
+        admittedThread.start();
+        assertTrue(dispatchEntered.await(5, TimeUnit.SECONDS),
+                "admitted inject must hold the submission lock before close");
+        queuedThread.start();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        boolean blockedOnSubmissionLock = false;
+        while (System.nanoTime() < deadline) {
+            if (queuedThread.getState() == Thread.State.BLOCKED
+                    && Arrays.stream(queuedThread.getStackTrace()).anyMatch(frame ->
+                            frame.getClassName().equals(InputRegistry.class.getName())
+                                    && frame.getMethodName().equals("inject"))) {
+                blockedOnSubmissionLock = true;
+                break;
+            }
+            Thread.sleep(10);
+        }
+        assertTrue(blockedOnSubmissionLock,
+                "race-b must be provably BLOCKED on InputRegistry.submissionLock before close");
 
         Thread releaser = new Thread(() -> {
             try {
-                if (!releaseSignal.await(5, TimeUnit.SECONDS)) {
+                if (!disposeEntered.await(5, TimeUnit.SECONDS)) {
                     return;
                 }
             } catch (InterruptedException failure) {
                 throw new IllegalStateException(failure);
             }
             releaseDispatch.countDown();
-        }, "input-releaser");
+            releaseDispose.countDown();
+        }, "input-close-releaser");
         releaser.start();
-        armed.set(true);
-        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-            RuntimeValue.ObjectValue parameters = RuntimeValues.object(
-                    RuntimeValues.field("key", RuntimeValues.string("X")));
-            // First submission is admitted before the close barrier and holds the submission lock.
-            var admitted = executor.submit(() -> runtime.inputs().inject(
-                    "keyboard", "race-a", parameters, OptionalLong.empty(),
-                    Duration.ofSeconds(1)));
-            assertTrue(dispatchEntered.await(5, TimeUnit.SECONDS),
-                    "admitted inject must be in flight holding the submission lock");
-            // Second submission starts behind the first; the close barrier is published while it
-            // is still queued on the submission lock.
-            var queued = executor.submit(() -> runtime.inputs().inject(
-                    "keyboard", "race-b", parameters, OptionalLong.empty(),
-                    Duration.ofSeconds(1)));
-            releaseSignal.countDown();
+
+        try {
             runtime.close();
-            admitted.get(5, TimeUnit.SECONDS);
+            admittedTask.get(5, TimeUnit.SECONDS);
             try {
-                queued.get(5, TimeUnit.SECONDS);
+                queuedTask.get(5, TimeUnit.SECONDS);
                 throw new AssertionError("queued submission must reject the closing runtime");
             } catch (java.util.concurrent.ExecutionException failure) {
                 assertInstanceOf(AgentRuntimeException.class, failure.getCause());
                 AgentRuntimeException rejected = (AgentRuntimeException) failure.getCause();
                 assertEquals(RuntimeErrorCode.RUNTIME_CLOSED, rejected.code(),
-                        "the queued submission must observe the close barrier inside the registry lock");
+                        "race-b passed the outer check, so rejection must come from the inner recheck");
             }
+        } finally {
+            queuedThread.interrupt();
+            admittedThread.interrupt();
+            queuedThread.join(5_000);
+            admittedThread.join(5_000);
+            releaseDispatch.countDown();
+            releaseDispose.countDown();
+            releaser.join(5_000);
         }
-        releaser.join(5_000);
 
         assertEquals(RuntimeStatus.CLOSED, runtime.status());
         assertEquals(0, runtime.inputs().retainedInputHandlers());

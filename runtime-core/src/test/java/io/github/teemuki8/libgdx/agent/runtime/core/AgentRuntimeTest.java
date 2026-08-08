@@ -164,6 +164,77 @@ final class AgentRuntimeTest {
         assertEquals(3, truncation.limit());
     }
 
+    @Timeout(10)
+    @Test
+    void dynamicSourceSentinelNeverDisplacesBoundedPrefix() {
+        RuntimeLimits limits = new RuntimeLimits(240, 2_000, 3, 128, 256, 256, 64,
+                4_096, 256, 16, 1_000);
+        AgentRuntime runtime = runtime(limits);
+        AtomicInteger laterSourcePulls = new AtomicInteger();
+        runtime.entities().registerSource("first", () -> Stream.of(
+                entity("z1", 1), entity("z2", 2), entity("z3", 3), entity("a", 4)));
+        runtime.entities().registerSource("second", () -> Stream.generate(() -> {
+            laterSourcePulls.incrementAndGet();
+            return entity("gen-" + laterSourcePulls.get(), 9);
+        }));
+        runtime.start();
+
+        runtime.frame(1, () -> {});
+
+        FrameSnapshot frame = runtime.latestFrame().orElseThrow();
+        assertEquals(List.of("z1", "z2", "z3"),
+                frame.entities().stream().map(entry -> entry.id().value()).toList(),
+                "the sentinel observation must not displace the bounded prefix");
+        assertEquals(0, laterSourcePulls.get(), "the sentinel must stop pulling globally");
+        Truncation truncation = frame.stats().truncations().stream()
+                .filter(value -> value.dimension().equals("snapshot.entities"))
+                .findFirst().orElseThrow();
+        assertEquals(4, truncation.observed());
+        assertEquals(3, truncation.retained());
+        assertEquals(3, truncation.limit());
+        assertTrue(frame.stats().diagnostics().isEmpty());
+    }
+
+    @Timeout(10)
+    @Test
+    void dynamicSourceSentinelCannotCreateDuplicateOrPropertyDiagnostics() {
+        RuntimeLimits limits = new RuntimeLimits(240, 2_000, 3, 128, 256, 256, 64,
+                4_096, 256, 16, 1_000);
+
+        AgentRuntime duplicateRuntime = runtime(limits);
+        duplicateRuntime.entities().registerSource("duplicates", () -> Stream.of(
+                entity("z1", 1), entity("z2", 2), entity("z3", 3), entity("z1", 1)));
+        duplicateRuntime.start();
+        duplicateRuntime.frame(1, () -> {});
+        FrameSnapshot duplicateFrame = duplicateRuntime.latestFrame().orElseThrow();
+        assertEquals(List.of("z1", "z2", "z3"),
+                duplicateFrame.entities().stream().map(entry -> entry.id().value()).toList());
+        assertTrue(duplicateFrame.stats().diagnostics().isEmpty(),
+                "a duplicate sentinel must not emit a duplicate-entity diagnostic");
+
+        AgentRuntime invalidRuntime = runtime(limits);
+        invalidRuntime.entities().registerSource("invalid", () -> Stream.of(
+                entity("y1", 1), entity("y2", 2), entity("y3", 3),
+                InspectableEntity.of(EntityId.of("boom"), EntityType.of("enemy"),
+                        () -> {
+                            throw new IllegalStateException(
+                                    "sentinel display must not be read");
+                        },
+                        inspector -> inspector.property("index", () -> 1L))));
+        invalidRuntime.start();
+        invalidRuntime.frame(1, () -> {});
+        FrameSnapshot invalidFrame = invalidRuntime.latestFrame().orElseThrow();
+        assertEquals(List.of("y1", "y2", "y3"),
+                invalidFrame.entities().stream().map(entry -> entry.id().value()).toList(),
+                "an invalid sentinel must not be captured or displace the bounded prefix");
+        assertTrue(invalidFrame.stats().diagnostics().isEmpty(),
+                "a sentinel observation must not trigger property evaluation");
+        Truncation truncation = invalidFrame.stats().truncations().stream()
+                .filter(value -> value.dimension().equals("snapshot.entities"))
+                .findFirst().orElseThrow();
+        assertEquals(4, truncation.observed());
+    }
+
     @Test
     void retainsProviderFailuresAndDuplicateDynamicIdsAsDiagnostics() {
         AgentRuntime runtime = runtime(RuntimeLimits.developmentDefaults());
@@ -1357,6 +1428,12 @@ final class AgentRuntimeTest {
     }
 
     private record CloseHandle(int value) implements CheckpointHandle {}
+
+    private static InspectableEntity entity(String id, long index) {
+        return InspectableEntity.of(EntityId.of(id), EntityType.of("enemy"),
+                () -> "Entity " + id,
+                inspector -> inspector.property("index", () -> index));
+    }
 
     private static AgentRuntime runtime(RuntimeLimits limits) {
         AtomicLong time = new AtomicLong();

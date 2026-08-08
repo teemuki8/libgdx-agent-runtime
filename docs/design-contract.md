@@ -110,9 +110,11 @@ Disabled runtimes retain no providers or frames and perform no serialization.
     before close can neither retain evidence nor execute after the runtime publishes `CLOSED`.
 32. Dynamic entity sources are enumerated in stable registration order through a sequential
     iterator on the capture thread, so parallel application streams never leave the capture thread.
-    Enumeration is globally bounded: at most `entitiesPerSnapshot` non-null observations are
-    retained plus one sentinel observation proving truncation, across all sources combined.
-    Discarded observations are never materialized, infinite or very large sources cannot stall
-    capture, and truncation reports the sentinel-based observed count as
-    dimension/observed/retained/limit. Static-before-dynamic precedence, entity-ID ordering, and
-    duplicate diagnostics apply within the bounded observation set.
+    Enumeration is globally bounded: exactly the first `entitiesPerSnapshot` non-null source
+    observations form the bounded prefix, and the next non-null observation only advances the
+    sentinel count proving truncation before enumeration stops across all sources combined. The
+    sentinel is never materialized, sorted, retained, or diagnosed. Discarded observations are
+    never materialized, infinite or very large sources cannot stall capture, and truncation reports
+    the sentinel-based observed count as dimension/observed/retained/limit. Static-before-dynamic
+    precedence, entity-ID ordering, and duplicate diagnostics apply only within the bounded
+    observation set (statics plus the bounded source prefix).

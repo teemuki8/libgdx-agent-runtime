@@ -1114,6 +1114,8 @@ final class AgentRuntimeTest {
         RuntimeValue.ObjectValue parameters = RuntimeValues.object(
                 RuntimeValues.field("key", RuntimeValues.string("X")));
 
+        // One absolute body deadline shared by every await, poll sleep, and task get.
+        long bodyDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
         FutureTask<InputInjection> admittedTask = new FutureTask<>(() -> runtime.inputs().inject(
                 "keyboard", "race-a", parameters, OptionalLong.empty(),
                 Duration.ofSeconds(1)));
@@ -1141,12 +1143,11 @@ final class AgentRuntimeTest {
             queuedThread = Thread.ofVirtual().name("race-b").unstarted(queuedTask);
             releaser.start();
             admittedThread.start();
-            assertTrue(dispatchEntered.await(5, TimeUnit.SECONDS),
+            assertTrue(awaitLatch(dispatchEntered, bodyDeadline),
                     "admitted inject must hold the submission lock before close");
             queuedThread.start();
-            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
             boolean blockedOnSubmissionLock = false;
-            while (System.nanoTime() < deadline) {
+            while (remainingNanos(bodyDeadline) > 0) {
                 if (queuedThread.getState() == Thread.State.BLOCKED
                         && Arrays.stream(queuedThread.getStackTrace()).anyMatch(frame ->
                                 frame.getClassName().equals(InputRegistry.class.getName())
@@ -1154,15 +1155,19 @@ final class AgentRuntimeTest {
                     blockedOnSubmissionLock = true;
                     break;
                 }
-                Thread.sleep(10);
+                long sleepNanos = Math.min(remainingNanos(bodyDeadline),
+                        TimeUnit.MILLISECONDS.toNanos(10));
+                if (sleepNanos > 0) {
+                    Thread.sleep(Math.max(1, TimeUnit.NANOSECONDS.toMillis(sleepNanos)));
+                }
             }
             assertTrue(blockedOnSubmissionLock,
                     "race-b must be provably BLOCKED on InputRegistry.submissionLock before close");
 
             runtime.close();
-            admittedTask.get(5, TimeUnit.SECONDS);
+            getBefore(bodyDeadline, admittedTask);
             try {
-                queuedTask.get(5, TimeUnit.SECONDS);
+                getBefore(bodyDeadline, queuedTask);
                 throw new AssertionError("queued submission must reject the closing runtime");
             } catch (java.util.concurrent.ExecutionException failure) {
                 assertInstanceOf(AgentRuntimeException.class, failure.getCause());
@@ -1196,10 +1201,35 @@ final class AgentRuntimeTest {
         }
     }
 
+    private static boolean awaitLatch(CountDownLatch latch, long deadline)
+            throws InterruptedException {
+        long remaining = remainingNanos(deadline);
+        return remaining > 0 && latch.await(remaining, TimeUnit.NANOSECONDS);
+    }
+
+    private static <T> T getBefore(long deadline, FutureTask<T> task) throws Exception {
+        long remaining = remainingNanos(deadline);
+        if (remaining <= 0) {
+            throw new java.util.concurrent.TimeoutException(
+                    "close barrier body deadline exceeded");
+        }
+        return task.get(remaining, TimeUnit.NANOSECONDS);
+    }
+
+    private static long remainingNanos(long deadline) {
+        return Math.max(0L, deadline - System.nanoTime());
+    }
+
+    /**
+     * Releases every latch, interrupts every created thread, then polls all liveness states
+     * against one shared absolute deadline. Never joins per thread, so an already-interrupted
+     * test thread cannot abort cleanup; failures are accumulated into a single Throwable.
+     */
     private static Throwable terminateCloseRaceThreads(CountDownLatch releaseDispatch,
             CountDownLatch releaseDispose, Thread releaser, Thread admittedThread,
             Thread queuedThread) {
         Throwable cleanupFailure = null;
+        long cleanupDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
         try {
             releaseDispatch.countDown();
         } catch (Throwable failure) {
@@ -1221,16 +1251,25 @@ final class AgentRuntimeTest {
                 cleanupFailure = appendCleanupFailure(cleanupFailure, failure);
             }
         }
-        for (Thread thread : threads) {
-            if (thread == null) {
-                continue;
+        while (remainingNanos(cleanupDeadline) > 0) {
+            boolean anyAlive = false;
+            for (Thread thread : threads) {
+                if (thread != null && thread.isAlive()) {
+                    anyAlive = true;
+                    break;
+                }
+            }
+            if (!anyAlive) {
+                return cleanupFailure;
             }
             try {
-                thread.join(1_000);
+                Thread.sleep(10);
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
             }
-            if (thread.isAlive()) {
+        }
+        for (Thread thread : threads) {
+            if (thread != null && thread.isAlive()) {
                 cleanupFailure = appendCleanupFailure(cleanupFailure,
                         new AssertionError("close race thread did not terminate: "
                                 + thread.getName()));

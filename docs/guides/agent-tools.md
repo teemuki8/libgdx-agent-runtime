@@ -267,6 +267,18 @@ configured observable evidence matched. Bounds and messages report completed rep
 frames/entities/properties, execution time, truncation, eviction, timeout, and incomplete evidence.
 The runtime does not inspect unregistered state or prove whole-program determinism.
 
+Evidence limits are enforced before retention. Each frame's selected entities and facts are
+counted incrementally with bounded iteration, and admission stops at the first item whose
+cumulative observed total would exceed the configured `maximumEntitiesPerFrame` or
+`maximumFactsPerFrame` — the over-limit item is not sized and no later entity, property, event,
+decision, or UI correlation is visited, and observed counters saturate at those maxima. A frame
+is retained only when its exact canonical encoded byte size (the deterministic type-tagged frame
+encoding with length-prefixed UTF-8 strings and fixed-width numbers) plus the retained total
+stays within `maximumEncodedEvidenceBytes`. An over-limit frame is never copied or retained:
+capture stops immediately with an `INCONCLUSIVE` result and a specific reason, no later tick or
+scenario reset runs, and reported encoded bytes are the retained total, never above the
+configured maximum.
+
 ## Errors and bounds
 
 Errors use `SESSION_NOT_FOUND`, `FRAME_NOT_FOUND`, `ENTITY_NOT_FOUND`, `INVALID_QUERY`,

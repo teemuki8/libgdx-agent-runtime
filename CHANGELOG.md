@@ -24,6 +24,14 @@ All notable changes follow Keep a Changelog structure.
 
 ### Fixed
 
+- Open-frame events, decisions, and explicit change causes are now bounded at insertion:
+  `emit` retains at most `retainedEvents`, `beginDecision` at most `decisionsPerFrame`, and the
+  new `FrameStagingLimits.causesPerFrame` caps `causeNextChange` map entries. Excess facts only
+  advance saturating observed counters — dropped events still receive monotonic event IDs but
+  their attributes are never read or copied, overflow decisions return the no-retention disabled
+  scope (a retained open decision still rejects nesting), and dropped causes skip map retention
+  while key validation still occurs. Per-frame counters reset at frame completion and truncation
+  evidence reports the saturating observed count with the already-bounded retained count (#45).
 - Dynamic entity sources are now enumerated sequentially on the capture thread through
   `stream.sequential().iterator()` with a hard global bound: exactly the first
   `entitiesPerSnapshot` non-null observations form the bounded prefix, and the next non-null

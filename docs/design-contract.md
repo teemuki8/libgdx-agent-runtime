@@ -118,3 +118,14 @@ Disabled runtimes retain no providers or frames and perform no serialization.
     the sentinel-based observed count as dimension/observed/retained/limit. Static-before-dynamic
     precedence, entity-ID ordering, and duplicate diagnostics apply only within the bounded
     observation set (statics plus the bounded source prefix).
+33. Events, decisions, and explicit change causes are bounded while the frame is still open.
+    `emit` retains at most `RuntimeLimits.retainedEvents` facts, `beginDecision` at most
+    `RuntimeLimits.decisionsPerFrame`, and `causeNextChange` at most
+    `FrameStagingLimits.causesPerFrame` map entries; every excess fact only advances a saturating
+    observed counter. Dropped events still receive a monotonic event ID but their attributes are
+    never read, bounded, or copied; an overflow decision returns the no-retention disabled scope
+    while a retained open decision still rejects nesting; a dropped cause skips map retention
+    (key validation still occurs, the discarded value is never copied) and never attributes a
+    difference. Per-frame observed counters reset at frame completion, and truncation evidence
+    reports the saturating observed count with the already-bounded retained count and configured
+    limit.

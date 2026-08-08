@@ -138,14 +138,9 @@ public final class CheckpointRegistry {
     private void executeCreate(String requestId, Evidence evidence, CheckpointProvider callbacks) {
         boolean installed = false;
         CheckpointHandle handle = null;
+        Retained evicted = null;
         try {
             runtime.requireCheckpointMutation();
-            Retained evicted = null;
-            synchronized (this) {
-                if (checkpoints.size() >= limits.retainedCheckpoints()) {
-                    evicted = checkpoints.get(checkpoints.keySet().iterator().next());
-                }
-            }
             FrameSnapshot source = runtime.latestFrame().orElseThrow(() ->
                     new IllegalStateException("checkpoint creation requires a completed frame"));
             handle = Objects.requireNonNull(callbacks.create(),
@@ -158,19 +153,24 @@ public final class CheckpointRegistry {
                     throw new IllegalStateException(
                             "checkpoint id was created concurrently");
                 }
-                // Stage complete replacement snapshots (handles and descriptor catalog, with
-                // the insert and eviction applied) before touching live state, so a staging
-                // fault cannot leave the live maps partially published.
+                // The eviction decision is made here from the CURRENT maps: a synchronous
+                // reentrant nested create during callbacks.create() may already have replaced
+                // the oldest entry, so a candidate captured before the callback would be stale.
+                // Stage complete replacement snapshots (handles and descriptor catalog) before
+                // touching live state, so a staging fault cannot leave the maps partially
+                // published.
                 LinkedHashMap<String, Retained> stagedCheckpoints =
                         new LinkedHashMap<>(checkpoints);
                 LinkedHashMap<String, CheckpointDescriptor> stagedCatalog =
                         new LinkedHashMap<>(catalog);
+                if (stagedCheckpoints.size() >= limits.retainedCheckpoints()) {
+                    String oldest = stagedCheckpoints.keySet().iterator().next();
+                    evicted = stagedCheckpoints.get(oldest);
+                    stagedCheckpoints.remove(oldest);
+                    stagedCatalog.remove(oldest);
+                }
                 stagedCheckpoints.put(descriptor.id(), new Retained(descriptor, handle));
                 stagedCatalog.put(descriptor.id(), descriptor);
-                if (evicted != null) {
-                    stagedCheckpoints.remove(evicted.descriptor().id());
-                    stagedCatalog.remove(evicted.descriptor().id());
-                }
                 runStagingFault();
                 // Publish both maps with non-throwing reference assignments; the staged
                 // LinkedHashMaps preserve creation order and retention bounds.
@@ -272,6 +272,7 @@ public final class CheckpointRegistry {
         checkpoints.clear();
         requests.clear();
         operations.clear();
+        stagingFault = null;
         provider = null;
         if (firstFailure instanceof RuntimeException failure) {
             throw failure;
@@ -287,6 +288,11 @@ public final class CheckpointRegistry {
      */
     synchronized void injectStagingFault(Runnable fault) {
         stagingFault = Objects.requireNonNull(fault, "fault");
+    }
+
+    /** Package-private close observation: whether a staging fault is currently injected. */
+    synchronized boolean hasStagingFault() {
+        return stagingFault != null;
     }
 
     private void runStagingFault() {

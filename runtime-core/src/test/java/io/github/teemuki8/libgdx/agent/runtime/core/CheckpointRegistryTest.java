@@ -260,6 +260,163 @@ final class CheckpointRegistryTest {
     }
 
     @Test
+    void reentrantNestedCreateEvictsTheCurrentOldestAndCommitsTheOuter() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        List<Integer> disposed = new ArrayList<>();
+        AtomicInteger created = new AtomicInteger();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("atomic-reentrant"))
+                .clock(() -> 1)
+                .commandDispatcher(dispatch::addLast)
+                .checkpointLimits(new CheckpointLimits(1, 8, 642))
+                .build();
+        runtime.checkpoints().register(new CheckpointProvider() {
+            private int calls;
+
+            @Override
+            public CheckpointHandle create() {
+                if (++calls == 2) {
+                    // The outer replacement's create reentrantly completes the queued nested
+                    // create before returning its own handle.
+                    dispatch.removeFirst().run();
+                }
+                return new StateHandle(created.incrementAndGet());
+            }
+
+            @Override
+            public void restore(CheckpointHandle handle) {}
+
+            @Override
+            public void dispose(CheckpointHandle handle) {
+                disposed.add(((StateHandle) handle).value());
+            }
+        });
+        runtime.start();
+        runtime.checkpoints().create("first", null, "create-first", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        runtime.checkpoints().create("outer", null, "create-outer", Duration.ofSeconds(1));
+        runtime.checkpoints().create("nested", null, "create-nested", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        CheckpointOperation outer = runtime.checkpoints().create(
+                "outer", null, "create-outer", Duration.ofSeconds(1));
+
+        assertEquals(CommandState.SUCCEEDED, outer.command().status().orElseThrow().state());
+        assertEquals(List.of("outer"), runtime.checkpoints().list().stream()
+                .map(CheckpointDescriptor::id).toList(),
+                "the outer create commits as the single retained checkpoint");
+        assertEquals(1, runtime.checkpoints().retainedCheckpoints());
+        assertEquals(List.of(1, 2), disposed,
+                "the nested eviction disposes the first handle once and the outer commit "
+                        + "disposes the nested handle once, never the first twice");
+        assertThrows(IllegalArgumentException.class, () -> runtime.checkpoints().restore(
+                "first", "restore-first", Duration.ofSeconds(1)));
+        assertThrows(IllegalArgumentException.class, () -> runtime.checkpoints().restore(
+                "nested", "restore-nested", Duration.ofSeconds(1)));
+        runtime.checkpoints().restore("outer", "restore-outer", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        CheckpointOperation restored = runtime.checkpoints().restore(
+                "outer", "restore-outer", Duration.ofSeconds(1));
+        assertEquals(CommandState.SUCCEEDED, restored.command().status().orElseThrow().state());
+        assertEquals(List.of(1, 2), disposed, "no handle is ever disposed twice");
+    }
+
+    @Test
+    void reentrantNestedCreateFailureBeforePublicationPreservesTheNestedCreate() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        List<Integer> disposed = new ArrayList<>();
+        AtomicInteger created = new AtomicInteger();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("atomic-reentrant-failure"))
+                .clock(() -> 1)
+                .commandDispatcher(dispatch::addLast)
+                .checkpointLimits(new CheckpointLimits(1, 8, 642))
+                .build();
+        runtime.checkpoints().register(new CheckpointProvider() {
+            private int calls;
+
+            @Override
+            public CheckpointHandle create() {
+                if (++calls == 2) {
+                    dispatch.removeFirst().run();
+                    // Arm the publication fault only after the nested create committed, so the
+                    // outer publication is the one that fails.
+                    runtime.checkpoints().injectStagingFault(() -> {
+                        throw new AssertionError("staging fault sentinel");
+                    });
+                }
+                return new StateHandle(created.incrementAndGet());
+            }
+
+            @Override
+            public void restore(CheckpointHandle handle) {}
+
+            @Override
+            public void dispose(CheckpointHandle handle) {
+                disposed.add(((StateHandle) handle).value());
+            }
+        });
+        runtime.start();
+        runtime.checkpoints().create("first", null, "create-first", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        runtime.checkpoints().create("outer", null, "create-outer", Duration.ofSeconds(1));
+        runtime.checkpoints().create("nested", null, "create-nested", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        CheckpointOperation failed = runtime.checkpoints().create(
+                "outer", null, "create-outer", Duration.ofSeconds(1));
+
+        assertEquals(CommandState.FAILED, failed.command().status().orElseThrow().state());
+        ApplicationFailureEvidence failure = failed.applicationFailure().orElseThrow();
+        assertEquals("checkpoint.create", failure.category());
+        assertEquals(List.of("nested"), runtime.checkpoints().list().stream()
+                .map(CheckpointDescriptor::id).toList(),
+                "the nested create survives the failed outer publication, not stale pre-callback state");
+        assertEquals(1, runtime.checkpoints().retainedCheckpoints());
+        assertEquals(List.of(1, 3), disposed,
+                "the nested eviction disposes the first handle once and the failed outer "
+                        + "disposes its new handle once");
+        assertTrue(failed.diagnostic().orElseThrow().endsWith(
+                "|checkpoint.create|java.lang.AssertionError"),
+                "the primary staging fault is retained as the command failure");
+        runtime.checkpoints().restore("nested", "restore-nested", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        CheckpointOperation restored = runtime.checkpoints().restore(
+                "nested", "restore-nested", Duration.ofSeconds(1));
+        assertEquals(CommandState.SUCCEEDED, restored.command().status().orElseThrow().state());
+        assertEquals(List.of(1, 3), disposed, "no handle is ever disposed twice");
+    }
+
+    @Test
+    void closeClearsInjectedStagingFault() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("staging-fault-close"))
+                .clock(() -> 1)
+                .commandDispatcher(dispatch::addLast)
+                .build();
+        runtime.checkpoints().register(new CheckpointProvider() {
+            @Override
+            public CheckpointHandle create() {
+                return new StateHandle(1);
+            }
+
+            @Override
+            public void restore(CheckpointHandle handle) {}
+
+            @Override
+            public void dispose(CheckpointHandle handle) {}
+        });
+        runtime.start();
+        assertFalse(runtime.checkpoints().hasStagingFault());
+        runtime.checkpoints().injectStagingFault(() -> {
+            throw new AssertionError("sentinel");
+        });
+        assertTrue(runtime.checkpoints().hasStagingFault());
+        runtime.close();
+        assertFalse(runtime.checkpoints().hasStagingFault(),
+                "close must drop the injected staging fault callback");
+    }
+
+    @Test
     void failedEvictionDisposalDoesNotFailTheCommittedReplacement() {
         ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
         AgentRuntime runtime = AgentRuntime.builder()

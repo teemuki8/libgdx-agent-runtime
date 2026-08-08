@@ -532,7 +532,10 @@ final class AgentRuntimeTest {
         Thread reader = Thread.ofVirtual().start(() -> {
             try {
                 go.await();
-                while (runtime.status() == prior && !Thread.currentThread().isInterrupted()) {
+                long observationDeadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                while (runtime.status() == prior
+                        && !Thread.currentThread().isInterrupted()
+                        && System.nanoTime() < observationDeadlineNanos) {
                     polling.countDown();
                     Thread.onSpinWait();
                 }
@@ -552,15 +555,44 @@ final class AgentRuntimeTest {
             transition.run();
             assertTrue(observed.await(5, TimeUnit.SECONDS),
                     "reader must observe " + expected + " (stale lifecycle status race)");
-            assertEquals(expected, observedStatus.get());
+            assertEquals(expected, observedStatus.get(),
+                    "reader observed stale lifecycle status " + observedStatus.get());
             assertEquals(expected, runtime.status());
-        } finally {
-            reader.interrupt();
-            reader.join();
-            Throwable failure = readerFailure.get();
-            if (failure != null) {
-                throw new AssertionError("visibility reader failed", failure);
+        } catch (Throwable primary) {
+            try {
+                cleanupVisibilityReader(reader, readerFailure);
+            } catch (Throwable cleanup) {
+                primary.addSuppressed(cleanup);
             }
+            throw primary;
+        }
+        cleanupVisibilityReader(reader, readerFailure);
+    }
+
+    /**
+     * Non-interruptible, bounded reader cleanup: interrupts the reader, then polls
+     * {@link Thread#isAlive()} against a short absolute deadline (no unbounded or interruptible
+     * join, and the current thread's interrupt status is never read or cleared). Reader failures
+     * and non-termination surface as {@link AssertionError}s.
+     */
+    private static void cleanupVisibilityReader(Thread reader,
+            AtomicReference<Throwable> readerFailure) {
+        reader.interrupt();
+        long cleanupDeadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (reader.isAlive() && System.nanoTime() < cleanupDeadlineNanos) {
+            Thread.onSpinWait();
+        }
+        Throwable failure = readerFailure.get();
+        if (reader.isAlive()) {
+            AssertionError alive = new AssertionError(
+                    "visibility reader did not terminate within the cleanup deadline");
+            if (failure != null) {
+                alive.addSuppressed(failure);
+            }
+            throw alive;
+        }
+        if (failure != null) {
+            throw new AssertionError("visibility reader failed", failure);
         }
     }
 

@@ -221,8 +221,15 @@ public final class SimulationControlRegistry {
                 }
                 runtime.recordings().recordTick(
                         tick, signature.deltaNanos, runtime.currentEpoch(), expected);
-                if (satisfied(evidence, signature)) {
-                    return;
+                try {
+                    if (satisfied(evidence, signature)) {
+                        return;
+                    }
+                } catch (RuntimeException | Error failure) {
+                    synchronized (this) {
+                        evidence.stopReason = ControlStopReason.CALLBACK_FAILED;
+                    }
+                    throw failure;
                 }
             }
             synchronized (this) {

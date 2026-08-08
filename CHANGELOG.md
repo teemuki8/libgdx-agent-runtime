@@ -34,6 +34,13 @@ All notable changes follow Keep a Changelog structure.
   computed without `toString()` or temporary byte arrays. Capture stops immediately with a
   specific `INCONCLUSIVE` reason, no later tick or scenario reset runs, and reported encoded
   bytes never exceed the configured maximum (#43).
+- A throwing simulation-control stop condition now records `CALLBACK_FAILED` completion
+  evidence before the typed command failure propagates: a terminal failed wait retains
+  `CALLBACK_FAILED` (never `PENDING`) as its stop reason, completed-tick and frame evidence
+  stays accurate through first and later condition checks with idempotent polling, and the
+  original throwable still reaches command failure classification so the structured
+  `command.failed` evidence and its sanitized diagnostics are retained without leaking raw
+  messages (#47).
 - Open-frame events, decisions, and explicit change causes are now bounded at insertion:
   `emit` retains at most `retainedEvents`, `beginDecision` at most `decisionsPerFrame`, and the
   new `FrameStagingLimits.causesPerFrame` caps `causeNextChange` map entries. Excess facts only

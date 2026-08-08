@@ -143,6 +143,105 @@ final class SimulationControlTest {
     }
 
     @Test
+    void throwingConditionRecordsCallbackFailureOnFirstCheck() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        int[] ticks = {0};
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("throwing-condition-first"))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .build();
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {})
+                .resume(() -> {})
+                .tick(deltaNanos -> ticks[0]++)
+                .condition("broken", "Throws on evaluation", () -> {
+                    throw new IllegalStateException("token=secret");
+                })
+                .build());
+        runtime.start();
+        runtime.controls().control(true, "pause", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+
+        runtime.controls().waitForCondition(
+                "wait", "broken", 5, 1, Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        ControlOperation result = runtime.controls().waitForCondition(
+                "wait", "broken", 5, 1, Duration.ofSeconds(1));
+
+        assertEquals(CommandState.FAILED, result.command().status().orElseThrow().state());
+        assertEquals(ControlStopReason.CALLBACK_FAILED, result.stopReason());
+        assertEquals(1, result.completedTicks());
+        assertEquals(Optional.of(new FrameId(1)), result.firstFrameId());
+        assertEquals(Optional.of(new FrameId(1)), result.finalFrameId());
+        assertNoRawSecret(result);
+
+        // Idempotent poll retains the same terminal evidence without PENDING.
+        ControlOperation again = runtime.controls().waitForCondition(
+                "wait", "broken", 5, 1, Duration.ofSeconds(1));
+        assertEquals(CommandState.FAILED, again.command().status().orElseThrow().state());
+        assertEquals(ControlStopReason.CALLBACK_FAILED, again.stopReason());
+        assertEquals(1, again.completedTicks());
+        assertEquals(Optional.of(new FrameId(1)), again.finalFrameId());
+        assertNoRawSecret(again);
+    }
+
+    @Test
+    void throwingConditionRecordsCallbackFailureOnLaterCheck() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        int[] ticks = {0};
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("throwing-condition-later"))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .build();
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {})
+                .resume(() -> {})
+                .tick(deltaNanos -> ticks[0]++)
+                .condition("late-broken", "Throws after two ticks", () -> {
+                    if (ticks[0] >= 2) {
+                        throw new IllegalStateException("token=secret");
+                    }
+                    return false;
+                })
+                .build());
+        runtime.start();
+        runtime.controls().control(true, "pause", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+
+        runtime.controls().waitForCondition(
+                "wait-late", "late-broken", 5, 1, Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        ControlOperation result = runtime.controls().waitForCondition(
+                "wait-late", "late-broken", 5, 1, Duration.ofSeconds(1));
+
+        assertEquals(CommandState.FAILED, result.command().status().orElseThrow().state());
+        assertEquals(ControlStopReason.CALLBACK_FAILED, result.stopReason());
+        assertEquals(2, result.completedTicks());
+        assertEquals(Optional.of(new FrameId(1)), result.firstFrameId());
+        assertEquals(Optional.of(new FrameId(2)), result.finalFrameId());
+        assertNoRawSecret(result);
+
+        // Idempotent poll never yields PENDING for the terminal failure.
+        ControlOperation again = runtime.controls().waitForCondition(
+                "wait-late", "late-broken", 5, 1, Duration.ofSeconds(1));
+        assertEquals(ControlStopReason.CALLBACK_FAILED, again.stopReason());
+        assertEquals(2, again.completedTicks());
+        assertNoRawSecret(again);
+    }
+
+    private static void assertNoRawSecret(ControlOperation operation) {
+        CommandStatus status = operation.command().status().orElseThrow();
+        assertEquals(false, status.diagnostic().orElse("").contains("token=secret"));
+        ApplicationFailureEvidence evidence = status.applicationFailure().orElseThrow();
+        assertEquals("command.failed", evidence.category());
+        assertEquals("java.lang.IllegalStateException", evidence.exceptionClass());
+        assertEquals(false, (evidence.category() + evidence.exceptionClass()
+                + evidence.sanitizedDetail().orElse("")).contains("token=secret"));
+    }
+
+    @Test
     void assertionWaitUsesCompletedFramesAndTimeoutRetainsPartialProgress() {
         ArrayDeque<Runnable> queue = new ArrayDeque<>();
         long[] time = {0};

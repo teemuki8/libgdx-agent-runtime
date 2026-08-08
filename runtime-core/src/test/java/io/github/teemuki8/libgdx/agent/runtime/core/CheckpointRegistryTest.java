@@ -5,7 +5,11 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
@@ -198,7 +202,7 @@ final class CheckpointRegistryTest {
     }
 
     @Test
-    void failedEvictionDisposalDoesNotLeaveTheHandleRestorable() {
+    void failedEvictionDisposalDoesNotFailTheCommittedReplacement() {
         ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
         AgentRuntime runtime = AgentRuntime.builder()
                 .sessionId(SessionId.of("failed-disposal"))
@@ -221,12 +225,192 @@ final class CheckpointRegistryTest {
         runtime.checkpoints().create("second", null, "create-second", Duration.ofSeconds(1));
         dispatch.removeFirst().run();
 
+        CheckpointOperation replaced = runtime.checkpoints().create(
+                "second", null, "create-second", Duration.ofSeconds(1));
+        assertEquals(CommandState.SUCCEEDED, replaced.command().status().orElseThrow().state());
+        // The replacement is installed before the evicted handle is released, so a disposal
+        // failure never rolls back the committed create and never leaves the old handle restorable.
+        assertEquals(List.of("second"), runtime.checkpoints().list().stream()
+                .map(CheckpointDescriptor::id).toList());
+        assertThrows(IllegalArgumentException.class, () -> runtime.checkpoints().restore(
+                "first", "restore-first", Duration.ofSeconds(1)));
+    }
+
+    @Test
+    void failedReplacementPreservesThePriorCheckpoint() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        int[] state = {1};
+        List<Integer> disposed = new ArrayList<>();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("atomic-failed-create"))
+                .clock(() -> 1)
+                .commandDispatcher(dispatch::addLast)
+                .checkpointLimits(new CheckpointLimits(1, 8, 642))
+                .build();
+        runtime.checkpoints().register(new CheckpointProvider() {
+            private int calls;
+
+            @Override
+            public CheckpointHandle create() {
+                if (++calls > 1) {
+                    throw new IllegalStateException("create failed");
+                }
+                return new StateHandle(state[0]);
+            }
+
+            @Override
+            public void restore(CheckpointHandle handle) {
+                state[0] = ((StateHandle) handle).value();
+            }
+
+            @Override
+            public void dispose(CheckpointHandle handle) {
+                disposed.add(((StateHandle) handle).value());
+            }
+        });
+        runtime.start();
+        runtime.checkpoints().create("first", null, "create-first", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+
+        runtime.checkpoints().create("second", null, "create-second", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        CheckpointOperation failed = runtime.checkpoints().create(
+                "second", null, "create-second", Duration.ofSeconds(1));
+
+        assertEquals(CommandState.FAILED, failed.command().status().orElseThrow().state());
+        ApplicationFailureEvidence failure = failed.applicationFailure().orElseThrow();
+        assertEquals("checkpoint.create", failure.category());
+        assertEquals(List.of("first"), runtime.checkpoints().list().stream()
+                .map(CheckpointDescriptor::id).toList());
+        assertTrue(disposed.isEmpty(), "a failed replacement must not dispose any handle");
+        state[0] = 2;
+        runtime.frame(1, () -> {});
+        runtime.checkpoints().restore("first", "restore-first", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        CheckpointOperation restored = runtime.checkpoints().restore(
+                "first", "restore-first", Duration.ofSeconds(1));
+        assertEquals(CommandState.SUCCEEDED, restored.command().status().orElseThrow().state());
+        assertEquals(1, state[0], "the preserved handle must remain restorable");
+    }
+
+    @Test
+    void successfulReplacementDisposesExactlyTheEvictedHandle() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        List<Integer> disposed = new ArrayList<>();
+        AtomicInteger created = new AtomicInteger();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("atomic-replace"))
+                .clock(() -> 1)
+                .commandDispatcher(dispatch::addLast)
+                .checkpointLimits(new CheckpointLimits(1, 8, 642))
+                .build();
+        runtime.checkpoints().register(new CheckpointProvider() {
+            @Override
+            public CheckpointHandle create() {
+                return new StateHandle(created.incrementAndGet());
+            }
+
+            @Override
+            public void restore(CheckpointHandle handle) {}
+
+            @Override
+            public void dispose(CheckpointHandle handle) {
+                disposed.add(((StateHandle) handle).value());
+            }
+        });
+        runtime.start();
+        runtime.checkpoints().create("first", null, "create-first", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        runtime.checkpoints().create("second", null, "create-second", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        CheckpointOperation replacement = runtime.checkpoints().create(
+                "second", null, "create-second", Duration.ofSeconds(1));
+
+        assertEquals(CommandState.SUCCEEDED, replacement.command().status().orElseThrow().state());
+        assertEquals(List.of(1), disposed, "exactly the evicted handle is disposed once");
+        assertEquals(List.of("second"), runtime.checkpoints().list().stream()
+                .map(CheckpointDescriptor::id).toList());
+        assertThrows(IllegalArgumentException.class, () -> runtime.checkpoints().restore(
+                "first", "restore-first", Duration.ofSeconds(1)));
+    }
+
+    @Test
+    void failedInstallationDisposesOnlyTheNewHandleAndKeepsTheRegistryValid() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        List<Integer> disposed = new ArrayList<>();
+        AtomicInteger created = new AtomicInteger();
+        boolean[] failWallClock = {false};
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("atomic-install-failure"))
+                .clock(() -> 1)
+                .wallClock(new Clock() {
+                    @Override
+                    public ZoneId getZone() {
+                        return ZoneOffset.UTC;
+                    }
+
+                    @Override
+                    public Clock withZone(ZoneId zone) {
+                        return this;
+                    }
+
+                    @Override
+                    public Instant instant() {
+                        if (failWallClock[0]) {
+                            throw new IllegalStateException("wall clock failed");
+                        }
+                        return Clock.systemUTC().instant();
+                    }
+                })
+                .commandDispatcher(dispatch::addLast)
+                .checkpointLimits(new CheckpointLimits(1, 8, 642))
+                .build();
+        runtime.checkpoints().register(new CheckpointProvider() {
+            @Override
+            public CheckpointHandle create() {
+                return new StateHandle(created.incrementAndGet());
+            }
+
+            @Override
+            public void restore(CheckpointHandle handle) {}
+
+            @Override
+            public void dispose(CheckpointHandle handle) {
+                int value = ((StateHandle) handle).value();
+                disposed.add(value);
+                if (value == 2) {
+                    throw new IllegalArgumentException("dispose failed");
+                }
+            }
+        });
+        runtime.start();
+        runtime.checkpoints().create("first", null, "create-first", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+
+        failWallClock[0] = true;
+        runtime.checkpoints().create("second", null, "create-second", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        failWallClock[0] = false;
+
         CheckpointOperation failed = runtime.checkpoints().create(
                 "second", null, "create-second", Duration.ofSeconds(1));
         assertEquals(CommandState.FAILED, failed.command().status().orElseThrow().state());
-        assertTrue(runtime.checkpoints().list().isEmpty());
-        assertThrows(IllegalArgumentException.class, () -> runtime.checkpoints().restore(
-                "first", "restore-first", Duration.ofSeconds(1)));
+        ApplicationFailureEvidence failure = failed.applicationFailure().orElseThrow();
+        assertEquals("checkpoint.create", failure.category());
+        assertEquals(List.of(2), disposed,
+                "only the newly created handle is disposed after an installation failure");
+        assertEquals(List.of("first"), runtime.checkpoints().list().stream()
+                .map(CheckpointDescriptor::id).toList(),
+                "the original registry must keep the prior checkpoint");
+        runtime.checkpoints().restore("first", "restore-first", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        CheckpointOperation restored = runtime.checkpoints().restore(
+                "first", "restore-first", Duration.ofSeconds(1));
+        assertEquals(CommandState.SUCCEEDED, restored.command().status().orElseThrow().state());
+        assertTrue(restored.baselineEpochId().isPresent());
+        assertTrue(failed.diagnostic().orElseThrow().endsWith(
+                "|checkpoint.create|java.lang.IllegalStateException"),
+                "the primary installation failure is retained over the suppressed cleanup failure");
     }
 
     @Test

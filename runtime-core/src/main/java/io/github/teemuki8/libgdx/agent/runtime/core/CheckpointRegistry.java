@@ -135,29 +135,56 @@ public final class CheckpointRegistry {
     }
 
     private void executeCreate(String requestId, Evidence evidence, CheckpointProvider callbacks) {
+        boolean installed = false;
+        CheckpointHandle handle = null;
         try {
             runtime.requireCheckpointMutation();
+            Retained evicted = null;
             synchronized (this) {
                 if (checkpoints.size() >= limits.retainedCheckpoints()) {
-                    String oldest = checkpoints.keySet().iterator().next();
-                    Retained evicted = checkpoints.remove(oldest);
-                    catalog.remove(oldest);
-                    callbacks.dispose(evicted.handle());
+                    evicted = checkpoints.get(checkpoints.keySet().iterator().next());
                 }
             }
             FrameSnapshot source = runtime.latestFrame().orElseThrow(() ->
                     new IllegalStateException("checkpoint creation requires a completed frame"));
-            CheckpointHandle handle = Objects.requireNonNull(callbacks.create(),
+            handle = Objects.requireNonNull(callbacks.create(),
                     "checkpoint provider returned a null handle");
             CheckpointDescriptor descriptor = new CheckpointDescriptor(
                     evidence.request.checkpointId(), source.executionEpochId(), source.frameId(),
                     evidence.request.description(), runtime.wallTime(), requestId);
             synchronized (this) {
+                if (checkpoints.containsKey(descriptor.id())) {
+                    throw new IllegalStateException(
+                            "checkpoint id was created concurrently");
+                }
                 checkpoints.put(descriptor.id(), new Retained(descriptor, handle));
                 catalog.put(descriptor.id(), descriptor);
+                if (evicted != null) {
+                    checkpoints.remove(evicted.descriptor().id());
+                    catalog.remove(evicted.descriptor().id());
+                }
                 evidence.descriptor = descriptor;
+                installed = true;
+            }
+            handle = null;
+            if (evicted != null) {
+                try {
+                    callbacks.dispose(evicted.handle());
+                } catch (RuntimeException | Error cleanupFailure) {
+                    // The replacement is already installed; a failure to release the evicted
+                    // handle must not fail the committed create or roll back the install.
+                }
             }
         } catch (RuntimeException | Error failure) {
+            if (!installed && handle != null) {
+                try {
+                    callbacks.dispose(handle);
+                } catch (RuntimeException | Error cleanupFailure) {
+                    if (cleanupFailure != failure) {
+                        failure.addSuppressed(cleanupFailure);
+                    }
+                }
+            }
             ApplicationFailureEvidence failureEvidence = describeFailure(
                     requestId, "checkpoint.create", failure);
             synchronized (this) {

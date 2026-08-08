@@ -1071,6 +1071,7 @@ final class AgentRuntimeTest {
                                 throw new IllegalStateException("dispatch latch timed out");
                             }
                         } catch (InterruptedException failure) {
+                            Thread.currentThread().interrupt();
                             throw new IllegalStateException(failure);
                         }
                     }
@@ -1099,6 +1100,7 @@ final class AgentRuntimeTest {
                         throw new IllegalStateException("dispose latch timed out");
                     }
                 } catch (InterruptedException failure) {
+                    Thread.currentThread().interrupt();
                     throw new IllegalStateException(failure);
                 }
             }
@@ -1118,42 +1120,45 @@ final class AgentRuntimeTest {
         FutureTask<InputInjection> queuedTask = new FutureTask<>(() -> runtime.inputs().inject(
                 "keyboard", "race-b", parameters, OptionalLong.empty(),
                 Duration.ofSeconds(1)));
-        Thread admittedThread = Thread.ofVirtual().name("race-a").unstarted(admittedTask);
-        Thread queuedThread = Thread.ofVirtual().name("race-b").unstarted(queuedTask);
-
-        admittedThread.start();
-        assertTrue(dispatchEntered.await(5, TimeUnit.SECONDS),
-                "admitted inject must hold the submission lock before close");
-        queuedThread.start();
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        boolean blockedOnSubmissionLock = false;
-        while (System.nanoTime() < deadline) {
-            if (queuedThread.getState() == Thread.State.BLOCKED
-                    && Arrays.stream(queuedThread.getStackTrace()).anyMatch(frame ->
-                            frame.getClassName().equals(InputRegistry.class.getName())
-                                    && frame.getMethodName().equals("inject"))) {
-                blockedOnSubmissionLock = true;
-                break;
-            }
-            Thread.sleep(10);
-        }
-        assertTrue(blockedOnSubmissionLock,
-                "race-b must be provably BLOCKED on InputRegistry.submissionLock before close");
-
-        Thread releaser = new Thread(() -> {
-            try {
-                if (!disposeEntered.await(5, TimeUnit.SECONDS)) {
+        Thread releaser = null;
+        Thread admittedThread = null;
+        Thread queuedThread = null;
+        Throwable primaryFailure = null;
+        try {
+            releaser = new Thread(() -> {
+                try {
+                    if (!disposeEntered.await(5, TimeUnit.SECONDS)) {
+                        return;
+                    }
+                } catch (InterruptedException failure) {
+                    Thread.currentThread().interrupt();
                     return;
                 }
-            } catch (InterruptedException failure) {
-                throw new IllegalStateException(failure);
+                releaseDispatch.countDown();
+                releaseDispose.countDown();
+            }, "input-close-releaser");
+            admittedThread = Thread.ofVirtual().name("race-a").unstarted(admittedTask);
+            queuedThread = Thread.ofVirtual().name("race-b").unstarted(queuedTask);
+            releaser.start();
+            admittedThread.start();
+            assertTrue(dispatchEntered.await(5, TimeUnit.SECONDS),
+                    "admitted inject must hold the submission lock before close");
+            queuedThread.start();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            boolean blockedOnSubmissionLock = false;
+            while (System.nanoTime() < deadline) {
+                if (queuedThread.getState() == Thread.State.BLOCKED
+                        && Arrays.stream(queuedThread.getStackTrace()).anyMatch(frame ->
+                                frame.getClassName().equals(InputRegistry.class.getName())
+                                        && frame.getMethodName().equals("inject"))) {
+                    blockedOnSubmissionLock = true;
+                    break;
+                }
+                Thread.sleep(10);
             }
-            releaseDispatch.countDown();
-            releaseDispose.countDown();
-        }, "input-close-releaser");
-        releaser.start();
+            assertTrue(blockedOnSubmissionLock,
+                    "race-b must be provably BLOCKED on InputRegistry.submissionLock before close");
 
-        try {
             runtime.close();
             admittedTask.get(5, TimeUnit.SECONDS);
             try {
@@ -1165,25 +1170,81 @@ final class AgentRuntimeTest {
                 assertEquals(RuntimeErrorCode.RUNTIME_CLOSED, rejected.code(),
                         "race-b passed the outer check, so rejection must come from the inner recheck");
             }
-        } finally {
-            queuedThread.interrupt();
-            admittedThread.interrupt();
-            queuedThread.join(5_000);
-            admittedThread.join(5_000);
-            releaseDispatch.countDown();
-            releaseDispose.countDown();
-            releaser.join(5_000);
-        }
 
-        assertEquals(RuntimeStatus.CLOSED, runtime.status());
-        assertEquals(0, runtime.inputs().retainedInputHandlers());
-        assertEquals(0, runtime.inputs().retainedPendingInjections());
-        assertEquals(0, executions.get());
-        assertEquals(CommandState.REJECTED, runtime.commands().orElseThrow()
-                .status("race-a").status().orElseThrow().state());
-        assertEquals(0, runtime.commands().orElseThrow().retainedLiveCommands());
-        queue.forEach(Runnable::run);
-        assertEquals(0, executions.get());
+            assertEquals(RuntimeStatus.CLOSED, runtime.status());
+            assertEquals(0, runtime.inputs().retainedInputHandlers());
+            assertEquals(0, runtime.inputs().retainedPendingInjections());
+            assertEquals(0, executions.get());
+            assertEquals(CommandState.REJECTED, runtime.commands().orElseThrow()
+                    .status("race-a").status().orElseThrow().state());
+            assertEquals(0, runtime.commands().orElseThrow().retainedLiveCommands());
+            queue.forEach(Runnable::run);
+            assertEquals(0, executions.get());
+        } catch (Throwable failure) {
+            primaryFailure = failure;
+            throw failure;
+        } finally {
+            Throwable cleanupFailure = terminateCloseRaceThreads(
+                    releaseDispatch, releaseDispose, releaser, admittedThread, queuedThread);
+            if (cleanupFailure != null) {
+                if (primaryFailure != null) {
+                    primaryFailure.addSuppressed(cleanupFailure);
+                } else {
+                    throw new AssertionError("close race cleanup failed", cleanupFailure);
+                }
+            }
+        }
+    }
+
+    private static Throwable terminateCloseRaceThreads(CountDownLatch releaseDispatch,
+            CountDownLatch releaseDispose, Thread releaser, Thread admittedThread,
+            Thread queuedThread) {
+        Throwable cleanupFailure = null;
+        try {
+            releaseDispatch.countDown();
+        } catch (Throwable failure) {
+            cleanupFailure = appendCleanupFailure(cleanupFailure, failure);
+        }
+        try {
+            releaseDispose.countDown();
+        } catch (Throwable failure) {
+            cleanupFailure = appendCleanupFailure(cleanupFailure, failure);
+        }
+        Thread[] threads = {releaser, admittedThread, queuedThread};
+        for (Thread thread : threads) {
+            if (thread == null) {
+                continue;
+            }
+            try {
+                thread.interrupt();
+            } catch (Throwable failure) {
+                cleanupFailure = appendCleanupFailure(cleanupFailure, failure);
+            }
+        }
+        for (Thread thread : threads) {
+            if (thread == null) {
+                continue;
+            }
+            try {
+                thread.join(1_000);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+            if (thread.isAlive()) {
+                cleanupFailure = appendCleanupFailure(cleanupFailure,
+                        new AssertionError("close race thread did not terminate: "
+                                + thread.getName()));
+            }
+        }
+        return cleanupFailure;
+    }
+
+    private static Throwable appendCleanupFailure(Throwable failure, Throwable next) {
+        if (failure == null) {
+            return next;
+        }
+        failure.addSuppressed(next);
+        return failure;
     }
 
     private static void assertClosedSubmission(org.junit.jupiter.api.function.Executable submission) {

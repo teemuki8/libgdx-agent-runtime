@@ -1,8 +1,8 @@
 package io.github.teemuki8.libgdx.agent.runtime.mcp;
 
+import io.github.teemuki8.libgdx.agent.runtime.protocol.ProtocolJson;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeProtocolService;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeVersion;
-import io.modelcontextprotocol.json.McpJsonMapper;
 import io.modelcontextprotocol.json.TypeRef;
 import io.modelcontextprotocol.server.McpAsyncServer;
 import io.modelcontextprotocol.server.McpServer;
@@ -26,6 +26,14 @@ import reactor.core.publisher.Mono;
 
 /** MCP SDK 2.0 server exposing only the fixed runtime tools over one stdio connection. */
 public final class RuntimeMcpServer implements AutoCloseable {
+    /**
+     * JSON-RPC implementation-defined error code returned when an outbound response message
+     * would exceed {@link ProtocolJson#MAX_RESPONSE_BYTES}. The transport cannot recover the
+     * oversized message, so the client receives one bounded typed error instead of the
+     * partial oversized frame; later requests still work.
+     */
+    static final int RESPONSE_LIMIT_EXCEEDED = -32001;
+
     private final StdioProvider transport;
     private final RuntimeToolHandler handler;
     private final McpAsyncServer server;
@@ -40,8 +48,21 @@ public final class RuntimeMcpServer implements AutoCloseable {
             RuntimeProtocolService protocol,
             InputStream input,
             OutputStream output,
-            McpJsonMapper mapper) {
-        transport = new StdioProvider(input, output, mapper);
+            ConstrainedMcpJsonMapper mapper) {
+        this(protocol, input, output, mapper, ProtocolJson.MAX_RESPONSE_BYTES);
+    }
+
+    /**
+     * Test seam mirroring {@link io.github.teemuki8.libgdx.agent.runtime.mcp.BoundedJsonRpcFramer}:
+     * shrinks the authoritative outbound response cap without changing any production path.
+     */
+    RuntimeMcpServer(
+            RuntimeProtocolService protocol,
+            InputStream input,
+            OutputStream output,
+            ConstrainedMcpJsonMapper mapper,
+            int maxResponseBytes) {
+        transport = new StdioProvider(input, output, mapper, maxResponseBytes);
         RuntimeToolCatalog catalog = new RuntimeToolCatalog(
                 protocol.toolNames(), protocol.actionCatalog(), protocol.inputCatalog());
         handler = new RuntimeToolHandler(protocol, catalog);
@@ -80,7 +101,8 @@ public final class RuntimeMcpServer implements AutoCloseable {
     }
 
     private static final class StdioProvider implements McpServerTransportProvider {
-        private final McpJsonMapper mapper;
+        private final ConstrainedMcpJsonMapper mapper;
+        private final int maxResponseBytes;
         private final InputStream input;
         private final OutputStream output;
         private final ExecutorService readerExecutor =
@@ -89,10 +111,12 @@ public final class RuntimeMcpServer implements AutoCloseable {
         private final CompletableFuture<Void> termination = new CompletableFuture<>();
         private volatile McpServerSession session;
 
-        StdioProvider(InputStream input, OutputStream output, McpJsonMapper mapper) {
+        StdioProvider(InputStream input, OutputStream output,
+                ConstrainedMcpJsonMapper mapper, int maxResponseBytes) {
             this.input = input;
             this.output = output;
             this.mapper = mapper;
+            this.maxResponseBytes = maxResponseBytes;
         }
 
         @Override public void setSessionFactory(McpServerSession.Factory factory) {
@@ -175,8 +199,17 @@ public final class RuntimeMcpServer implements AutoCloseable {
             }
         }
 
-        /** Writes a bounded JSON-RPC error response with a null id; rejected input is never echoed. */
+        /** Writes a bounded JSON-RPC error response; rejected input is never echoed. */
         private void writeError(int code, String message) {
+            writeError(code, message, null);
+        }
+
+        /**
+         * Writes one bounded JSON-RPC error response with the given id. The envelope is a
+         * tiny fixed map serialized directly (never through the bounded response sink), so
+         * the fallback itself is bounded and cannot recurse into response serialization.
+         */
+        private void writeError(int code, String message, Object id) {
             if (closed.get()) {
                 return;
             }
@@ -187,7 +220,7 @@ public final class RuntimeMcpServer implements AutoCloseable {
                 detail.put("data", null);
                 Map<String, Object> envelope = new LinkedHashMap<>();
                 envelope.put("jsonrpc", "2.0");
-                envelope.put("id", null);
+                envelope.put("id", id);
                 envelope.put("error", detail);
                 String json = mapper.writeValueAsString(envelope);
                 synchronized (output) {
@@ -206,20 +239,45 @@ public final class RuntimeMcpServer implements AutoCloseable {
                     if (closed.get()) {
                         return;
                     }
+                    // The actual message is serialized exactly once into a bounded
+                    // buffer; those exact checked bytes plus the newline are written.
+                    BoundedOutputStream sink = new BoundedOutputStream(maxResponseBytes);
                     try {
-                        String json = mapper.writeValueAsString(message)
-                                .replace("\r\n", "\\n")
-                                .replace("\n", "\\n")
-                                .replace("\r", "\\n");
+                        mapper.writeValue(sink, message);
                         synchronized (output) {
-                            output.write(json.getBytes(StandardCharsets.UTF_8));
+                            sink.writeTo(output);
                             output.write('\n');
                             output.flush();
                         }
-                    } catch (IOException failure) {
-                        throw new IllegalStateException("failed to write stdio response", failure);
+                    } catch (RuntimeException | IOException failure) {
+                        // Jackson 3 reports the sink's checked rejection as an unchecked
+                        // DatabindException with reference-chain context, so overflow is
+                        // detected by the sink's own flag, never by exception type. On
+                        // overflow, never emit a partial oversized frame and never return
+                        // an erroring Mono (a sendMessage error terminates the whole
+                        // stdio session): one bounded typed error directly, then the
+                        // session keeps working. Any other failure stays a real
+                        // transport error.
+                        if (sink.overflowed()) {
+                            writeOverflowError(message);
+                            return;
+                        }
+                        throw new IllegalStateException(
+                                "failed to write stdio response", failure);
                     }
                 });
+            }
+
+            /**
+             * Answers an oversized outbound message with one bounded typed JSON-RPC error,
+             * echoing the response id (or a null id for outbound notifications). The error
+             * is written directly to stdio, never through {@code sendMessage}, so it cannot
+             * recurse or be bounded again.
+             */
+            private void writeOverflowError(McpSchema.JSONRPCMessage message) {
+                Object id = message instanceof McpSchema.JSONRPCResponse response
+                        ? response.id() : null;
+                writeError(RESPONSE_LIMIT_EXCEEDED, "response exceeds byte limit", id);
             }
 
             @Override public <T> T unmarshalFrom(Object data, TypeRef<T> typeRef) {

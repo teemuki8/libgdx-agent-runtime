@@ -88,7 +88,6 @@ public final class RuntimeToolHandler implements AutoCloseable {
                 return error(failure.error().code().name(), failure.error().message());
             }
             RuntimeResponse.Success success = (RuntimeResponse.Success) response;
-            ProtocolJson.encode(success);
             LinkedHashMap<String, Object> content = ProtocolJson.mapper(success.version())
                     .convertValue(success.result(), MAP_TYPE);
             return McpSchema.CallToolResult.builder()
@@ -96,8 +95,6 @@ public final class RuntimeToolHandler implements AutoCloseable {
                     .addTextContent(MAPPER.writeValueAsString(content))
                     .isError(false)
                     .build();
-        } catch (ProtocolJson.ProtocolJsonException failure) {
-            return error(failure.code().name(), failure.getMessage());
         } catch (RuntimeException failure) {
             return error("INVALID_QUERY", "arguments could not be decoded");
         } catch (com.fasterxml.jackson.core.JsonProcessingException failure) {

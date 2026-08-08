@@ -1,5 +1,6 @@
 package io.github.teemuki8.libgdx.agent.runtime.mcp;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -24,6 +25,8 @@ import io.github.teemuki8.libgdx.agent.runtime.core.FactMetadata;
 import io.github.teemuki8.libgdx.agent.runtime.core.InputSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.ChangeCause;
 import io.github.teemuki8.libgdx.agent.runtime.core.Reason;
+import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeConfiguration;
+import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeLimits;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import io.github.teemuki8.libgdx.agent.runtime.core.SessionId;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationControllerSpec;
@@ -37,6 +40,7 @@ import io.modelcontextprotocol.spec.McpSchema;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayDeque;
@@ -1060,6 +1064,155 @@ final class RuntimeMcpTest {
         assertTrue(outcome.mapper().deserialized().isEmpty());
     }
 
+    @Test
+    void boundedSinkAcceptsExactLimitAndRejectsOneMoreByteWithoutPartialRetention()
+            throws Exception {
+        BoundedOutputStream sink = new BoundedOutputStream(10);
+        sink.write(new byte[]{1, 2, 3, 4, 5, 6, 7, 8, 9, 10});
+        assertEquals(10, sink.count());
+        assertArrayEquals(new byte[]{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, sink.toByteArray());
+        assertThrows(BoundedOutputStream.OverflowException.class, () -> sink.write(11));
+        assertEquals(10, sink.count());
+        assertEquals(10, sink.toByteArray().length);
+        // An overflowing range is rejected whole: no partial prefix is retained.
+        assertThrows(BoundedOutputStream.OverflowException.class,
+                () -> sink.write(new byte[]{1, 2, 3}, 0, 3));
+        assertEquals(10, sink.count());
+        assertEquals(10, sink.toByteArray().length);
+    }
+
+    @Test
+    void constrainedMapperStreamsExactlyToTheResponseCapAndStopsAtOneMore() throws Exception {
+        ConstrainedMcpJsonMapper mapper = new ConstrainedMcpJsonMapper();
+        BoundedOutputStream probe = new BoundedOutputStream(ProtocolJson.MAX_RESPONSE_BYTES);
+        mapper.writeValue(probe, McpSchema.JSONRPCResponse.result(1, "a".repeat(8_000_000)));
+        int overhead = (int) probe.count() - 8_000_000;
+        int exactLength = ProtocolJson.MAX_RESPONSE_BYTES - overhead;
+        BoundedOutputStream exact = new BoundedOutputStream(ProtocolJson.MAX_RESPONSE_BYTES);
+        mapper.writeValue(exact, McpSchema.JSONRPCResponse.result(1, "a".repeat(exactLength)));
+        assertEquals(ProtocolJson.MAX_RESPONSE_BYTES, exact.count());
+        assertEquals(ProtocolJson.MAX_RESPONSE_BYTES, exact.toByteArray().length);
+
+        BoundedOutputStream oneOver = new BoundedOutputStream(ProtocolJson.MAX_RESPONSE_BYTES);
+        // Jackson 3 reports the sink's checked rejection as an unchecked JacksonException
+        // with reference-chain context; the sink's own flag is the overflow evidence.
+        RuntimeException failure = assertThrows(RuntimeException.class, () -> mapper.writeValue(
+                oneOver, McpSchema.JSONRPCResponse.result(1, "a".repeat(exactLength + 1))));
+        assertInstanceOf(tools.jackson.core.JacksonException.class, failure);
+        assertTrue(oneOver.overflowed());
+        assertTrue(oneOver.count() <= ProtocolJson.MAX_RESPONSE_BYTES);
+    }
+
+    @Test
+    @Timeout(30)
+    void stdioResponseBytesCheckedAreExactlyTheBytesSent() throws Exception {
+        StdioOutcome outcome = runServer(initializeFrame(9));
+        assertNull(outcome.failure());
+        List<byte[]> serialized = outcome.mapper().serialized();
+        assertEquals(1, serialized.size());
+        byte[] outputBytes = outcome.output().toByteArray();
+        assertTrue(outputBytes.length > 0);
+        assertEquals('\n', outputBytes[outputBytes.length - 1]);
+        byte[] line = Arrays.copyOf(outputBytes, outputBytes.length - 1);
+        assertArrayEquals(serialized.get(0), line);
+        Map<String, Object> response =
+                JSON.readValue(line, new TypeReference<Map<String, Object>>() {});
+        assertEquals(9, response.get("id"));
+        assertTrue(response.containsKey("result"));
+    }
+
+    @Test
+    @Timeout(30)
+    void stdioOversizedToolResultReturnsBoundedErrorAndLaterRequestsStillWork() throws Exception {
+        // The tiny cap admits the initialize and session-list responses but not the
+        // entity result, proving exact-cap rejection and bounded error recovery.
+        Fixture fixture = blobRuntime("mcp-fixture", "a".repeat(20_000));
+        try (PublishedRuntime publication = fixture.registry().publish(fixture.runtime())) {
+            RuntimeProtocolService service = new RuntimeProtocolService(fixture.registry());
+            byte[] input = concat(
+                    initializeFrame(13),
+                    initializedNotification(),
+                    (entityToolCall(14, "mcp-fixture") + "\n").getBytes(StandardCharsets.UTF_8),
+                    (sessionsToolCall(15) + "\n").getBytes(StandardCharsets.UTF_8));
+            StdioOutcome outcome = runServer(service, input, 2_048);
+            assertNull(outcome.failure());
+            List<Map<String, Object>> responses = responses(outcome);
+            assertEquals(3, responses.size());
+            assertTrue(withId(responses, 13).containsKey("result"));
+            Map<String, Object> oversized = withId(responses, 14);
+            assertEquals(-32001, errorCode(oversized));
+            assertTrue(withId(responses, 15).containsKey("result"));
+            // The oversized result never leaks a partial frame or its content.
+            assertFalse(outcome.output().toString(StandardCharsets.UTF_8)
+                    .contains("a".repeat(4_096)));
+            // The checked payload for the oversized message was rejected whole, never retained.
+            assertEquals(0, outcome.mapper().serialized().get(1).length);
+            assertEquals(3, outcome.mapper().serialized().size());
+        }
+    }
+
+    @Test
+    @Timeout(60)
+    void stdioOversizedAggregateToolResultCannotRetainUnboundedMessageBytes() throws Exception {
+        String payload = "a".repeat(10_000_000);
+        Fixture fixture = blobRuntime("mcp-fixture", payload);
+        try (PublishedRuntime publication = fixture.registry().publish(fixture.runtime())) {
+            RuntimeProtocolService service = new RuntimeProtocolService(fixture.registry());
+            byte[] input = concat(
+                    initializeFrame(16),
+                    initializedNotification(),
+                    (entityToolCall(17, "mcp-fixture") + "\n").getBytes(StandardCharsets.UTF_8));
+            StdioOutcome outcome = runServer(service, input);
+            assertNull(outcome.failure());
+            List<Map<String, Object>> responses = responses(outcome);
+            assertEquals(2, responses.size());
+            assertTrue(withId(responses, 16).containsKey("result"));
+            Map<String, Object> oversized = withId(responses, 17);
+            assertEquals(17, oversized.get("id"));
+            assertEquals(-32001, errorCode(oversized));
+            // One bounded typed error line only: no partial oversized prefix, no 10 MiB emission.
+            assertTrue(outcome.output().size() < 1_000_000,
+                    "the oversized response must not be written to stdio");
+            assertFalse(outcome.output().toString(StandardCharsets.UTF_8)
+                    .contains("a".repeat(4_096)));
+            // The transport's bounded check rejected the 10 MiB message whole: the serialized
+            // probe holds an empty marker, never the oversized array.
+            assertEquals(2, outcome.mapper().serialized().size());
+            assertEquals(0, outcome.mapper().serialized().get(1).length);
+        }
+    }
+
+    private static byte[] initializedNotification() {
+        return "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n"
+                .getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static String entityToolCall(int id, String sessionId) {
+        return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"method\":\"tools/call\",\"params\":{"
+                + "\"name\":\"runtime_entity\",\"arguments\":{\"sessionId\":\"" + sessionId + "\","
+                + "\"entityId\":\"enemy-1\"}}}";
+    }
+
+    private static String sessionsToolCall(int id) {
+        return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"method\":\"tools/call\",\"params\":{"
+                + "\"name\":\"runtime_sessions\",\"arguments\":{}}}";
+    }
+
+    private static Fixture blobRuntime(String sessionId, String payload) {
+        RuntimeLimits limits = new RuntimeLimits(240, 2_000, 5_000, 128, 256, 256, 64,
+                Math.max(payload.length() + 1_024, 2_048), 256, 16, 1_000);
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of(sessionId))
+                .configuration(new RuntimeConfiguration(true, limits))
+                .build();
+        runtime.entities().register(EntityId.of("enemy-1"), EntityType.of("enemy"),
+                () -> "Enemy", inspector -> inspector.property("blob",
+                        () -> RuntimeValues.string(payload)));
+        runtime.start();
+        runtime.frame(1, () -> {});
+        return new Fixture(runtime, new RuntimeRegistry());
+    }
+
     private static byte[] concat(byte[]... parts) {
         int total = 0;
         for (byte[] part : parts) {
@@ -1093,11 +1246,20 @@ final class RuntimeMcpTest {
     }
 
     private static StdioOutcome runServer(byte[] input) {
-        RecordingMapper mapper = new RecordingMapper();
+        return runServer(new RuntimeProtocolService(new RuntimeRegistry()), input,
+                ProtocolJson.MAX_RESPONSE_BYTES);
+    }
+
+    private static StdioOutcome runServer(RuntimeProtocolService service, byte[] input) {
+        return runServer(service, input, ProtocolJson.MAX_RESPONSE_BYTES);
+    }
+
+    private static StdioOutcome runServer(
+            RuntimeProtocolService service, byte[] input, int maxResponseBytes) {
+        RecordingMapper mapper = new RecordingMapper(maxResponseBytes);
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         RuntimeMcpServer server = new RuntimeMcpServer(
-                new RuntimeProtocolService(new RuntimeRegistry()),
-                new ByteArrayInputStream(input), output, mapper);
+                service, new ByteArrayInputStream(input), output, mapper, maxResponseBytes);
         Throwable failure = null;
         try {
             server.awaitTermination();
@@ -1133,46 +1295,50 @@ final class RuntimeMcpTest {
     private record StdioOutcome(
             ByteArrayOutputStream output, RecordingMapper mapper, Throwable failure) {}
 
-    private static final class RecordingMapper implements McpJsonMapper {
+    private static final class RecordingMapper extends ConstrainedMcpJsonMapper {
+        private final int maxResponseBytes;
         private final List<String> deserialized = new ArrayList<>();
-        private final McpJsonMapper delegate = new ConstrainedMcpJsonMapper();
+        private final List<byte[]> serialized = new ArrayList<>();
+
+        RecordingMapper(int maxResponseBytes) {
+            this.maxResponseBytes = maxResponseBytes;
+        }
 
         List<String> deserialized() {
             return deserialized;
         }
 
-        @Override public <T> T readValue(String content, Class<T> type) throws IOException {
-            deserialized.add(content);
-            return delegate.readValue(content, type);
+        /**
+         * One bounded payload per outbound {@link McpSchema.JSONRPCMessage}: the exact bytes
+         * the transport checked against the response cap, or an empty marker when the bounded
+         * check overflowed (no oversized message array is ever retained).
+         */
+        List<byte[]> serialized() {
+            return serialized;
         }
 
-        @Override public <T> T readValue(byte[] content, Class<T> type) throws IOException {
-            return delegate.readValue(content, type);
+        @Override public <T> T readValue(String content, Class<T> type) throws IOException {
+            deserialized.add(content);
+            return super.readValue(content, type);
         }
 
         @Override public <T> T readValue(String content, TypeRef<T> type) throws IOException {
             deserialized.add(content);
-            return delegate.readValue(content, type);
+            return super.readValue(content, type);
         }
 
-        @Override public <T> T readValue(byte[] content, TypeRef<T> type) throws IOException {
-            return delegate.readValue(content, type);
-        }
-
-        @Override public <T> T convertValue(Object fromValue, Class<T> type) {
-            return delegate.convertValue(fromValue, type);
-        }
-
-        @Override public <T> T convertValue(Object fromValue, TypeRef<T> type) {
-            return delegate.convertValue(fromValue, type);
-        }
-
-        @Override public String writeValueAsString(Object value) throws IOException {
-            return delegate.writeValueAsString(value);
-        }
-
-        @Override public byte[] writeValueAsBytes(Object value) throws IOException {
-            return delegate.writeValueAsBytes(value);
+        @Override public void writeValue(OutputStream out, Object value) throws IOException {
+            BoundedOutputStream probe = new BoundedOutputStream(maxResponseBytes);
+            try {
+                super.writeValue(probe, value);
+                serialized.add(probe.toByteArray());
+            } catch (RuntimeException | IOException failure) {
+                if (!probe.overflowed()) {
+                    throw failure;
+                }
+                serialized.add(new byte[0]);
+            }
+            super.writeValue(out, value);
         }
     }
 

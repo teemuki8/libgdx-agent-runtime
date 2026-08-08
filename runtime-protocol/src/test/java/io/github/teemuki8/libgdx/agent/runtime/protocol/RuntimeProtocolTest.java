@@ -20,14 +20,22 @@ import io.github.teemuki8.libgdx.agent.runtime.core.AssertionStatus;
 import io.github.teemuki8.libgdx.agent.runtime.core.ControlStopReason;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityType;
+import io.github.teemuki8.libgdx.agent.runtime.core.EventId;
 import io.github.teemuki8.libgdx.agent.runtime.core.EventSpec;
+import io.github.teemuki8.libgdx.agent.runtime.core.EventType;
+import io.github.teemuki8.libgdx.agent.runtime.core.FactMetadata;
 import io.github.teemuki8.libgdx.agent.runtime.core.FrameId;
+import io.github.teemuki8.libgdx.agent.runtime.core.QueryPage;
+import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeEvent;
 import io.github.teemuki8.libgdx.agent.runtime.core.InputInjectionState;
 import io.github.teemuki8.libgdx.agent.runtime.core.InputSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeAssertion;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import io.github.teemuki8.libgdx.agent.runtime.core.SessionId;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationControllerSpec;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayDeque;
@@ -1956,6 +1964,109 @@ final class RuntimeProtocolTest {
                             ProtocolVersion.V2, "diag-v2", "diag-v2", query))));
             assertInstanceOf(RuntimeResponse.Success.class, v1Decoded);
             assertInstanceOf(RuntimeResponse.Success.class, v2Decoded);
+        }
+    }
+
+    @Test
+    void writeResponseMatchesEncodeForV1AndV2Responses() throws Exception {
+        AgentRuntime runtime = verticalRuntime();
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime)) {
+            RuntimeProtocolService service = new RuntimeProtocolService(registry);
+            List<RuntimeResponse> responses = List.of(
+                    service.execute(new RuntimeRequest(ProtocolVersion.V1, "w1", "fixture",
+                            new RuntimeCommand.Capabilities())),
+                    service.execute(new RuntimeRequest(ProtocolVersion.V1, "w2", "fixture",
+                            new RuntimeCommand.Entity("enemy-1", 0, 1, 10))),
+                    service.execute(new RuntimeRequest(ProtocolVersion.V2, "w3", "fixture",
+                            new RuntimeCommand.Capabilities())),
+                    service.execute(new RuntimeRequest(ProtocolVersion.V2, "w4", "fixture",
+                            new RuntimeCommand.Snapshot(null, "enemy-1", false,
+                                    "enemy", false, 10))));
+            for (RuntimeResponse response : responses) {
+                byte[] encoded = ProtocolJson.encode(response);
+                ByteArrayOutputStream sink = new ByteArrayOutputStream();
+                ProtocolJson.writeResponse(response, sink);
+                assertArrayEquals(encoded, sink.toByteArray());
+            }
+        }
+    }
+
+    @Test
+    void writeResponseHonorsExactLimitAndAbortsBeforeLimitPlusOne() throws Exception {
+        int base = 8_000_000;
+        int overhead = ProtocolJson.encode(eventsResponseWithHugeString("a".repeat(base))).length
+                - base;
+        assertTrue(overhead > 0 && overhead < 1_000,
+                "serialized overhead must stay small for exact tuning");
+        int exactLength = ProtocolJson.MAX_RESPONSE_BYTES - overhead;
+        RuntimeResponse exact = eventsResponseWithHugeString("a".repeat(exactLength));
+        assertEquals(ProtocolJson.MAX_RESPONSE_BYTES, ProtocolJson.encode(exact).length);
+
+        CountingSink exactSink = new CountingSink();
+        ProtocolJson.writeResponse(exact, exactSink);
+        assertEquals(ProtocolJson.MAX_RESPONSE_BYTES, exactSink.count);
+
+        RuntimeResponse oneOver = eventsResponseWithHugeString("a".repeat(exactLength + 1));
+        assertEquals(ProtocolErrorCode.LIMIT_EXCEEDED,
+                assertThrows(ProtocolJson.ProtocolJsonException.class,
+                        () -> ProtocolJson.encode(oneOver)).code());
+        CountingSink overSink = new CountingSink();
+        assertEquals(ProtocolErrorCode.LIMIT_EXCEEDED,
+                assertThrows(ProtocolJson.ProtocolJsonException.class,
+                        () -> ProtocolJson.writeResponse(oneOver, overSink)).code());
+        assertTrue(overSink.count <= ProtocolJson.MAX_RESPONSE_BYTES,
+                "the overflowing response must never reach byte MAX_RESPONSE_BYTES + 1");
+    }
+
+    @Test
+    void boundedStreamRejectsOnlyTheOverflowingRangeWhole() throws Exception {
+        CountingSink sink = new CountingSink();
+        BoundedOutputStream bounded = new BoundedOutputStream(sink, 10);
+        bounded.write(new byte[]{1, 2, 3, 4, 5, 6, 7, 8, 9, 10});
+        assertEquals(10, bounded.count());
+        assertEquals(10, sink.count);
+        assertThrows(BoundedOutputStream.OverflowException.class, () -> bounded.write(11));
+        assertEquals(10, bounded.count());
+        assertEquals(10, sink.count);
+        // An overflowing range is rejected whole: the delegate sees none of its bytes.
+        assertThrows(BoundedOutputStream.OverflowException.class,
+                () -> bounded.write(new byte[]{1, 2, 3}, 0, 3));
+        assertEquals(10, bounded.count());
+        assertEquals(10, sink.count);
+        // Zero-length ranges never cross the cap and off/len arithmetic stays exact.
+        bounded.write(new byte[]{9, 9, 9}, 1, 0);
+        assertEquals(10, bounded.count());
+        assertEquals(10, sink.count);
+        // A mid-range slice counts only its own length.
+        CountingSink slice = new CountingSink();
+        BoundedOutputStream sliced = new BoundedOutputStream(slice, 10);
+        sliced.write(new byte[]{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, 2, 4);
+        assertEquals(4, sliced.count());
+        assertEquals(4, slice.count);
+    }
+
+    private static RuntimeResponse eventsResponseWithHugeString(String payload) {
+        RuntimeEvent event = new RuntimeEvent(
+                new EventId(1), new FrameId(0), EventType.of("huge"),
+                Optional.empty(), Optional.empty(), FactMetadata.empty(),
+                List.of(RuntimeValues.field("blob", RuntimeValues.string(payload))),
+                List.of());
+        return new RuntimeResponse.Success(ProtocolVersion.V1, "limit-1",
+                new RuntimeResponse.Result.Events(new QueryPage<>(
+                        List.of(event), false, false, Optional.empty(), Optional.empty())));
+    }
+
+    /** Records every delegated byte without materializing a response array. */
+    private static final class CountingSink extends OutputStream {
+        private long count;
+
+        @Override public void write(int value) {
+            count++;
+        }
+
+        @Override public void write(byte[] bytes, int off, int len) {
+            count += len;
         }
     }
 

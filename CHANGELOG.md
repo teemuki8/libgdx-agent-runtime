@@ -32,6 +32,14 @@ All notable changes follow Keep a Changelog structure.
 
 ### Security
 
+- Response byte limits are now enforced during serialization instead of after: `ProtocolJson`
+  streams every response through a hard-cap sink so serialization aborts with `LIMIT_EXCEEDED`
+  before byte `MAX_RESPONSE_BYTES + 1` is retained, `ProtocolJson.encode` reuses that same
+  bounded writer, and the MCP stdio transport serializes each actual `JSONRPCMessage` exactly
+  once into a bounded buffer and writes those exact checked bytes plus the newline. An
+  oversized outbound message becomes one bounded typed JSON-RPC error (`code -32001`, echoing
+  the request id) with no partial prefix, never materializes an unbounded intermediate array,
+  and does not terminate later requests (#49).
 - Stdio JSON-RPC frames are now bounded before parsing: a fixed `ProtocolJson.MAX_REQUEST_BYTES + 1`
   byte framer replaces `BufferedReader.readLine`, strict-UTF-8 decoding (`CodingErrorAction.REPORT`)
   rejects malformed input instead of silently replacing it, and the MCP mapper enforces the protocol

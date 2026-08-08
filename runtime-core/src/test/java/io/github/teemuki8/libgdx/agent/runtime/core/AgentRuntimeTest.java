@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -901,6 +903,56 @@ final class AgentRuntimeTest {
     }
 
     @Test
+    void closeIgnoresIdenticalRepeatedFailuresWithoutSelfSuppression() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        List<Integer> disposed = new ArrayList<>();
+        AtomicInteger created = new AtomicInteger();
+        IllegalStateException shared = new IllegalStateException("shared dispose failure");
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("close-shared-failure"))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .checkpointLimits(new CheckpointLimits(2, 8, 642))
+                .build();
+        runtime.checkpoints().register(new CheckpointProvider() {
+            @Override
+            public CheckpointHandle create() {
+                return new CloseHandle(created.incrementAndGet());
+            }
+
+            @Override
+            public void restore(CheckpointHandle handle) {}
+
+            @Override
+            public void dispose(CheckpointHandle handle) {
+                disposed.add(((CloseHandle) handle).value());
+                throw shared;
+            }
+        });
+        runtime.start();
+        runtime.checkpoints().create("one", null, "create-one", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        runtime.checkpoints().create("two", null, "create-two", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class, runtime::close);
+        assertSame(shared, failure,
+                "the first identical instance must be rethrown unchanged");
+        assertEquals(0, failure.getSuppressed().length,
+                "a throwable must never suppress itself");
+        assertEquals(List.of(1, 2), disposed,
+                "cleanup must continue after the identical repeated failure");
+        assertEquals(RuntimeStatus.CLOSED, runtime.status());
+        assertEquals(0, runtime.checkpoints().retainedCheckpoints());
+        assertEquals(0, runtime.checkpoints().retainedOperations());
+        assertEquals(0, runtime.inputs().retainedInputHandlers());
+        assertEquals(0, runtime.controls().retainedControlCallbacks());
+        // A second close is a no-op.
+        runtime.close();
+        assertEquals(RuntimeStatus.CLOSED, runtime.status());
+    }
+
+    @Test
     void repeatedCreateRegisterStartCloseRetainsNoCallbacks() {
         for (int iteration = 0; iteration < 3; iteration++) {
             ArrayDeque<Runnable> queue = new ArrayDeque<>();
@@ -991,6 +1043,92 @@ final class AgentRuntimeTest {
         assertEquals(0, executions.get());
         assertEquals(CommandState.REJECTED, runtime.commands().orElseThrow()
                 .status("race-input").status().orElseThrow().state());
+        queue.forEach(Runnable::run);
+        assertEquals(0, executions.get());
+    }
+
+    @Test
+    void closeBarrierRejectsSubmissionTargetingRegistryAndNeverRepopulates() throws Exception {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        AtomicBoolean armed = new AtomicBoolean();
+        CountDownLatch dispatchEntered = new CountDownLatch(1);
+        CountDownLatch releaseDispatch = new CountDownLatch(1);
+        CountDownLatch releaseSignal = new CountDownLatch(1);
+        AtomicInteger executions = new AtomicInteger();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("input-close-barrier"))
+                .clock(() -> 1)
+                .commandDispatcher(task -> {
+                    queue.addLast(task);
+                    if (armed.get()) {
+                        dispatchEntered.countDown();
+                        try {
+                            if (!releaseDispatch.await(5, TimeUnit.SECONDS)) {
+                                throw new IllegalStateException("dispatch latch timed out");
+                            }
+                        } catch (InterruptedException failure) {
+                            throw new IllegalStateException(failure);
+                        }
+                    }
+                })
+                .build();
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {}).resume(() -> {}).tick(delta -> {}).build());
+        runtime.inputs().register(InputSpec.builder("keyboard")
+                .requiredString("key")
+                .handler(ignored -> executions.incrementAndGet()).build());
+        runtime.start();
+        runtime.controls().control(true, "pause-1", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+
+        Thread releaser = new Thread(() -> {
+            try {
+                if (!releaseSignal.await(5, TimeUnit.SECONDS)) {
+                    return;
+                }
+            } catch (InterruptedException failure) {
+                throw new IllegalStateException(failure);
+            }
+            releaseDispatch.countDown();
+        }, "input-releaser");
+        releaser.start();
+        armed.set(true);
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            RuntimeValue.ObjectValue parameters = RuntimeValues.object(
+                    RuntimeValues.field("key", RuntimeValues.string("X")));
+            // First submission is admitted before the close barrier and holds the submission lock.
+            var admitted = executor.submit(() -> runtime.inputs().inject(
+                    "keyboard", "race-a", parameters, OptionalLong.empty(),
+                    Duration.ofSeconds(1)));
+            assertTrue(dispatchEntered.await(5, TimeUnit.SECONDS),
+                    "admitted inject must be in flight holding the submission lock");
+            // Second submission starts behind the first; the close barrier is published while it
+            // is still queued on the submission lock.
+            var queued = executor.submit(() -> runtime.inputs().inject(
+                    "keyboard", "race-b", parameters, OptionalLong.empty(),
+                    Duration.ofSeconds(1)));
+            releaseSignal.countDown();
+            runtime.close();
+            admitted.get(5, TimeUnit.SECONDS);
+            try {
+                queued.get(5, TimeUnit.SECONDS);
+                throw new AssertionError("queued submission must reject the closing runtime");
+            } catch (java.util.concurrent.ExecutionException failure) {
+                assertInstanceOf(AgentRuntimeException.class, failure.getCause());
+                AgentRuntimeException rejected = (AgentRuntimeException) failure.getCause();
+                assertEquals(RuntimeErrorCode.RUNTIME_CLOSED, rejected.code(),
+                        "the queued submission must observe the close barrier inside the registry lock");
+            }
+        }
+        releaser.join(5_000);
+
+        assertEquals(RuntimeStatus.CLOSED, runtime.status());
+        assertEquals(0, runtime.inputs().retainedInputHandlers());
+        assertEquals(0, runtime.inputs().retainedPendingInjections());
+        assertEquals(0, executions.get());
+        assertEquals(CommandState.REJECTED, runtime.commands().orElseThrow()
+                .status("race-a").status().orElseThrow().state());
+        assertEquals(0, runtime.commands().orElseThrow().retainedLiveCommands());
         queue.forEach(Runnable::run);
         assertEquals(0, executions.get());
     }

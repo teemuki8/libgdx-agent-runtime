@@ -223,7 +223,7 @@ public final class CheckpointRegistry {
                 } catch (RuntimeException | Error failure) {
                     if (firstFailure == null) {
                         firstFailure = failure;
-                    } else {
+                    } else if (failure != firstFailure) {
                         firstFailure.addSuppressed(failure);
                     }
                 }

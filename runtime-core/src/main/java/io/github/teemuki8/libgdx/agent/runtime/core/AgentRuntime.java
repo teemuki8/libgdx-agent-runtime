@@ -53,6 +53,7 @@ public final class AgentRuntime implements AutoCloseable {
     private final List<MutableDecision> pendingDecisions = new ArrayList<>();
 
     private volatile RuntimeStatus status = RuntimeStatus.CREATED;
+    private volatile boolean closing;
     private FrameSnapshot previousFrame;
     private FrameId activeFrame;
     private volatile ExecutionEpochId currentEpoch = new ExecutionEpochId(0);
@@ -482,8 +483,11 @@ public final class AgentRuntime implements AutoCloseable {
     /**
      * Closes capture and releases every live provider and pending executable state.
      *
-     * <p>Every registry close hook runs even when an earlier hook fails; the first failure is
-     * rethrown after the runtime publishes {@code CLOSED} and suppresses later failures.
+     * <p>A capture-owned admission barrier is published before any registry hook: new submissions
+     * reject with {@code RUNTIME_CLOSED} as soon as closing begins, while submissions already past
+     * the barrier complete under their submission/registry lock before that registry is cleared.
+     * Every registry close hook runs even when an earlier hook fails; the first failure is
+     * rethrown after the runtime publishes {@code CLOSED} and later failures are suppressed.
      * Completed immutable history, catalogs, and terminal evidence remain queryable.
      */
     @Override
@@ -495,6 +499,7 @@ public final class AgentRuntime implements AutoCloseable {
         if (activeFrame != null) {
             throw lifecycle("runtime cannot close while a frame is open");
         }
+        closing = true;
         Throwable firstFailure = closeHooks();
         staticEntities.clear();
         sources.clear();
@@ -529,7 +534,9 @@ public final class AgentRuntime implements AutoCloseable {
             if (firstFailure == null) {
                 return failure;
             }
-            firstFailure.addSuppressed(failure);
+            if (failure != firstFailure) {
+                firstFailure.addSuppressed(failure);
+            }
             return firstFailure;
         }
     }
@@ -914,9 +921,17 @@ public final class AgentRuntime implements AutoCloseable {
         requireMutableRegistration();
     }
 
-    /** Rejects new submissions once the runtime has closed. */
+    /**
+     * Rejects new submissions once the runtime has started closing or closed.
+     *
+     * <p>Registry submission paths call this both before acquiring their submission lock (fast
+     * admission check) and again inside their registry monitor immediately before retaining
+     * evidence. The capture-owned {@link #closing} barrier is volatile and published before any
+     * registry close hook, so a submission that passed the outer check either completes before its
+     * registry is cleared (lock ordering) or observes the barrier on the inner recheck and rejects.
+     */
     void requireSubmissionsOpen() {
-        if (status == RuntimeStatus.CLOSED) {
+        if (closing || status == RuntimeStatus.CLOSED) {
             throw new AgentRuntimeException(RuntimeErrorCode.RUNTIME_CLOSED, "runtime is closed");
         }
     }

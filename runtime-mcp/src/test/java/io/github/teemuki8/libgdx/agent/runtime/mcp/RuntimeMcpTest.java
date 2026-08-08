@@ -806,6 +806,31 @@ final class RuntimeMcpTest {
     }
 
     @Test
+    void framerStateAtRetentionCapCannotWrapOrReEnterRetentionAndRecovers() throws Exception {
+        // A newline-free frame long enough to overflow an unbounded int counter is
+        // equivalent, for framing purposes, to having already retained limit+1 bytes:
+        // extra bytes must not wrap, re-enter retention, or change the rejection, and a
+        // newline followed by a valid frame still recovers.
+        byte[] input = concat("x".repeat(16).getBytes(StandardCharsets.UTF_8),
+                "\n".getBytes(StandardCharsets.UTF_8),
+                "ok\n".getBytes(StandardCharsets.UTF_8));
+        BoundedJsonRpcFramer seeded = new BoundedJsonRpcFramer(
+                new ByteArrayInputStream(input),
+                BoundedJsonRpcFramer.MAX_FRAME_BYTES + 1, false);
+        assertThrows(BoundedJsonRpcFramer.RejectedLineException.class, seeded::read);
+        assertEquals("ok", seeded.read());
+        assertNull(seeded.read());
+
+        // Seeded directly in drain mode: even with no retained bytes, further content is
+        // never retained and recovery still works.
+        BoundedJsonRpcFramer draining = new BoundedJsonRpcFramer(
+                new ByteArrayInputStream(input), 0, true);
+        assertThrows(BoundedJsonRpcFramer.RejectedLineException.class, draining::read);
+        assertEquals("ok", draining.read());
+        assertNull(draining.read());
+    }
+
+    @Test
     void constrainedMapperEnforcesProtocolJsonStreamBounds() throws Exception {
         McpJsonMapper mapper = new ConstrainedMcpJsonMapper();
         mapper.readValue("[".repeat(32) + "]".repeat(32), Object.class);

@@ -19,12 +19,14 @@ import java.util.Objects;
  * string is materialized. Frames are decoded with a strict {@link CharsetDecoder}
  * ({@link CodingErrorAction#REPORT}), so malformed UTF-8 never reaches the JSON parser.
  *
- * <p>An oversized frame is consumed through its newline without retaining further bytes
- * and surfaces as a recoverable {@link RejectedLineException}; the caller may keep
- * reading. EOF inside a frame surfaces as a terminal {@link UnterminatedFrameException}.
- * A trailing {@code \r} of a {@code \r\n} terminator is stripped for
- * {@code readLine}-compatible behavior; the raw line length (including that {@code \r})
- * counts toward the byte bound.
+ * <p>Once a frame exceeds the byte limit, the retained-byte count is capped at
+ * {@code MAX_FRAME_BYTES + 1} and every further byte is drained without retention, so a
+ * newline-free frame of any length (even past an {@code int} counter's range) cannot wrap,
+ * re-enter retention, or change the rejection. An oversized frame surfaces as a recoverable
+ * {@link RejectedLineException} once its newline arrives; the caller may keep reading. EOF
+ * inside a frame surfaces as a terminal {@link UnterminatedFrameException}. A trailing
+ * {@code \r} of a {@code \r\n} terminator is stripped for {@code readLine}-compatible
+ * behavior; the raw line length (including that {@code \r}) counts toward the byte bound.
  */
 public final class BoundedJsonRpcFramer {
     /** Maximum frame content bytes, excluding the line terminator. */
@@ -38,10 +40,29 @@ public final class BoundedJsonRpcFramer {
             .onUnmappableCharacter(CodingErrorAction.REPORT);
     private int chunkPos;
     private int chunkLen;
+    /** Content bytes retained for the frame being read; capped at {@link #MAX_FRAME_BYTES} + 1. */
+    private int count;
+    /** True once the current frame exceeded the byte limit; further bytes are drained. */
+    private boolean oversized;
 
     /** Creates a framer over the given input; the stream is not owned or closed. */
     public BoundedJsonRpcFramer(InputStream input) {
         this.input = Objects.requireNonNull(input, "input");
+    }
+
+    /**
+     * Test-only seam that seeds the frame state as if {@code initialCount} content bytes had
+     * already been consumed, so arbitrarily long frames can be exercised without allocating
+     * them. {@code initialCount} is capped at {@code MAX_FRAME_BYTES + 1}, mirroring the
+     * retained-state invariant after the limit is crossed.
+     */
+    BoundedJsonRpcFramer(InputStream input, int initialCount, boolean oversized) {
+        this(input);
+        if (initialCount < 0 || initialCount > MAX_FRAME_BYTES + 1) {
+            throw new IllegalArgumentException("initialCount must be within [0, limit+1]");
+        }
+        this.count = initialCount;
+        this.oversized = oversized;
     }
 
     /**
@@ -56,32 +77,44 @@ public final class BoundedJsonRpcFramer {
      * reading is possible
      */
     public String read() throws IOException {
-        int count = 0;
         while (true) {
             int b = readByte();
             if (b < 0) {
-                if (count == 0) {
+                if (count == 0 && !oversized) {
                     return null;
                 }
                 throw new UnterminatedFrameException("unterminated frame at end of input");
             }
             if (b == '\n') {
-                if (count > MAX_FRAME_BYTES) {
+                if (oversized || count > MAX_FRAME_BYTES) {
+                    clearFrameState();
                     throw new RejectedLineException(
                             "frame exceeds " + MAX_FRAME_BYTES + " byte limit");
                 }
-                return decode(count);
+                int length = count;
+                clearFrameState();
+                return decode(length);
             }
-            if (count <= MAX_FRAME_BYTES) {
-                frame[count] = (byte) b;
+            if (!oversized) {
+                if (count == MAX_FRAME_BYTES + 1) {
+                    // Limit+1 content bytes are retained; drain everything further.
+                    oversized = true;
+                } else {
+                    frame[count] = (byte) b;
+                    count++;
+                }
             }
-            count++;
         }
     }
 
-    private String decode(int count) throws RejectedLineException {
+    private void clearFrameState() {
+        count = 0;
+        oversized = false;
+    }
+
+    private String decode(int length) throws RejectedLineException {
         decoder.reset();
-        int end = count;
+        int end = length;
         if (end > 0 && frame[end - 1] == '\r') {
             end--;
         }

@@ -12,11 +12,14 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 final class AgentRuntimeTest {
     @Test
@@ -499,6 +502,51 @@ final class AgentRuntimeTest {
         assertEquals(1, value[0]);
         assertTrue(runtime.latestFrame().isEmpty());
         assertEquals(RuntimeStatus.DISABLED, runtime.status());
+    }
+
+    @Test
+    @Timeout(10)
+    void lifecycleStatusIsVisibleAcrossThreads() throws Exception {
+        AgentRuntime runtime = runtime(RuntimeLimits.developmentDefaults());
+        awaitStatusTransition(runtime, runtime::start,
+                RuntimeStatus.CREATED, RuntimeStatus.RUNNING);
+        awaitStatusTransition(runtime, runtime::close,
+                RuntimeStatus.RUNNING, RuntimeStatus.CLOSED);
+
+        AgentRuntime disabled = AgentRuntime.builder()
+                .configuration(RuntimeConfiguration.disabled()).build();
+        awaitStatusTransition(disabled, disabled::start,
+                RuntimeStatus.CREATED, RuntimeStatus.DISABLED);
+        awaitStatusTransition(disabled, disabled::close,
+                RuntimeStatus.DISABLED, RuntimeStatus.CLOSED);
+    }
+
+    private static void awaitStatusTransition(AgentRuntime runtime, Runnable transition,
+            RuntimeStatus prior, RuntimeStatus expected) throws Exception {
+        CountDownLatch go = new CountDownLatch(1);
+        CountDownLatch polling = new CountDownLatch(1);
+        CountDownLatch observed = new CountDownLatch(1);
+        Thread.ofVirtual().start(() -> {
+            try {
+                go.await();
+                while (runtime.status() == prior) {
+                    polling.countDown();
+                    Thread.onSpinWait();
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError("visibility reader interrupted", e);
+            } finally {
+                observed.countDown();
+            }
+        });
+        go.countDown();
+        assertTrue(polling.await(10, TimeUnit.SECONDS),
+                "reader must poll before the transition runs");
+        transition.run();
+        assertTrue(observed.await(10, TimeUnit.SECONDS),
+                "reader must observe " + expected + " (stale lifecycle status race)");
+        assertEquals(expected, runtime.status());
     }
 
     @Test

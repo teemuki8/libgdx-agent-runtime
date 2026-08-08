@@ -52,7 +52,7 @@ public final class AgentRuntime implements AutoCloseable {
     private final List<RuntimeEvent> pendingEvents = new ArrayList<>();
     private final List<MutableDecision> pendingDecisions = new ArrayList<>();
 
-    private RuntimeStatus status = RuntimeStatus.CREATED;
+    private volatile RuntimeStatus status = RuntimeStatus.CREATED;
     private FrameSnapshot previousFrame;
     private FrameId activeFrame;
     private volatile ExecutionEpochId currentEpoch = new ExecutionEpochId(0);
@@ -98,8 +98,13 @@ public final class AgentRuntime implements AutoCloseable {
         return sessionId;
     }
 
-    /** Returns the current observable lifecycle state. */
-    public synchronized RuntimeStatus status() {
+    /**
+     * Returns the current observable lifecycle state.
+     *
+     * <p>Safe for concurrent readers without a monitor; the backing field is volatile and
+     * transitions remain capture-thread-owned and monotonic.
+     */
+    public RuntimeStatus status() {
         return status;
     }
 

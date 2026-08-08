@@ -22,6 +22,11 @@ All notable changes follow Keep a Changelog structure.
   1_024 code units, appears only in the structured field, and a throwing sanitizer fails closed
   with raw throwables routed to non-stdout local logging only (#50).
 
+### Fixed
+
+- Runtime lifecycle `status()` is now backed by a `volatile` field and reads safely from any
+  thread without a monitor; capture-thread-only monotonic transitions are unchanged (#42).
+
 ### Compatibility notes (2.0)
 
 - Breaking: `CaptureDiagnostic` replaces its `exceptionClass` and `message` components with one

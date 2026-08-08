@@ -2,7 +2,10 @@ package io.github.teemuki8.libgdx.agent.runtime.mcp;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -28,14 +31,22 @@ import io.github.teemuki8.libgdx.agent.runtime.protocol.ProtocolJson;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.PublishedRuntime;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeProtocolService;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeRegistry;
+import io.modelcontextprotocol.json.McpJsonMapper;
+import io.modelcontextprotocol.json.TypeRef;
 import io.modelcontextprotocol.spec.McpSchema;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CompletionException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
@@ -729,6 +740,290 @@ final class RuntimeMcpTest {
                 new ByteArrayInputStream(new byte[0]), new ByteArrayOutputStream());
         server.awaitTermination();
         server.close();
+    }
+
+    @Test
+    void framerAcceptsExactByteLimitAndRejectsOneByteMore() throws Exception {
+        byte[] exact = new byte[ProtocolJson.MAX_REQUEST_BYTES];
+        Arrays.fill(exact, (byte) 'a');
+        BoundedJsonRpcFramer framer = new BoundedJsonRpcFramer(
+                new ByteArrayInputStream(concat(exact, new byte[]{'\n'})));
+        assertEquals(ProtocolJson.MAX_REQUEST_BYTES, framer.read().length());
+        assertNull(framer.read());
+
+        byte[] oneOver = new byte[ProtocolJson.MAX_REQUEST_BYTES + 1];
+        Arrays.fill(oneOver, (byte) 'b');
+        framer = new BoundedJsonRpcFramer(
+                new ByteArrayInputStream(concat(oneOver, new byte[]{'\n'})));
+        assertThrows(BoundedJsonRpcFramer.RejectedLineException.class, framer::read);
+        assertNull(framer.read());
+    }
+
+    @Test
+    void framerDrainsOversizedFrameThroughNewlineWithoutRetention() throws Exception {
+        byte[] huge = new byte[4 * 1024 * 1024];
+        Arrays.fill(huge, (byte) 'x');
+        BoundedJsonRpcFramer framer = new BoundedJsonRpcFramer(new ByteArrayInputStream(
+                concat(huge, new byte[]{'\n'}, "hello\n".getBytes(StandardCharsets.UTF_8))));
+        assertThrows(BoundedJsonRpcFramer.RejectedLineException.class, framer::read);
+        assertEquals("hello", framer.read());
+        assertNull(framer.read());
+    }
+
+    @Test
+    void framerRejectsMalformedUtf8AndContinuesAfterTheLine() throws Exception {
+        byte[] input = concat(
+                new byte[]{(byte) 0xC3, (byte) 0x28, '\n'},
+                "ok\n".getBytes(StandardCharsets.UTF_8));
+        BoundedJsonRpcFramer framer = new BoundedJsonRpcFramer(new ByteArrayInputStream(input));
+        assertThrows(BoundedJsonRpcFramer.RejectedLineException.class, framer::read);
+        assertEquals("ok", framer.read());
+        assertNull(framer.read());
+    }
+
+    @Test
+    void framerStripsCrLfTerminatorForReadLineCompatibility() throws Exception {
+        BoundedJsonRpcFramer framer = new BoundedJsonRpcFramer(new ByteArrayInputStream(
+                "{\"a\":1}\r\nnext\r\n".getBytes(StandardCharsets.UTF_8)));
+        assertEquals("{\"a\":1}", framer.read());
+        assertEquals("next", framer.read());
+        assertNull(framer.read());
+    }
+
+    @Test
+    void framerTerminatesExceptionallyOnPartialFrameAtEof() {
+        BoundedJsonRpcFramer framer = new BoundedJsonRpcFramer(new ByteArrayInputStream(
+                "{\"method\"".getBytes(StandardCharsets.UTF_8)));
+        assertThrows(BoundedJsonRpcFramer.UnterminatedFrameException.class, framer::read);
+    }
+
+    @Test
+    void framerTerminatesExceptionallyOnOversizedFrameWithoutNewline() {
+        byte[] huge = new byte[ProtocolJson.MAX_REQUEST_BYTES + 1];
+        Arrays.fill(huge, (byte) 'x');
+        BoundedJsonRpcFramer framer = new BoundedJsonRpcFramer(new ByteArrayInputStream(huge));
+        assertThrows(BoundedJsonRpcFramer.UnterminatedFrameException.class, framer::read);
+    }
+
+    @Test
+    void constrainedMapperEnforcesProtocolJsonStreamBounds() throws Exception {
+        McpJsonMapper mapper = new ConstrainedMcpJsonMapper();
+        mapper.readValue("[".repeat(32) + "]".repeat(32), Object.class);
+        assertThrows(IOException.class, () ->
+                mapper.readValue("[".repeat(33) + "]".repeat(33), Object.class));
+        mapper.readValue("[\"" + "a".repeat(ProtocolJson.MAX_STRING_LENGTH) + "\"]", Object.class);
+        assertThrows(IOException.class, () ->
+                mapper.readValue("[\"" + "a".repeat(ProtocolJson.MAX_STRING_LENGTH + 1) + "\"]",
+                        Object.class));
+        mapper.readValue("[" + "9".repeat(128) + "]", Object.class);
+        assertThrows(IOException.class, () ->
+                mapper.readValue("[" + "9".repeat(129) + "]", Object.class));
+        assertNotNull(mapper.readValue("{\"method\":\"initialize\"}", Object.class));
+    }
+
+    @Test
+    @Timeout(30)
+    void stdioRejectsOversizedFrameDrainsAndExecutesLaterRequest() throws Exception {
+        byte[] huge = new byte[2 * 1024 * 1024];
+        Arrays.fill(huge, (byte) 'x');
+        StdioOutcome outcome = runServer(concat(huge, new byte[]{'\n'}, initializeFrame(1)));
+        assertNull(outcome.failure());
+        List<Map<String, Object>> responses = responses(outcome);
+        assertEquals(-32700, errorCode(nullIdError(responses)));
+        assertTrue(withId(responses, 1).containsKey("result"));
+        assertEquals(List.of(initializeJson(1)), outcome.mapper().deserialized());
+    }
+
+    @Test
+    @Timeout(30)
+    void stdioRejectsMaxPlusOneFrameBeforeDeserialization() throws Exception {
+        byte[] oneOver = new byte[ProtocolJson.MAX_REQUEST_BYTES + 1];
+        Arrays.fill(oneOver, (byte) 'b');
+        StdioOutcome outcome = runServer(concat(oneOver, new byte[]{'\n'}, initializeFrame(2)));
+        assertNull(outcome.failure());
+        List<Map<String, Object>> responses = responses(outcome);
+        assertEquals(-32700, errorCode(nullIdError(responses)));
+        assertTrue(withId(responses, 2).containsKey("result"));
+        assertEquals(List.of(initializeJson(2)), outcome.mapper().deserialized());
+    }
+
+    @Test
+    @Timeout(30)
+    void stdioRejectsMalformedUtf8AndExecutesLaterRequest() throws Exception {
+        byte[] bad = new byte[]{(byte) 0xC3, (byte) 0x28};
+        StdioOutcome outcome = runServer(concat(bad, new byte[]{'\n'}, initializeFrame(3)));
+        assertNull(outcome.failure());
+        List<Map<String, Object>> responses = responses(outcome);
+        assertEquals(-32700, errorCode(nullIdError(responses)));
+        assertTrue(withId(responses, 3).containsKey("result"));
+        assertEquals(List.of(initializeJson(3)), outcome.mapper().deserialized());
+    }
+
+    @Test
+    @Timeout(30)
+    void stdioRejectsDepthAndStringLimitFramesButLaterRequestWorks() throws Exception {
+        byte[] depthFrame = ("[".repeat(33) + "]".repeat(33) + "\n")
+                .getBytes(StandardCharsets.UTF_8);
+        byte[] stringFrame = ("[\"" + "a".repeat(ProtocolJson.MAX_STRING_LENGTH + 1) + "\"]\n")
+                .getBytes(StandardCharsets.UTF_8);
+        StdioOutcome outcome = runServer(concat(depthFrame, stringFrame, initializeFrame(4)));
+        assertNull(outcome.failure());
+        List<Map<String, Object>> responses = responses(outcome);
+        assertEquals(2, responses.stream().filter(r -> r.get("id") == null).count());
+        assertEquals(-32700, errorCode(nullIdError(responses)));
+        assertTrue(withId(responses, 4).containsKey("result"));
+        assertEquals(List.of(depthFrameContent(), stringFrameContent(), initializeJson(4)),
+                outcome.mapper().deserialized());
+    }
+
+    @Test
+    @Timeout(30)
+    void stdioAcceptsExactlyMaxBytesAndInitializes() throws Exception {
+        String init = initializeJson(5);
+        int pad = ProtocolJson.MAX_REQUEST_BYTES - init.length();
+        assertTrue(pad > 0);
+        String padded = init.substring(0, init.length() - 1) + " ".repeat(pad) + "}";
+        assertEquals(ProtocolJson.MAX_REQUEST_BYTES, padded.length());
+        StdioOutcome outcome = runServer((padded + "\n").getBytes(StandardCharsets.UTF_8));
+        assertNull(outcome.failure());
+        List<Map<String, Object>> responses = responses(outcome);
+        assertTrue(withId(responses, 5).containsKey("result"));
+        assertEquals(List.of(padded), outcome.mapper().deserialized());
+    }
+
+    @Test
+    @Timeout(30)
+    void stdioOversizedFrameWithoutNewlineTerminatesExceptionallyUnparsed() {
+        byte[] huge = new byte[ProtocolJson.MAX_REQUEST_BYTES + 1];
+        Arrays.fill(huge, (byte) 'x');
+        StdioOutcome outcome = runServer(huge);
+        assertInstanceOf(BoundedJsonRpcFramer.UnterminatedFrameException.class, outcome.failure());
+        assertTrue(outcome.mapper().deserialized().isEmpty());
+    }
+
+    @Test
+    @Timeout(30)
+    void stdioPartialFrameAtEofTerminatesExceptionallyUnparsed() {
+        StdioOutcome outcome = runServer(
+                "{\"method\":\"initialize\"".getBytes(StandardCharsets.UTF_8));
+        assertInstanceOf(BoundedJsonRpcFramer.UnterminatedFrameException.class, outcome.failure());
+        assertTrue(outcome.mapper().deserialized().isEmpty());
+    }
+
+    private static byte[] concat(byte[]... parts) {
+        int total = 0;
+        for (byte[] part : parts) {
+            total += part.length;
+        }
+        byte[] combined = new byte[total];
+        int position = 0;
+        for (byte[] part : parts) {
+            System.arraycopy(part, 0, combined, position, part.length);
+            position += part.length;
+        }
+        return combined;
+    }
+
+    private static String initializeJson(int id) {
+        return "{\"jsonrpc\":\"2.0\",\"id\":" + id
+                + ",\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\","
+                + "\"capabilities\":{},\"clientInfo\":{\"name\":\"test\",\"version\":\"1.0\"}}}";
+    }
+
+    private static byte[] initializeFrame(int id) {
+        return (initializeJson(id) + "\n").getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static String depthFrameContent() {
+        return "[".repeat(33) + "]".repeat(33);
+    }
+
+    private static String stringFrameContent() {
+        return "[\"" + "a".repeat(ProtocolJson.MAX_STRING_LENGTH + 1) + "\"]";
+    }
+
+    private static StdioOutcome runServer(byte[] input) {
+        RecordingMapper mapper = new RecordingMapper();
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        RuntimeMcpServer server = new RuntimeMcpServer(
+                new RuntimeProtocolService(new RuntimeRegistry()),
+                new ByteArrayInputStream(input), output, mapper);
+        Throwable failure = null;
+        try {
+            server.awaitTermination();
+        } catch (CompletionException terminationFailure) {
+            failure = terminationFailure.getCause();
+        }
+        return new StdioOutcome(output, mapper, failure);
+    }
+
+    private static List<Map<String, Object>> responses(StdioOutcome outcome) throws IOException {
+        List<Map<String, Object>> parsed = new ArrayList<>();
+        for (String line : outcome.output().toString(StandardCharsets.UTF_8).split("\n")) {
+            if (!line.isEmpty()) {
+                parsed.add(JSON.readValue(line, new TypeReference<Map<String, Object>>() {}));
+            }
+        }
+        return parsed;
+    }
+
+    private static Map<String, Object> withId(List<Map<String, Object>> responses, Object id) {
+        return responses.stream().filter(r -> Objects.equals(r.get("id"), id)).findFirst()
+                .orElseThrow();
+    }
+
+    private static Map<String, Object> nullIdError(List<Map<String, Object>> responses) {
+        return responses.stream().filter(r -> r.get("id") == null).findFirst().orElseThrow();
+    }
+
+    private static int errorCode(Map<String, Object> errorResponse) {
+        return (Integer) ((Map<?, ?>) errorResponse.get("error")).get("code");
+    }
+
+    private record StdioOutcome(
+            ByteArrayOutputStream output, RecordingMapper mapper, Throwable failure) {}
+
+    private static final class RecordingMapper implements McpJsonMapper {
+        private final List<String> deserialized = new ArrayList<>();
+        private final McpJsonMapper delegate = new ConstrainedMcpJsonMapper();
+
+        List<String> deserialized() {
+            return deserialized;
+        }
+
+        @Override public <T> T readValue(String content, Class<T> type) throws IOException {
+            deserialized.add(content);
+            return delegate.readValue(content, type);
+        }
+
+        @Override public <T> T readValue(byte[] content, Class<T> type) throws IOException {
+            return delegate.readValue(content, type);
+        }
+
+        @Override public <T> T readValue(String content, TypeRef<T> type) throws IOException {
+            deserialized.add(content);
+            return delegate.readValue(content, type);
+        }
+
+        @Override public <T> T readValue(byte[] content, TypeRef<T> type) throws IOException {
+            return delegate.readValue(content, type);
+        }
+
+        @Override public <T> T convertValue(Object fromValue, Class<T> type) {
+            return delegate.convertValue(fromValue, type);
+        }
+
+        @Override public <T> T convertValue(Object fromValue, TypeRef<T> type) {
+            return delegate.convertValue(fromValue, type);
+        }
+
+        @Override public String writeValueAsString(Object value) throws IOException {
+            return delegate.writeValueAsString(value);
+        }
+
+        @Override public byte[] writeValueAsBytes(Object value) throws IOException {
+            return delegate.writeValueAsBytes(value);
+        }
     }
 
     private static McpSchema.CallToolRequest call(

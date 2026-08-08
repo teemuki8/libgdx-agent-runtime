@@ -2,7 +2,6 @@ package io.github.teemuki8.libgdx.agent.runtime.mcp;
 
 import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeProtocolService;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeVersion;
-import io.modelcontextprotocol.json.McpJsonDefaults;
 import io.modelcontextprotocol.json.McpJsonMapper;
 import io.modelcontextprotocol.json.TypeRef;
 import io.modelcontextprotocol.server.McpAsyncServer;
@@ -11,13 +10,13 @@ import io.modelcontextprotocol.spec.McpSchema;
 import io.modelcontextprotocol.spec.McpServerSession;
 import io.modelcontextprotocol.spec.McpServerTransport;
 import io.modelcontextprotocol.spec.McpServerTransportProvider;
-import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -34,7 +33,15 @@ public final class RuntimeMcpServer implements AutoCloseable {
 
     private RuntimeMcpServer(
             RuntimeProtocolService protocol, InputStream input, OutputStream output) {
-        transport = new StdioProvider(input, output);
+        this(protocol, input, output, new ConstrainedMcpJsonMapper());
+    }
+
+    RuntimeMcpServer(
+            RuntimeProtocolService protocol,
+            InputStream input,
+            OutputStream output,
+            McpJsonMapper mapper) {
+        transport = new StdioProvider(input, output, mapper);
         RuntimeToolCatalog catalog = new RuntimeToolCatalog(
                 protocol.toolNames(), protocol.actionCatalog(), protocol.inputCatalog());
         handler = new RuntimeToolHandler(protocol, catalog);
@@ -73,7 +80,7 @@ public final class RuntimeMcpServer implements AutoCloseable {
     }
 
     private static final class StdioProvider implements McpServerTransportProvider {
-        private final McpJsonMapper mapper = McpJsonDefaults.getMapper();
+        private final McpJsonMapper mapper;
         private final InputStream input;
         private final OutputStream output;
         private final ExecutorService readerExecutor =
@@ -82,9 +89,10 @@ public final class RuntimeMcpServer implements AutoCloseable {
         private final CompletableFuture<Void> termination = new CompletableFuture<>();
         private volatile McpServerSession session;
 
-        StdioProvider(InputStream input, OutputStream output) {
+        StdioProvider(InputStream input, OutputStream output, McpJsonMapper mapper) {
             this.input = input;
             this.output = output;
+            this.mapper = mapper;
         }
 
         @Override public void setSessionFactory(McpServerSession.Factory factory) {
@@ -126,16 +134,34 @@ public final class RuntimeMcpServer implements AutoCloseable {
         }
 
         private void readLoop() {
+            BoundedJsonRpcFramer framer = new BoundedJsonRpcFramer(input);
             try {
-                BufferedReader reader = new BufferedReader(
-                        new InputStreamReader(input, StandardCharsets.UTF_8));
-                String line;
-                while (!closed.get() && (line = reader.readLine()) != null) {
-                    McpSchema.JSONRPCMessage message =
-                            McpSchema.deserializeJsonRpcMessage(mapper, line);
+                while (!closed.get()) {
+                    final String frame;
+                    try {
+                        frame = framer.read();
+                    } catch (BoundedJsonRpcFramer.RejectedLineException rejection) {
+                        writeError(McpSchema.ErrorCodes.PARSE_ERROR, rejection.getMessage());
+                        continue;
+                    }
+                    if (frame == null) {
+                        break;
+                    }
                     McpServerSession current = session;
                     if (current == null) {
                         throw new IllegalStateException("stdio session was not initialized");
+                    }
+                    final McpSchema.JSONRPCMessage message;
+                    try {
+                        message = McpSchema.deserializeJsonRpcMessage(mapper, frame);
+                    } catch (IOException malformed) {
+                        writeError(McpSchema.ErrorCodes.PARSE_ERROR,
+                                "malformed JSON-RPC message");
+                        continue;
+                    } catch (IllegalArgumentException shape) {
+                        writeError(McpSchema.ErrorCodes.INVALID_REQUEST,
+                                "message is not a JSON-RPC request or notification");
+                        continue;
                     }
                     current.handle(message).block();
                 }
@@ -146,6 +172,31 @@ public final class RuntimeMcpServer implements AutoCloseable {
                 }
             } finally {
                 close();
+            }
+        }
+
+        /** Writes a bounded JSON-RPC error response with a null id; rejected input is never echoed. */
+        private void writeError(int code, String message) {
+            if (closed.get()) {
+                return;
+            }
+            try {
+                Map<String, Object> detail = new LinkedHashMap<>();
+                detail.put("code", code);
+                detail.put("message", message);
+                detail.put("data", null);
+                Map<String, Object> envelope = new LinkedHashMap<>();
+                envelope.put("jsonrpc", "2.0");
+                envelope.put("id", null);
+                envelope.put("error", detail);
+                String json = mapper.writeValueAsString(envelope);
+                synchronized (output) {
+                    output.write(json.getBytes(StandardCharsets.UTF_8));
+                    output.write('\n');
+                    output.flush();
+                }
+            } catch (IOException failure) {
+                throw new IllegalStateException("failed to write stdio error response", failure);
             }
         }
 

@@ -16,6 +16,14 @@ affected.
 MCP is a local development tool over stdio. It exposes only properties registered by the
 application and provides no shell, filesystem, reflection, script, arbitrary class loading, network
 destination, or remote listener.
+Stdio input is framed before parsing: each newline-terminated JSON-RPC frame is bounded to
+`ProtocolJson.MAX_REQUEST_BYTES` (1 MiB) of raw bytes, oversized frames are drained through their
+newline without retention, malformed UTF-8 is rejected with a strict decoder, and nesting, string,
+and number tokens are capped at depth 32, 16,384 characters, and 128 digits before schema
+validation. A rejected frame produces one bounded JSON-RPC parse error with a null id and does not
+terminate later valid requests; only an unterminated frame at EOF ends the reader. Local peers are
+still trusted code with filesystem access; these limits prevent accidental or adversarial input from
+materializing unbounded lines or forcing deep parser work.
 Declarative assertions are a closed data schema over completed evidence. They do not accept regular
 expressions, method names, arbitrary expressions, or executable code.
 Simulation waits accept only registered named predicates or the same closed declarative assertion

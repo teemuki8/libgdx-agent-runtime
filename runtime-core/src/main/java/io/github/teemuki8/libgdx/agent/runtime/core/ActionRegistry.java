@@ -81,6 +81,7 @@ public final class ActionRegistry {
                 throw new IllegalArgumentException("request correlation evidence is no longer retained");
             }
             if (evidence == null) {
+                runtime.requireSubmissionsOpen();
                 evidence = new RequestEvidence(actionId, parameters, correlationId,
                         runtime.latestFrame().map(FrameSnapshot::frameId));
                 requests.put(requestId, evidence);
@@ -115,10 +116,19 @@ public final class ActionRegistry {
         return requests.size();
     }
 
-    /** Releases application handlers and pending invocation evidence, keeping the catalog. */
-    synchronized void close() {
-        handlers.clear();
-        requests.clear();
+    /**
+     * Releases application handlers and pending invocation evidence, keeping the catalog.
+     *
+     * <p>Takes the submission lock and the registry monitor in the same order as {@link #invoke},
+     * so an in-flight invocation cannot retain evidence after close.
+     */
+    void close() {
+        synchronized (submissionLock) {
+            synchronized (this) {
+                handlers.clear();
+                requests.clear();
+            }
+        }
     }
 
     synchronized Optional<ActionInvocation> recording(String requestId) {

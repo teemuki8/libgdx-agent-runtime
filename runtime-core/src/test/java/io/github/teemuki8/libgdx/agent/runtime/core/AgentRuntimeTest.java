@@ -19,6 +19,7 @@ import java.util.OptionalLong;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -844,6 +845,62 @@ final class AgentRuntimeTest {
     }
 
     @Test
+    void closeAttachesLaterHookFailuresAsSuppressedAndStillPublishesClosed() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        AtomicLong clock = new AtomicLong(1);
+        List<Integer> disposed = new ArrayList<>();
+        AtomicInteger created = new AtomicInteger();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("close-suppressed-chain"))
+                .clock(clock::get)
+                .commandDispatcher(queue::addLast)
+                .checkpointLimits(new CheckpointLimits(2, 8, 642))
+                .build();
+        runtime.checkpoints().register(new CheckpointProvider() {
+            @Override
+            public CheckpointHandle create() {
+                return new CloseHandle(created.incrementAndGet());
+            }
+
+            @Override
+            public void restore(CheckpointHandle handle) {}
+
+            @Override
+            public void dispose(CheckpointHandle handle) {
+                int value = ((CloseHandle) handle).value();
+                disposed.add(value);
+                if (value == 1) {
+                    throw new IllegalStateException("dispose failed");
+                }
+                throw new IllegalStateException("second dispose failed");
+            }
+        });
+        runtime.start();
+        runtime.checkpoints().create("one", null, "create-one", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        runtime.checkpoints().create("two", null, "create-two", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        clock.set(-1);
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class, runtime::close);
+        assertEquals("monotonic clock returned a negative value", failure.getMessage());
+        Throwable[] suppressed = failure.getSuppressed();
+        assertEquals(1, suppressed.length, "the later command hook failure must be suppressed");
+        assertEquals("dispose failed", suppressed[0].getMessage(),
+                "the checkpoint disposal failure must follow the command hook failure");
+        assertEquals(RuntimeStatus.CLOSED, runtime.status());
+        assertEquals(List.of(1, 2), disposed,
+                "both retained handles must be disposed before the failure propagates");
+        assertEquals(0, runtime.checkpoints().retainedCheckpoints());
+        assertEquals(0, runtime.checkpoints().retainedOperations());
+        assertEquals(0, runtime.inputs().retainedInputHandlers());
+        assertEquals(0, runtime.controls().retainedControlCallbacks());
+        // A second close is a no-op.
+        runtime.close();
+        assertEquals(RuntimeStatus.CLOSED, runtime.status());
+    }
+
+    @Test
     void repeatedCreateRegisterStartCloseRetainsNoCallbacks() {
         for (int iteration = 0; iteration < 3; iteration++) {
             ArrayDeque<Runnable> queue = new ArrayDeque<>();
@@ -866,6 +923,76 @@ final class AgentRuntimeTest {
             assertEquals(0, runtime.commands().orElseThrow().retainedLiveCommands());
             assertEquals(0, runtime.commands().orElseThrow().retainedPendingDispatches());
         }
+    }
+
+    @Test
+    void closeSerializesWithInFlightInjectAndRetainsNoEvidence() throws Exception {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        AtomicBoolean armed = new AtomicBoolean();
+        CountDownLatch dispatchEntered = new CountDownLatch(1);
+        CountDownLatch releaseDispatch = new CountDownLatch(1);
+        CountDownLatch releaseSignal = new CountDownLatch(1);
+        AtomicInteger executions = new AtomicInteger();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("input-close-race"))
+                .clock(() -> 1)
+                .commandDispatcher(task -> {
+                    queue.addLast(task);
+                    if (armed.get()) {
+                        dispatchEntered.countDown();
+                        try {
+                            if (!releaseDispatch.await(5, TimeUnit.SECONDS)) {
+                                throw new IllegalStateException("dispatch latch timed out");
+                            }
+                        } catch (InterruptedException failure) {
+                            throw new IllegalStateException(failure);
+                        }
+                    }
+                })
+                .build();
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {}).resume(() -> {}).tick(delta -> {}).build());
+        runtime.inputs().register(InputSpec.builder("keyboard")
+                .requiredString("key")
+                .handler(ignored -> executions.incrementAndGet()).build());
+        runtime.start();
+        runtime.controls().control(true, "pause-1", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+
+        Thread releaser = new Thread(() -> {
+            try {
+                if (!releaseSignal.await(5, TimeUnit.SECONDS)) {
+                    return;
+                }
+            } catch (InterruptedException failure) {
+                throw new IllegalStateException(failure);
+            }
+            releaseDispatch.countDown();
+        }, "inject-releaser");
+        releaser.start();
+        armed.set(true);
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            RuntimeValue.ObjectValue parameters = RuntimeValues.object(
+                    RuntimeValues.field("key", RuntimeValues.string("X")));
+            var inject = executor.submit(() -> runtime.inputs().inject(
+                    "keyboard", "race-input", parameters, OptionalLong.empty(),
+                    Duration.ofSeconds(1)));
+            assertTrue(dispatchEntered.await(5, TimeUnit.SECONDS),
+                    "inject must be in flight holding the submission lock before close");
+            releaseSignal.countDown();
+            runtime.close();
+            inject.get(5, TimeUnit.SECONDS);
+        }
+        releaser.join(5_000);
+
+        assertEquals(RuntimeStatus.CLOSED, runtime.status());
+        assertEquals(0, runtime.inputs().retainedInputHandlers());
+        assertEquals(0, runtime.inputs().retainedPendingInjections());
+        assertEquals(0, executions.get());
+        assertEquals(CommandState.REJECTED, runtime.commands().orElseThrow()
+                .status("race-input").status().orElseThrow().state());
+        queue.forEach(Runnable::run);
+        assertEquals(0, executions.get());
     }
 
     private static void assertClosedSubmission(org.junit.jupiter.api.function.Executable submission) {

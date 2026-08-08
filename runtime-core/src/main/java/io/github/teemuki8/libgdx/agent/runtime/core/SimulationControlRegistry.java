@@ -325,6 +325,7 @@ public final class SimulationControlRegistry {
     }
 
     private synchronized Evidence evidence(String requestId, Signature signature) {
+        runtime.requireSubmissionsOpen();
         IdentifierSupport.validate(requestId, "control request id");
         Evidence existing = operations.get(requestId);
         if (existing != null) {

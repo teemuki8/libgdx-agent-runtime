@@ -68,13 +68,20 @@ public final class InputRegistry {
     /**
      * Releases application input handlers and queued/scheduled injection state while keeping the
      * immutable input catalog.
+     *
+     * <p>Takes the submission lock and the registry monitor in the same order as {@link #inject},
+     * so an in-flight injection cannot retain evidence after close.
      */
-    synchronized void close() {
-        handlers.clear();
-        requests.clear();
-        scheduled.clear();
-        executedByTick.clear();
-        outstanding = 0;
+    void close() {
+        synchronized (submissionLock) {
+            synchronized (this) {
+                handlers.clear();
+                requests.clear();
+                scheduled.clear();
+                executedByTick.clear();
+                outstanding = 0;
+            }
+        }
     }
 
     /**
@@ -119,6 +126,7 @@ public final class InputRegistry {
                 throw new IllegalArgumentException("request id is bound to a different input");
             }
             if (evidence == null) {
+                runtime.requireSubmissionsOpen();
                 requireTargetingState();
                 long currentTick = runtime.controls().currentTick();
                 long targetTick = requestedTargetTick.isPresent()

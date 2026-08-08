@@ -168,6 +168,7 @@ public final class RecordingRegistry {
         requireValidTimeout(timeout, dispatch.limits().maximumTimeoutNanos());
         Signature signature = new Signature(kind, recordingId, spec);
         synchronized (this) {
+            runtime.requireSubmissionsOpen();
             OperationEvidence existing = operations.get(requestId);
             if (existing != null) {
                 if (!existing.signature.equals(signature)) {

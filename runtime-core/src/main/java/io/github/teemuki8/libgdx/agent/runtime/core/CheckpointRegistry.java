@@ -11,6 +11,7 @@ public final class CheckpointRegistry {
     private final AgentRuntime runtime;
     private final CheckpointLimits limits;
     private final LinkedHashMap<String, Retained> checkpoints = new LinkedHashMap<>();
+    private final LinkedHashMap<String, CheckpointDescriptor> catalog = new LinkedHashMap<>();
     private final LinkedHashMap<String, Request> requests = new LinkedHashMap<>();
     private final LinkedHashMap<String, Evidence> operations = new LinkedHashMap<>();
     private CheckpointProvider provider;
@@ -37,7 +38,7 @@ public final class CheckpointRegistry {
 
     /** Lists retained descriptors in creation order without exposing opaque handles. */
     public synchronized List<CheckpointDescriptor> list() {
-        return checkpoints.values().stream().map(Retained::descriptor).toList();
+        return List.copyOf(catalog.values());
     }
 
     /** Creates one checkpoint from the current quiescent application state. */
@@ -74,6 +75,7 @@ public final class CheckpointRegistry {
                 new IllegalStateException("checkpoint mutation requires application command dispatch"));
         requireValidTimeout(timeout, dispatch.limits().maximumTimeoutNanos());
         synchronized (this) {
+            runtime.requireSubmissionsOpen();
             requireProvider();
             Request previous = requests.get(requestId);
             if (previous != null && !previous.equals(request)) {
@@ -139,6 +141,7 @@ public final class CheckpointRegistry {
                 if (checkpoints.size() >= limits.retainedCheckpoints()) {
                     String oldest = checkpoints.keySet().iterator().next();
                     Retained evicted = checkpoints.remove(oldest);
+                    catalog.remove(oldest);
                     callbacks.dispose(evicted.handle());
                 }
             }
@@ -151,6 +154,7 @@ public final class CheckpointRegistry {
                     evidence.request.description(), runtime.wallTime(), requestId);
             synchronized (this) {
                 checkpoints.put(descriptor.id(), new Retained(descriptor, handle));
+                catalog.put(descriptor.id(), descriptor);
                 evidence.descriptor = descriptor;
             }
         } catch (RuntimeException | Error failure) {
@@ -219,6 +223,8 @@ public final class CheckpointRegistry {
                 } catch (RuntimeException | Error failure) {
                     if (firstFailure == null) {
                         firstFailure = failure;
+                    } else {
+                        firstFailure.addSuppressed(failure);
                     }
                 }
             }
@@ -235,7 +241,7 @@ public final class CheckpointRegistry {
         }
     }
 
-    /** Package-private close observation: number of retained checkpoint descriptors. */
+    /** Package-private close observation: number of retained pending checkpoint handles. */
     synchronized int retainedCheckpoints() {
         return checkpoints.size();
     }

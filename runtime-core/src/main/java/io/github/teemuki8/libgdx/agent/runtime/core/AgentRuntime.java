@@ -526,7 +526,11 @@ public final class AgentRuntime implements AutoCloseable {
             hook.run();
             return firstFailure;
         } catch (RuntimeException | Error failure) {
-            return firstFailure == null ? failure : firstFailure;
+            if (firstFailure == null) {
+                return failure;
+            }
+            firstFailure.addSuppressed(failure);
+            return firstFailure;
         }
     }
 

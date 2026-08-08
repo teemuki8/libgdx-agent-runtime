@@ -90,6 +90,7 @@ public final class ScenarioRegistry {
                 new IllegalStateException("scenario reset requires application command dispatch"));
         requireValidTimeout(timeout, dispatch.limits().maximumTimeoutNanos());
         synchronized (this) {
+            runtime.requireSubmissionsOpen();
             entry = entries.get(scenarioId);
             if (entry == null) {
                 throw new IllegalArgumentException("unknown scenario id");

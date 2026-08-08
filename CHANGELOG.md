@@ -29,10 +29,11 @@ All notable changes follow Keep a Changelog structure.
 - Closing the runtime now releases every callback-bearing registry: scenario reset handlers,
   action handlers, simulation control callbacks and condition predicates, input handlers and
   queued/scheduled injections, checkpoint providers and opaque handles, pending command closures,
-  and pending operations, while immutable catalogs, completed history, and terminal evidence stay
-  queryable. Every registry close hook runs even when an earlier hook fails, `CLOSED` is always
-  published, the first failure is rethrown with later failures suppressed, new submissions reject
-  with `RUNTIME_CLOSED`, and repeated `close()` is a no-op (#41).
+  and pending operations, while immutable catalogs (including completed checkpoint descriptors),
+  completed history, and terminal evidence stay queryable. Every registry close hook runs even
+  when an earlier hook fails, later failures are attached as suppressed, `CLOSED` is always
+  published, and the first failure is rethrown. Closing is atomic with in-flight submissions, new
+  submissions reject with `RUNTIME_CLOSED`, and repeated `close()` is a no-op (#41).
 
 ### Compatibility notes (2.0)
 

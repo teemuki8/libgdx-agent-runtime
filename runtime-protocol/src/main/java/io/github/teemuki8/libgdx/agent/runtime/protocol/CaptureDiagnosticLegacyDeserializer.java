@@ -28,9 +28,14 @@ import java.util.Optional;
  * {@code entityId.value} require string tokens (with {@code null} permitted only for the optional
  * {@code entityId} and {@code property}), and no numeric, boolean, object, or array coercion is
  * accepted. The legacy {@code exceptionClass} must be nonblank and at most 256 code units (the
- * {@code IdentifierSupport} bound the historic record enforced); when the {@code message} parses
- * as an envelope its exception class must equal the supplied field. Explicit token walking
- * preserves strict trailing-token and unknown-property handling.
+ * {@code IdentifierSupport} bound the historic record enforced). When the {@code message} parses
+ * as an envelope, a candidate evidence is constructed and validated first (category at most 64,
+ * correlation identifier at most 320, exception class at most 256): an envelope whose components
+ * are out of bounds is treated as historic raw text and decoded through the deterministic
+ * {@code legacy.capture} synthesis, and only a valid candidate is checked for equality with the
+ * separately validated wire {@code exceptionClass} — a mismatch is rejected with fixed text that
+ * never echoes wire or envelope component values. Explicit token walking preserves strict
+ * trailing-token and unknown-property handling.
  */
 public final class CaptureDiagnosticLegacyDeserializer
         extends JsonDeserializer<CaptureDiagnostic> {
@@ -163,26 +168,46 @@ public final class CaptureDiagnosticLegacyDeserializer
             DeserializationContext context) throws IOException {
         LegacyEnvelope envelope = parseEnvelope(message);
         if (envelope != null) {
-            if (!exceptionClass.equals(envelope.exceptionClass())) {
-                context.reportInputMismatch(CaptureDiagnostic.class,
-                        "legacy exceptionClass '" + exceptionClass
-                                + "' does not match the message envelope exception class '"
-                                + envelope.exceptionClass() + "'");
-                throw new IllegalArgumentException(
-                        "legacy exceptionClass does not match the message envelope");
+            ApplicationFailureEvidence candidate = candidateEvidence(envelope);
+            if (candidate != null) {
+                if (!exceptionClass.equals(candidate.exceptionClass())) {
+                    context.reportInputMismatch(CaptureDiagnostic.class,
+                            "legacy exceptionClass does not match the message envelope");
+                    throw new IllegalArgumentException(
+                            "legacy exceptionClass does not match the message envelope");
+                }
+                return candidate;
             }
-            try {
-                return new ApplicationFailureEvidence(
-                        envelope.category, envelope.exceptionClass,
-                        envelope.correlationId, Optional.empty());
-            } catch (IllegalArgumentException failure) {
-                // Envelope components out of bounds; fall through to the deterministic legacy
-                // synthesis using the already-validated exceptionClass field.
-            }
+            // Envelope components out of bounds; treat the whole message as historic raw text.
         }
         String correlationId = "legacy|" + stableHash(message);
         return new ApplicationFailureEvidence(
                 LEGACY_CATEGORY, exceptionClass, correlationId, Optional.empty());
+    }
+
+    /**
+     * Constructs and validates a candidate evidence from the parsed envelope components, or
+     * returns {@code null} when any component is outside the public bounds. The exception class
+     * bound is enforced here instead of relying on {@link ApplicationFailureEvidence}'s
+     * deterministic truncation so no wire-derived value is silently rewritten.
+     */
+    private static ApplicationFailureEvidence candidateEvidence(LegacyEnvelope envelope) {
+        if (envelope.category.length() > ApplicationFailureEvidence.MAX_CATEGORY_LENGTH
+                || envelope.correlationId.length()
+                        > ApplicationFailureEvidence.MAX_CORRELATION_ID_LENGTH
+                || envelope.exceptionClass.length()
+                        > ApplicationFailureEvidence.MAX_EXCEPTION_CLASS_LENGTH) {
+            return null;
+        }
+        try {
+            return new ApplicationFailureEvidence(
+                    envelope.category, envelope.exceptionClass,
+                    envelope.correlationId, Optional.empty());
+        } catch (IllegalArgumentException invalid) {
+            // parseEnvelope guarantees nonempty components, so this guards whitespace-only
+            // components that the evidence record rejects as blank.
+            return null;
+        }
     }
 
     private record LegacyEnvelope(String correlationId, String category, String exceptionClass) {}

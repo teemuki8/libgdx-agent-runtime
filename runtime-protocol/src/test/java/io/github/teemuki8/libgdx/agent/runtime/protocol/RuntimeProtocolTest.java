@@ -9,11 +9,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
 import io.github.teemuki8.libgdx.agent.runtime.core.ActionSpec;
+import io.github.teemuki8.libgdx.agent.runtime.core.ApplicationFailureEvidence;
 import io.github.teemuki8.libgdx.agent.runtime.core.BaselineKind;
 import io.github.teemuki8.libgdx.agent.runtime.core.CommandState;
 import io.github.teemuki8.libgdx.agent.runtime.core.CheckpointHandle;
 import io.github.teemuki8.libgdx.agent.runtime.core.CheckpointOperation;
 import io.github.teemuki8.libgdx.agent.runtime.core.CheckpointProvider;
+import io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic;
 import io.github.teemuki8.libgdx.agent.runtime.core.AssertionStatus;
 import io.github.teemuki8.libgdx.agent.runtime.core.ControlStopReason;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
@@ -33,6 +35,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.stream.IntStream;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
 import org.junit.jupiter.api.Test;
 
 final class RuntimeProtocolTest {
@@ -1128,18 +1132,68 @@ final class RuntimeProtocolTest {
 
     @Test
     void legacyProtocolDecodeRejectsEnvelopeExceptionClassMismatch() throws Exception {
-        assertThrows(com.fasterxml.jackson.core.JsonProcessingException.class,
+        JsonProcessingException mismatch = assertThrows(JsonProcessingException.class,
                 () -> ProtocolJson.mapper().readValue("""
                         {"provider":"enemies","entityId":{"value":"bad"},"property":"health",
                          "exceptionClass":"com.example.Other",
                          "message":"legacy|1|a|com.example.Expected"}""",
-                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class));
-        assertThrows(com.fasterxml.jackson.core.JsonProcessingException.class,
+                        CaptureDiagnostic.class));
+        assertNoWireValuesInError(mismatch, "com.example.Expected", "com.example.Other");
+        assertThrows(JsonProcessingException.class,
                 () -> ProtocolJson.mapper().readValue("""
                         {"provider":"enemies","entityId":{"value":"bad"},"property":"health",
                          "exceptionClass":"java.lang.IllegalStateException",
                          "message":"legacy|1|a|java.lang.RuntimeException"}""",
-                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class));
+                        CaptureDiagnostic.class));
+    }
+
+    @Test
+    void legacyProtocolDecodeSanitizesEnvelopeWithOversizedCategory() throws Exception {
+        String category = "c".repeat(ApplicationFailureEvidence.MAX_CATEGORY_LENGTH + 1);
+        assertDecodesToLegacyCapture("raw|" + category + "|secret-tail", "secret-tail", category);
+    }
+
+    @Test
+    void legacyProtocolDecodeSanitizesOtherOutOfBoundsEnvelopes() throws Exception {
+        String longCorrelation = "r".repeat(ApplicationFailureEvidence.MAX_CORRELATION_ID_LENGTH + 1);
+        assertDecodesToLegacyCapture(longCorrelation + "|a|b", longCorrelation);
+        String longClass = "f".repeat(ApplicationFailureEvidence.MAX_EXCEPTION_CLASS_LENGTH + 1);
+        assertDecodesToLegacyCapture("legacy|1|a|" + longClass, longClass);
+        assertDecodesToLegacyCapture("legacy|1|   |java.lang.IllegalStateException");
+    }
+
+    private static void assertDecodesToLegacyCapture(String message, String... absent) throws Exception {
+        String payload = "{\"provider\":\"enemies\",\"entityId\":{\"value\":\"bad\"},"
+                + "\"property\":\"health\",\"exceptionClass\":\"java.lang.IllegalStateException\","
+                + "\"message\":\"" + message + "\"}";
+        ApplicationFailureEvidence failure = ProtocolJson.mapper().readValue(payload,
+                CaptureDiagnostic.class).failure();
+        assertEquals("legacy.capture", failure.category());
+        assertEquals("java.lang.IllegalStateException", failure.exceptionClass());
+        assertTrue(failure.sanitizedDetail().isEmpty());
+        for (String value : absent) {
+            assertFalse(failure.correlationId().contains(value),
+                    "correlation must not retain wire content '" + value + "'");
+            assertFalse(failure.legacyEnvelope().contains(value),
+                    "envelope must not retain wire content '" + value + "'");
+        }
+        ApplicationFailureEvidence again = ProtocolJson.mapper().readValue(payload,
+                CaptureDiagnostic.class).failure();
+        assertEquals(failure.correlationId(), again.correlationId(),
+                "legacy synthesis must be deterministic");
+    }
+
+    private static void assertNoWireValuesInError(JsonProcessingException failure,
+            String... values) {
+        for (Throwable current = failure; current != null; current = current.getCause()) {
+            String message = current.getMessage();
+            if (message != null) {
+                for (String value : values) {
+                    assertFalse(message.contains(value),
+                            "decode error must not echo wire content '" + value + "'");
+                }
+            }
+        }
     }
 
     @Test

@@ -137,8 +137,7 @@ final class AgentRuntimeTest {
     void sanitizerDetailAppearsBoundedAndOmitsRawMessages() {
         AgentRuntime runtime = AgentRuntime.builder()
                 .sessionId(SessionId.of("sanitized"))
-                .configuration(new RuntimeConfiguration(true, new RuntimeLimits(
-                        240, 2_000, 5_000, 128, 256, 256, 64, 16, 256, 16, 1_000)))
+                .configuration(RuntimeConfiguration.developmentDefaults())
                 .clock(new AtomicLong()::incrementAndGet)
                 .wallClock(Clock.fixed(Instant.parse("2026-07-29T00:00:00Z"), ZoneOffset.UTC))
                 .applicationFailureSanitizer((context, failure) ->
@@ -165,11 +164,11 @@ final class AgentRuntimeTest {
         AgentRuntime runtime = AgentRuntime.builder()
                 .sessionId(SessionId.of("sanitized-truncated"))
                 .configuration(new RuntimeConfiguration(true, new RuntimeLimits(
-                        240, 2_000, 5_000, 128, 256, 256, 64, 16, 256, 16, 1_000)))
+                        240, 2_000, 5_000, 128, 256, 256, 64, 100, 256, 16, 1_000)))
                 .clock(new AtomicLong()::incrementAndGet)
                 .wallClock(Clock.fixed(Instant.parse("2026-07-29T00:00:00Z"), ZoneOffset.UTC))
                 .applicationFailureSanitizer((context, failure) ->
-                        Optional.of("x".repeat(64)))
+                        Optional.of("x".repeat(128)))
                 .build();
         runtime.entities().register(EntityId.of("bad"), EntityType.of("enemy"),
                 () -> "Bad", inspector -> inspector.property("health",
@@ -180,8 +179,35 @@ final class AgentRuntimeTest {
 
         String message = runtime.latestFrame().orElseThrow().stats().diagnostics()
                 .getFirst().message();
-        assertTrue(message.endsWith("x".repeat(16)));
-        assertFalse(message.contains("x".repeat(64)));
+        assertTrue(message.length() <= 100);
+        assertTrue(message.contains("failure-1"));
+        assertTrue(message.contains("provider.property"));
+        assertFalse(message.contains("x".repeat(128)));
+        assertFalse(message.contains("token=secret-123"));
+    }
+
+    @Test
+    void captureDiagnosticRespectsConfiguredStringLength() {
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("capture-bound"))
+                .configuration(new RuntimeConfiguration(true, new RuntimeLimits(
+                        240, 2_000, 5_000, 128, 256, 256, 64, 16, 256, 16, 1_000)))
+                .clock(new AtomicLong()::incrementAndGet)
+                .wallClock(Clock.fixed(Instant.parse("2026-07-29T00:00:00Z"), ZoneOffset.UTC))
+                .build();
+        runtime.entities().register(EntityId.of("bad"), EntityType.of("enemy"),
+                () -> "Bad", inspector -> inspector.property("health",
+                        (java.util.function.Supplier<RuntimeValue>) () -> {
+                    throw new IllegalStateException("token=secret-123 /home/private/save.dat");
+                }));
+        runtime.start();
+
+        String message = runtime.latestFrame().orElseThrow().stats().diagnostics()
+                .getFirst().message();
+        assertTrue(message.length() <= 16);
+        assertTrue(message.contains("failure-1"));
+        assertFalse(message.contains("token=secret-123"));
+        assertFalse(message.contains("/home/private/save.dat"));
     }
 
     @Test

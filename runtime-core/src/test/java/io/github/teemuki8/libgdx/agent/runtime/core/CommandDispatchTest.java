@@ -159,6 +159,31 @@ final class CommandDispatchTest {
     }
 
     @Test
+    void dispatchRejectionCorrelationsFollowDeterministicAcceptanceOrder() {
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("dispatch-correlation-order"))
+                .captureThread(Thread.currentThread())
+                .clock(() -> 1)
+                .commandDispatcher(task -> {
+                    throw new IllegalStateException("dispatcher token=secret-123");
+                })
+                .build();
+        CommandDispatch commands = runtime.commands().orElseThrow();
+        commands.submit("one", 100, () -> {});
+        commands.submit("two", 100, () -> {});
+        commands.submit("three", 100, () -> {});
+
+        String first = commands.status("one").status().orElseThrow().diagnostic().orElseThrow();
+        String second = commands.status("two").status().orElseThrow().diagnostic().orElseThrow();
+        String third = commands.status("three").status().orElseThrow().diagnostic().orElseThrow();
+        assertTrue(first.contains("failure-1"));
+        assertTrue(second.contains("failure-2"));
+        assertTrue(third.contains("failure-3"));
+        assertTrue(first.contains("command.dispatch.rejected"));
+        assertFalse(first.contains("dispatcher token=secret-123"));
+    }
+
+    @Test
     void disablesDispatchWithoutExplicitEnabledConfiguration() {
         assertTrue(AgentRuntime.builder().build().commands().isEmpty());
         assertTrue(AgentRuntime.builder()

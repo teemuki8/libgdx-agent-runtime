@@ -103,6 +103,7 @@ public final class CommandDispatch {
                 return CommandLookup.found(snapshot(entry, now));
             }
             entry = new Entry(requestId, now, deadlineNanos, command);
+            entry.dispatchCorrelationId = diagnostics.nextCorrelationId("command.dispatch");
             retained.put(requestId, entry);
             pendingDispatch.addLast(entry);
             outstandingDispatches++;
@@ -211,7 +212,8 @@ public final class CommandDispatch {
                     consumeDispatch(entry);
                     if (entry.state == CommandState.QUEUED) {
                         finish(entry, CommandState.REJECTED, now(), true,
-                                diagnostic("command.dispatch.rejected", failure));
+                                diagnostic("command.dispatch.rejected", failure,
+                                        entry.dispatchCorrelationId));
                     }
                 }
             } catch (Error failure) {
@@ -219,7 +221,8 @@ public final class CommandDispatch {
                     consumeDispatch(entry);
                     if (entry.state == CommandState.QUEUED) {
                         finish(entry, CommandState.FAILED, now(), true,
-                                diagnostic("command.dispatch.failed", failure));
+                                diagnostic("command.dispatch.failed", failure,
+                                        entry.dispatchCorrelationId));
                     }
                     Entry pending;
                     while ((pending = pendingDispatch.pollFirst()) != null) {
@@ -307,6 +310,10 @@ public final class CommandDispatch {
         return limit(diagnostics.describe(category, failure));
     }
 
+    private String diagnostic(String category, Throwable failure, String correlationId) {
+        return limit(diagnostics.describe(category, failure, correlationId));
+    }
+
     private String limit(String value) {
         if (value == null || value.length() <= limits.diagnosticLength()) {
             return value;
@@ -347,6 +354,7 @@ public final class CommandDispatch {
         private Long completedAtNanos;
         private boolean outcomeKnown;
         private boolean dispatchConsumed;
+        private String dispatchCorrelationId;
         private String diagnostic;
 
         Entry(String requestId, long submittedAtNanos, long deadlineNanos, Runnable command) {

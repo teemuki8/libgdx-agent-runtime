@@ -256,7 +256,9 @@ public final class CheckpointRegistry {
     }
 
     private String diagnostic(String category, Throwable failure) {
-        return runtime.diagnostics().describe(category, failure);
+        String message = runtime.diagnostics().describe(category, failure);
+        return message.length() <= limits.descriptionLength()
+                ? message : message.substring(0, limits.descriptionLength());
     }
 
     private static void requireValidTimeout(Duration timeout, long maximumNanos) {

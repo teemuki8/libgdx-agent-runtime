@@ -307,8 +307,12 @@ public final class DeterminismRegistry {
                 Optional.empty(), bounds(spec, counters, executionNanos));
     }
 
+    private static final int DIAGNOSTIC_LENGTH = 384;
+
     private String diagnostic(String category, Throwable failure) {
-        return runtime.diagnostics().describe(category, failure);
+        String message = runtime.diagnostics().describe(category, failure);
+        return message.length() <= DIAGNOSTIC_LENGTH
+                ? message : message.substring(0, DIAGNOSTIC_LENGTH);
     }
 
     private DeterminismBounds bounds(

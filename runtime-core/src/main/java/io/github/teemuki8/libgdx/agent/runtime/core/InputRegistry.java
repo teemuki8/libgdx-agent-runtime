@@ -327,7 +327,7 @@ public final class InputRegistry {
     }
 
     private String diagnostic(String category, Throwable failure) {
-        return runtime.diagnostics().describe(category, failure);
+        return boundedDiagnostic(runtime.diagnostics().describe(category, failure));
     }
 
     private String boundedDiagnostic(String value) {

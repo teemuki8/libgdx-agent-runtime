@@ -945,9 +945,12 @@ public final class AgentRuntime implements AutoCloseable {
 
     private CaptureDiagnostic diagnostic(String category, String provider, EntityId entity,
             String property, RuntimeException failure) {
+        String message = diagnostics.describe(category, failure);
+        if (message.length() > limits.stringLength()) {
+            message = message.substring(0, limits.stringLength());
+        }
         return new CaptureDiagnostic(provider, Optional.ofNullable(entity),
-                Optional.ofNullable(property), failure.getClass().getName(),
-                diagnostics.describe(category, failure));
+                Optional.ofNullable(property), failure.getClass().getName(), message);
     }
 
     private static Map<EntityId, EntitySnapshot> index(List<EntitySnapshot> entities) {

@@ -141,6 +141,44 @@ final class DeterminismRegistryTest {
     }
 
     @Test
+    void hugeSanitizedDetailStaysWithinDeterminismMessageBound() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        long[] value = {0};
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("determinism-sanitizer-bound"))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .applicationFailureSanitizer((context, failure) ->
+                        Optional.of("z".repeat(1000)))
+                .build();
+        runtime.entities().register(EntityId.of("counter"), EntityType.of("state"),
+                () -> "Counter", inspector -> inspector.property("value", () -> value[0]));
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {}).resume(() -> {}).tick(delta -> value[0]++).build());
+        runtime.scenarios().register("seeded", context -> {
+            throw new IllegalStateException("token=secret-123 /home/private/save.dat");
+        });
+        runtime.start();
+        DeterminismSpec spec = spec("seeded", 1, 1);
+
+        runtime.determinism().check(
+                spec, "determinism-sanitizer-bound", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        DeterminismOperation operation = runtime.determinism().check(
+                spec, "determinism-sanitizer-bound", Duration.ofSeconds(1));
+
+        assertEquals(DeterminismStatus.INCONCLUSIVE,
+                operation.result().orElseThrow().status());
+        String message = operation.result().orElseThrow().message();
+        assertTrue(message.length() <= 512);
+        assertTrue(message.contains("determinism.execute"));
+        assertTrue(message.contains("failure-1"));
+        assertFalse(message.contains("z".repeat(1000)));
+        assertFalse(message.contains("token=secret-123"));
+        assertFalse(message.contains("/home/private/save.dat"));
+    }
+
+    @Test
     void rejectsExecutionBoundsBeforeApplicationDispatch() {
         ArrayDeque<Runnable> queue = new ArrayDeque<>();
         long[] value = {0};

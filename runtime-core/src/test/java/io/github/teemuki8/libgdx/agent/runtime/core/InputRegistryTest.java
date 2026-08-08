@@ -237,4 +237,46 @@ final class InputRegistryTest {
         assertTrue(diagnostic.contains("input.execution"));
         assertTrue(diagnostic.contains("failure-1"));
     }
+
+    @Test
+    void inputDiagnosticRespectsConfiguredStringLength() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("input-bound"))
+                .clock(() -> 1)
+                .commandDispatcher(dispatch::addLast)
+                .inputLimits(new InputLimits(4, 4, 1, 4, 2, 32))
+                .build();
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {})
+                .resume(() -> {})
+                .tick(deltaNanos -> {})
+                .build());
+        runtime.inputs().register(InputSpec.builder("keyboard")
+                .requiredString("key")
+                .handler(parameters -> {
+                    throw new IllegalStateException("token=secret-123 /home/private/save.dat");
+                })
+                .build());
+        runtime.start();
+        runtime.controls().control(true, "pause", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        RuntimeValue.ObjectValue parameters = RuntimeValues.object(
+                RuntimeValues.field("key", RuntimeValues.string("A")));
+        runtime.inputs().inject("keyboard", "input-bound", parameters,
+                OptionalLong.empty(), Duration.ofSeconds(1));
+        runtime.controls().advance("tick-bound", 1, 1, Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        dispatch.removeFirst().run();
+
+        InputInjection failed = runtime.inputs().inject(
+                "keyboard", "input-bound", parameters,
+                OptionalLong.empty(), Duration.ofSeconds(1));
+        assertEquals(InputInjectionState.FAILED, failed.state());
+        String diagnostic = failed.diagnostic().orElseThrow();
+        assertTrue(diagnostic.length() <= 32);
+        assertTrue(diagnostic.contains("failure-1"));
+        assertFalse(diagnostic.contains("token=secret-123"));
+        assertFalse(diagnostic.contains("/home/private/save.dat"));
+    }
 }

@@ -152,6 +152,40 @@ final class CheckpointRegistryTest {
     }
 
     @Test
+    void checkpointDiagnosticRespectsDescriptionLength() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("checkpoint-bound"))
+                .clock(() -> 1)
+                .commandDispatcher(dispatch::addLast)
+                .checkpointLimits(new CheckpointLimits(1, 8, 24))
+                .build();
+        runtime.checkpoints().register(new CheckpointProvider() {
+            @Override
+            public CheckpointHandle create() {
+                throw new IllegalStateException("token=secret-123 /home/private/save.dat");
+            }
+
+            @Override
+            public void restore(CheckpointHandle handle) {}
+
+            @Override
+            public void dispose(CheckpointHandle handle) {}
+        });
+        runtime.start();
+        runtime.checkpoints().create("save", null, "create", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+
+        CheckpointOperation failed = runtime.checkpoints().create(
+                "save", null, "create", Duration.ofSeconds(1));
+        String diagnostic = failed.diagnostic().orElseThrow();
+        assertTrue(diagnostic.length() <= 24);
+        assertTrue(diagnostic.contains("failure-1"));
+        assertFalse(diagnostic.contains("token=secret-123"));
+        assertFalse(diagnostic.contains("/home/private/save.dat"));
+    }
+
+    @Test
     void failedEvictionDisposalDoesNotLeaveTheHandleRestorable() {
         ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
         AgentRuntime runtime = AgentRuntime.builder()

@@ -978,6 +978,32 @@ final class AgentRuntimeTest {
     }
 
     @Test
+    void fullCapacityCausesKeepValidationAndDuplicateSemantics() {
+        RuntimeLimits limits = new RuntimeLimits(10, 10, 10, 10, 10, 10, 10, 642, 10, 5, 100);
+        AgentRuntime runtime = runtime(limits, new FrameStagingLimits(2));
+        runtime.start();
+        runtime.frame(1, () -> {
+            runtime.causeNextChange(EntityId.of("enemy"), "p0", ChangeCause.semantic("first"));
+            runtime.causeNextChange(EntityId.of("enemy"), "p1", ChangeCause.semantic("second"));
+            assertEquals(2, runtime.stagedCauseCount());
+            // At full capacity a duplicate retained key still throws without counting.
+            assertThrows(AgentRuntimeException.class,
+                    () -> runtime.causeNextChange(EntityId.of("enemy"), "p0",
+                            ChangeCause.semantic("duplicate")));
+            // At full capacity a null cause still throws without counting.
+            assertThrows(NullPointerException.class,
+                    () -> runtime.causeNextChange(EntityId.of("enemy"), "pX", null));
+            assertEquals(2, runtime.stagedCauseCount());
+            // The next unique valid cause is exactly one observed drop: no value traversal.
+            runtime.causeNextChange(EntityId.of("enemy"), "p2", ChangeCause.semantic("overflow"));
+            assertEquals(2, runtime.stagedCauseCount());
+        });
+
+        FrameSnapshot frame = runtime.latestFrame().orElseThrow();
+        assertTruncation(truncation(frame, "frame.causes"), 3, 2, 2);
+    }
+
+    @Test
     void frameStagingLimitsRejectNonPositiveCausesPerFrame() {
         assertThrows(IllegalArgumentException.class, () -> new FrameStagingLimits(0));
         assertThrows(IllegalArgumentException.class, () -> new FrameStagingLimits(-1));

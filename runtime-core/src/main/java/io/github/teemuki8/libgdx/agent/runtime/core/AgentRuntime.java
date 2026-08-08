@@ -398,11 +398,12 @@ public final class AgentRuntime implements AutoCloseable {
     /**
      * Associates the next observed property difference with an explicit cause.
      *
-     * <p>Once the frame has staged {@link FrameStagingLimits#causesPerFrame()} causes, further
-     * causes are dropped at insertion: the entity and property keys are still validated and the
-     * saturating observed count advances, but the cause value is never retained or copied and
-     * cannot attribute a difference. A duplicate key for a retained cause still throws without
-     * advancing the observed count, and invalid keys never count. The frame snapshot reports
+     * <p>The entity and property keys are always validated and a null cause is always rejected,
+     * even after the frame has staged {@link FrameStagingLimits#causesPerFrame()} causes. A
+     * duplicate key for an already-retained cause throws without advancing the observed count at
+     * any capacity. Only a unique valid key at full capacity is dropped: the saturating observed
+     * count advances by exactly one and the cause value is neither traversed, copied, nor
+     * retained, so it cannot attribute a difference. The frame snapshot reports
      * {@code frame.causes} truncation evidence when the observed count exceeds the retained map.
      */
     public void causeNextChange(EntityId entityId, String property, ChangeCause cause) {
@@ -413,13 +414,15 @@ public final class AgentRuntime implements AutoCloseable {
         requireOpenFrame("change causes may only be supplied inside a frame");
         ChangeKey key = new ChangeKey(Objects.requireNonNull(entityId, "entityId"),
                 IdentifierSupport.validate(property, "property"));
+        Objects.requireNonNull(cause, "cause");
+        if (pendingCauses.containsKey(key)) {
+            throw lifecycle("a cause is already registered for " + entityId.value() + "." + property);
+        }
         if (pendingCauses.size() >= frameStagingLimits.causesPerFrame()) {
             observedCauses = saturatedAdd(observedCauses, 1);
             return;
         }
-        if (pendingCauses.putIfAbsent(key, Objects.requireNonNull(cause, "cause")) != null) {
-            throw lifecycle("a cause is already registered for " + entityId.value() + "." + property);
-        }
+        pendingCauses.put(key, cause);
         observedCauses = saturatedAdd(observedCauses, 1);
     }
 

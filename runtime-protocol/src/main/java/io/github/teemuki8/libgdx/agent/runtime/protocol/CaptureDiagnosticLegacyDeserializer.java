@@ -21,8 +21,13 @@ import java.util.Optional;
  * identifier itself contains {@code |}) to reconstruct {@code correlationId|category|
  * exceptionClass}. Historic 1.0 responses whose message was arbitrary raw text are decoded
  * deterministically into a stable {@code legacy.capture} category and a hash-derived correlation
- * identifier; the raw message and sanitized detail are never retained. The fields are parsed with
- * explicit token walking so strict trailing-token and unknown-property handling is preserved.
+ * identifier; the raw message and sanitized detail are never retained.
+ *
+ * <p>The legacy schema is enforced strictly: unknown top-level and {@code entityId} members are
+ * rejected, {@code provider}/{@code property}/{@code exceptionClass}/{@code message}/
+ * {@code entityId.value} require string tokens (with {@code null} permitted only for the optional
+ * {@code entityId} and {@code property}), and no numeric, boolean, object, or array coercion is
+ * accepted. Explicit token walking preserves strict trailing-token and unknown-property handling.
  */
 public final class CaptureDiagnosticLegacyDeserializer
         extends JsonDeserializer<CaptureDiagnostic> {
@@ -48,37 +53,91 @@ public final class CaptureDiagnosticLegacyDeserializer
             String name = parser.currentName();
             parser.nextToken();
             switch (name) {
-                case "provider" -> provider = parser.getValueAsString();
-                case "entityId" -> entityId = readEntityId(parser);
-                case "property" -> property = Optional.ofNullable(parser.getValueAsString());
-                case "exceptionClass" -> exceptionClass = parser.getValueAsString();
-                case "message" -> message = parser.getValueAsString();
-                default -> parser.skipChildren();
+                case "provider" -> provider = requireString(parser, context, "provider");
+                case "entityId" -> entityId = readEntityId(parser, context);
+                case "property" -> property = readOptionalString(parser, context, "property");
+                case "exceptionClass" -> exceptionClass =
+                        requireString(parser, context, "exceptionClass");
+                case "message" -> message = requireString(parser, context, "message");
+                default -> context.reportInputMismatch(CaptureDiagnostic.class,
+                        "unknown legacy diagnostic field '" + name + "'");
             }
         }
-        return new CaptureDiagnostic(provider, entityId, property,
-                readFailure(exceptionClass, message));
+        if (provider == null) {
+            context.reportInputMismatch(CaptureDiagnostic.class, "legacy provider is required");
+        }
+        if (exceptionClass == null) {
+            context.reportInputMismatch(
+                    CaptureDiagnostic.class, "legacy exceptionClass is required");
+        }
+        if (message == null) {
+            context.reportInputMismatch(CaptureDiagnostic.class, "legacy message is required");
+        }
+        try {
+            return new CaptureDiagnostic(provider, entityId, property,
+                    readFailure(exceptionClass, message));
+        } catch (IllegalArgumentException failure) {
+            context.reportInputMismatch(
+                    CaptureDiagnostic.class, "legacy diagnostic value is invalid");
+            throw failure;
+        }
     }
 
-    private static Optional<EntityId> readEntityId(JsonParser parser) throws IOException {
+    private static String requireString(JsonParser parser, DeserializationContext context,
+            String field) throws IOException {
+        if (parser.currentToken() != JsonToken.VALUE_STRING) {
+            context.reportInputMismatch(CaptureDiagnostic.class,
+                    "legacy " + field + " must be a string");
+        }
+        return parser.getText();
+    }
+
+    private static Optional<String> readOptionalString(JsonParser parser,
+            DeserializationContext context, String field) throws IOException {
+        if (parser.currentToken() == JsonToken.VALUE_NULL) {
+            return Optional.empty();
+        }
+        if (parser.currentToken() != JsonToken.VALUE_STRING) {
+            context.reportInputMismatch(CaptureDiagnostic.class,
+                    "legacy " + field + " must be a string or null");
+        }
+        return Optional.of(parser.getText());
+    }
+
+    private static Optional<EntityId> readEntityId(
+            JsonParser parser, DeserializationContext context) throws IOException {
         if (parser.currentToken() == JsonToken.VALUE_NULL) {
             return Optional.empty();
         }
         if (parser.currentToken() != JsonToken.START_OBJECT) {
-            parser.skipChildren();
-            return Optional.empty();
+            context.reportInputMismatch(CaptureDiagnostic.class,
+                    "legacy entityId must be an object or null");
         }
         String value = null;
         while (parser.nextToken() != JsonToken.END_OBJECT) {
-            if ("value".equals(parser.currentName())) {
-                parser.nextToken();
-                value = parser.getText();
-            } else {
-                parser.skipChildren();
+            String name = parser.currentName();
+            parser.nextToken();
+            if (!"value".equals(name)) {
+                context.reportInputMismatch(CaptureDiagnostic.class,
+                        "unknown legacy entityId member '" + name + "'");
             }
+            if (parser.currentToken() != JsonToken.VALUE_STRING) {
+                context.reportInputMismatch(CaptureDiagnostic.class,
+                        "legacy entityId.value must be a string");
+            }
+            value = parser.getText();
         }
-        return value == null || value.isBlank()
-                ? Optional.empty() : Optional.of(EntityId.of(value));
+        if (value == null || value.isBlank()) {
+            context.reportInputMismatch(
+                    CaptureDiagnostic.class, "legacy entityId.value is required");
+        }
+        try {
+            return Optional.of(EntityId.of(value));
+        } catch (IllegalArgumentException failure) {
+            context.reportInputMismatch(
+                    CaptureDiagnostic.class, "legacy entityId.value is invalid");
+            throw failure;
+        }
     }
 
     private static ApplicationFailureEvidence readFailure(String exceptionClass, String message) {
@@ -92,9 +151,8 @@ public final class CaptureDiagnosticLegacyDeserializer
                 // Not a valid envelope; fall through to the deterministic legacy synthesis.
             }
         }
-        String klass = exceptionClass == null || exceptionClass.isBlank()
-                ? DEFAULT_EXCEPTION_CLASS : exceptionClass;
-        String correlationId = "legacy|" + stableHash(message == null ? "" : message);
+        String klass = exceptionClass.isBlank() ? DEFAULT_EXCEPTION_CLASS : exceptionClass;
+        String correlationId = "legacy|" + stableHash(message);
         return new ApplicationFailureEvidence(
                 LEGACY_CATEGORY, klass, correlationId, Optional.empty());
     }
@@ -102,9 +160,6 @@ public final class CaptureDiagnosticLegacyDeserializer
     private record LegacyEnvelope(String correlationId, String category, String exceptionClass) {}
 
     private static LegacyEnvelope parseEnvelope(String message) {
-        if (message == null) {
-            return null;
-        }
         int last = message.lastIndexOf('|');
         if (last <= 0) {
             return null;

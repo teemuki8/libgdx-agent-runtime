@@ -1046,6 +1046,74 @@ final class RuntimeProtocolTest {
     }
 
     @Test
+    void legacyProtocolDecodeRejectsUnknownAndCoercedFields() throws Exception {
+        assertThrows(com.fasterxml.jackson.core.JsonProcessingException.class,
+                () -> ProtocolJson.mapper().readValue("""
+                        {"provider":"enemies","entityId":{"value":"bad"},"property":"health",
+                         "exceptionClass":"java.lang.IllegalStateException","message":"legacy|1|a|b",
+                         "unknownField":"x"}""",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class));
+        assertThrows(com.fasterxml.jackson.core.JsonProcessingException.class,
+                () -> ProtocolJson.mapper().readValue("""
+                        {"provider":"enemies","entityId":{"value":"bad","extra":1},
+                         "property":"health","exceptionClass":"java.lang.IllegalStateException",
+                         "message":"legacy|1|a|b"}""",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class));
+        assertThrows(com.fasterxml.jackson.core.JsonProcessingException.class,
+                () -> ProtocolJson.mapper().readValue("""
+                        {"provider":123,"entityId":{"value":"bad"},"property":"health",
+                         "exceptionClass":"java.lang.IllegalStateException","message":"legacy|1|a|b"}""",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class));
+        assertThrows(com.fasterxml.jackson.core.JsonProcessingException.class,
+                () -> ProtocolJson.mapper().readValue("""
+                        {"provider":"enemies","entityId":{"value":"bad"},"property":true,
+                         "exceptionClass":"java.lang.IllegalStateException","message":"legacy|1|a|b"}""",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class));
+        assertThrows(com.fasterxml.jackson.core.JsonProcessingException.class,
+                () -> ProtocolJson.mapper().readValue("""
+                        {"provider":"enemies","entityId":{"value":"bad"},"property":"health",
+                         "exceptionClass":false,"message":"legacy|1|a|b"}""",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class));
+        assertThrows(com.fasterxml.jackson.core.JsonProcessingException.class,
+                () -> ProtocolJson.mapper().readValue("""
+                        {"provider":"enemies","entityId":{"value":"bad"},"property":"health",
+                         "exceptionClass":"java.lang.IllegalStateException","message":[1,2]}""",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class));
+    }
+
+    @Test
+    void legacyProtocolDecodeRejectsMalformedEntityId() throws Exception {
+        assertThrows(com.fasterxml.jackson.core.JsonProcessingException.class,
+                () -> ProtocolJson.mapper().readValue("""
+                        {"provider":"enemies","entityId":"bad","property":"health",
+                         "exceptionClass":"java.lang.IllegalStateException","message":"legacy|1|a|b"}""",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class));
+        assertThrows(com.fasterxml.jackson.core.JsonProcessingException.class,
+                () -> ProtocolJson.mapper().readValue("""
+                        {"provider":"enemies","entityId":{},"property":"health",
+                         "exceptionClass":"java.lang.IllegalStateException","message":"legacy|1|a|b"}""",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class));
+        assertThrows(com.fasterxml.jackson.core.JsonProcessingException.class,
+                () -> ProtocolJson.mapper().readValue("""
+                        {"provider":"enemies","entityId":{"value":7},"property":"health",
+                         "exceptionClass":"java.lang.IllegalStateException","message":"legacy|1|a|b"}""",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class));
+    }
+
+    @Test
+    void legacyProtocolDecodeAcceptsNullOptionals() throws Exception {
+        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic decoded =
+                ProtocolJson.mapper().readValue("""
+                        {"provider":"enemies","entityId":null,"property":null,
+                         "exceptionClass":"java.lang.IllegalStateException",
+                         "message":"legacy|1|a|b"}""",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class);
+        assertTrue(decoded.entityId().isEmpty());
+        assertTrue(decoded.property().isEmpty());
+        assertEquals("legacy|1|a|b", decoded.failure().legacyEnvelope());
+    }
+
+    @Test
     void legacyProtocolCommandStatusDiagnosticIsEnvelopeOnly() throws Exception {
         ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
         AgentRuntime runtime = AgentRuntime.builder()

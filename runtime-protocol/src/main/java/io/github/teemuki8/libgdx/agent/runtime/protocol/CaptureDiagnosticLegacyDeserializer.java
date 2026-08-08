@@ -27,12 +27,14 @@ import java.util.Optional;
  * rejected, {@code provider}/{@code property}/{@code exceptionClass}/{@code message}/
  * {@code entityId.value} require string tokens (with {@code null} permitted only for the optional
  * {@code entityId} and {@code property}), and no numeric, boolean, object, or array coercion is
- * accepted. Explicit token walking preserves strict trailing-token and unknown-property handling.
+ * accepted. The legacy {@code exceptionClass} must be nonblank and at most 256 code units (the
+ * {@code IdentifierSupport} bound the historic record enforced); when the {@code message} parses
+ * as an envelope its exception class must equal the supplied field. Explicit token walking
+ * preserves strict trailing-token and unknown-property handling.
  */
 public final class CaptureDiagnosticLegacyDeserializer
         extends JsonDeserializer<CaptureDiagnostic> {
     private static final String LEGACY_CATEGORY = "legacy.capture";
-    private static final String DEFAULT_EXCEPTION_CLASS = "java.lang.Exception";
 
     @Override
     public CaptureDiagnostic deserialize(JsonParser parser, DeserializationContext context)
@@ -73,13 +75,30 @@ public final class CaptureDiagnosticLegacyDeserializer
         if (message == null) {
             context.reportInputMismatch(CaptureDiagnostic.class, "legacy message is required");
         }
+        requireValidExceptionClass(exceptionClass, context);
         try {
             return new CaptureDiagnostic(provider, entityId, property,
-                    readFailure(exceptionClass, message));
+                    readFailure(exceptionClass, message, context));
         } catch (IllegalArgumentException failure) {
             context.reportInputMismatch(
                     CaptureDiagnostic.class, "legacy diagnostic value is invalid");
             throw failure;
+        }
+    }
+
+    private static void requireValidExceptionClass(String exceptionClass,
+            DeserializationContext context) throws IOException {
+        if (exceptionClass.isBlank()) {
+            context.reportInputMismatch(
+                    CaptureDiagnostic.class, "legacy exceptionClass must not be blank");
+            throw new IllegalArgumentException("legacy exceptionClass must not be blank");
+        }
+        if (exceptionClass.length() > ApplicationFailureEvidence.MAX_EXCEPTION_CLASS_LENGTH) {
+            context.reportInputMismatch(CaptureDiagnostic.class,
+                    "legacy exceptionClass exceeds "
+                            + ApplicationFailureEvidence.MAX_EXCEPTION_CLASS_LENGTH + " characters");
+            throw new IllegalArgumentException("legacy exceptionClass exceeds "
+                    + ApplicationFailureEvidence.MAX_EXCEPTION_CLASS_LENGTH + " characters");
         }
     }
 
@@ -140,21 +159,30 @@ public final class CaptureDiagnosticLegacyDeserializer
         }
     }
 
-    private static ApplicationFailureEvidence readFailure(String exceptionClass, String message) {
+    private static ApplicationFailureEvidence readFailure(String exceptionClass, String message,
+            DeserializationContext context) throws IOException {
         LegacyEnvelope envelope = parseEnvelope(message);
         if (envelope != null) {
+            if (!exceptionClass.equals(envelope.exceptionClass())) {
+                context.reportInputMismatch(CaptureDiagnostic.class,
+                        "legacy exceptionClass '" + exceptionClass
+                                + "' does not match the message envelope exception class '"
+                                + envelope.exceptionClass() + "'");
+                throw new IllegalArgumentException(
+                        "legacy exceptionClass does not match the message envelope");
+            }
             try {
                 return new ApplicationFailureEvidence(
                         envelope.category, envelope.exceptionClass,
                         envelope.correlationId, Optional.empty());
             } catch (IllegalArgumentException failure) {
-                // Not a valid envelope; fall through to the deterministic legacy synthesis.
+                // Envelope components out of bounds; fall through to the deterministic legacy
+                // synthesis using the already-validated exceptionClass field.
             }
         }
-        String klass = exceptionClass.isBlank() ? DEFAULT_EXCEPTION_CLASS : exceptionClass;
         String correlationId = "legacy|" + stableHash(message);
         return new ApplicationFailureEvidence(
-                LEGACY_CATEGORY, klass, correlationId, Optional.empty());
+                LEGACY_CATEGORY, exceptionClass, correlationId, Optional.empty());
     }
 
     private record LegacyEnvelope(String correlationId, String category, String exceptionClass) {}

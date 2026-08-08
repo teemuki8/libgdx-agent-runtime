@@ -1101,16 +1101,81 @@ final class RuntimeProtocolTest {
     }
 
     @Test
+    void legacyProtocolDecodeRejectsBlankOrOversizedExceptionClass() throws Exception {
+        assertThrows(com.fasterxml.jackson.core.JsonProcessingException.class,
+                () -> ProtocolJson.mapper().readValue("""
+                        {"provider":"enemies","entityId":{"value":"bad"},"property":"health",
+                         "exceptionClass":"","message":"legacy|1|a|java.lang.IllegalStateException"}""",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class));
+        assertThrows(com.fasterxml.jackson.core.JsonProcessingException.class,
+                () -> ProtocolJson.mapper().readValue("""
+                        {"provider":"enemies","entityId":{"value":"bad"},"property":"health",
+                         "exceptionClass":"   ","message":"legacy|1|a|java.lang.IllegalStateException"}""",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class));
+        assertThrows(com.fasterxml.jackson.core.JsonProcessingException.class,
+                () -> ProtocolJson.mapper().readValue("""
+                        {"provider":"enemies","entityId":{"value":"bad"},"property":"health",
+                         "exceptionClass":"","message":"token=secret-123"}""",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class));
+        String over = "c".repeat(257);
+        assertThrows(com.fasterxml.jackson.core.JsonProcessingException.class,
+                () -> ProtocolJson.mapper().readValue(
+                        "{\"provider\":\"enemies\",\"entityId\":{\"value\":\"bad\"},"
+                                + "\"property\":\"health\",\"exceptionClass\":\"" + over
+                                + "\",\"message\":\"legacy|1|a|" + over + "\"}",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class));
+    }
+
+    @Test
+    void legacyProtocolDecodeRejectsEnvelopeExceptionClassMismatch() throws Exception {
+        assertThrows(com.fasterxml.jackson.core.JsonProcessingException.class,
+                () -> ProtocolJson.mapper().readValue("""
+                        {"provider":"enemies","entityId":{"value":"bad"},"property":"health",
+                         "exceptionClass":"com.example.Other",
+                         "message":"legacy|1|a|com.example.Expected"}""",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class));
+        assertThrows(com.fasterxml.jackson.core.JsonProcessingException.class,
+                () -> ProtocolJson.mapper().readValue("""
+                        {"provider":"enemies","entityId":{"value":"bad"},"property":"health",
+                         "exceptionClass":"java.lang.IllegalStateException",
+                         "message":"legacy|1|a|java.lang.RuntimeException"}""",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class));
+    }
+
+    @Test
+    void legacyProtocolDecodeAcceptsBoundaryLengthExceptionClass() throws Exception {
+        String klass = "e".repeat(256);
+        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic decoded =
+                ProtocolJson.mapper().readValue(
+                        "{\"provider\":\"enemies\",\"entityId\":{\"value\":\"bad\"},"
+                                + "\"property\":\"health\",\"exceptionClass\":\"" + klass
+                                + "\",\"message\":\"legacy|1|a|" + klass + "\"}",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class);
+        assertEquals(klass, decoded.failure().exceptionClass());
+        assertEquals("legacy|1|a|" + klass, decoded.failure().legacyEnvelope());
+        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic raw =
+                ProtocolJson.mapper().readValue(
+                        "{\"provider\":\"enemies\",\"entityId\":{\"value\":\"bad\"},"
+                                + "\"property\":\"health\",\"exceptionClass\":\"" + klass
+                                + "\",\"message\":\"token=secret-123\"}",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class);
+        assertEquals(klass, raw.failure().exceptionClass());
+        assertEquals("legacy.capture", raw.failure().category());
+        assertFalse(raw.failure().legacyEnvelope().contains("secret-123"));
+    }
+
+    @Test
     void legacyProtocolDecodeAcceptsNullOptionals() throws Exception {
         io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic decoded =
                 ProtocolJson.mapper().readValue("""
                         {"provider":"enemies","entityId":null,"property":null,
                          "exceptionClass":"java.lang.IllegalStateException",
-                         "message":"legacy|1|a|b"}""",
+                         "message":"legacy|1|a|java.lang.IllegalStateException"}""",
                         io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class);
         assertTrue(decoded.entityId().isEmpty());
         assertTrue(decoded.property().isEmpty());
-        assertEquals("legacy|1|a|b", decoded.failure().legacyEnvelope());
+        assertEquals("legacy|1|a|java.lang.IllegalStateException",
+                decoded.failure().legacyEnvelope());
     }
 
     @Test

@@ -5,6 +5,7 @@ import io.modelcontextprotocol.json.McpJsonMapper;
 import io.modelcontextprotocol.json.TypeRef;
 import io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper;
 import java.io.IOException;
+import java.io.OutputStream;
 import tools.jackson.core.StreamReadConstraints;
 import tools.jackson.core.json.JsonFactory;
 import tools.jackson.databind.json.JsonMapper;
@@ -15,7 +16,7 @@ import tools.jackson.databind.json.JsonMapper;
  * behavior of the MCP SDK Jackson 3 mapper is retained by delegating to
  * {@link JacksonMcpJsonMapper}.
  */
-public final class ConstrainedMcpJsonMapper implements McpJsonMapper {
+public class ConstrainedMcpJsonMapper implements McpJsonMapper {
     /** Matches the number-token bound used by {@link ProtocolJson}. */
     private static final int MAX_NUMBER_LENGTH = 128;
 
@@ -79,5 +80,18 @@ public final class ConstrainedMcpJsonMapper implements McpJsonMapper {
     @Override
     public byte[] writeValueAsBytes(Object value) throws IOException {
         return delegate.writeValueAsBytes(value);
+    }
+
+    /**
+     * Serializes a value through the underlying Jackson 3 streaming API directly to the
+     * given stream.
+     *
+     * <p>{@link McpJsonMapper#writeValueAsBytes} hides that path behind a full-size byte
+     * array; streaming into a {@link BoundedOutputStream} lets the transport enforce
+     * {@link ProtocolJson#MAX_RESPONSE_BYTES} during serialization instead of after. The
+     * stream is not closed by this method (Jackson closes only the generator it creates).
+     */
+    public void writeValue(OutputStream out, Object value) throws IOException {
+        delegate.getJsonMapper().writeValue(out, value);
     }
 }

@@ -29,7 +29,9 @@ import io.github.teemuki8.libgdx.agent.runtime.core.RecordingEntry;
 import io.github.teemuki8.libgdx.agent.runtime.core.RecordingFrameEntry;
 import io.github.teemuki8.libgdx.agent.runtime.core.RecordingInputEntry;
 import io.github.teemuki8.libgdx.agent.runtime.core.RecordingTickEntry;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.util.Objects;
 
 /** Hardened deterministic JSON codec for protocol V1. */
@@ -80,11 +82,36 @@ public final class ProtocolJson {
         return encodeBounded(request, MAX_REQUEST_BYTES, "request", MAPPER);
     }
 
-    /** Encodes a response and enforces the response byte bound. */
+    /** Encodes a response and enforces the response byte bound during serialization. */
     public static byte[] encode(RuntimeResponse response) {
         Objects.requireNonNull(response, "response");
-        return encodeBounded(response, MAX_RESPONSE_BYTES, "response",
-                mapper(response.version()));
+        ByteArrayOutputStream sink = new ByteArrayOutputStream();
+        writeResponse(response, sink);
+        return sink.toByteArray();
+    }
+
+    /**
+     * Writes a response through a stream capped at {@link #MAX_RESPONSE_BYTES} bytes.
+     *
+     * <p>The response version's mapper (structured diagnostics under 2.0) streams directly
+     * through a bounded filter, so serialization aborts with
+     * {@link ProtocolErrorCode#LIMIT_EXCEEDED} before byte {@code MAX_RESPONSE_BYTES + 1}
+     * is written to {@code output}; the caller's stream never receives a partial
+     * overflowing range. The provided stream is not closed or flushed by this method.
+     */
+    public static void writeResponse(RuntimeResponse response, OutputStream output) {
+        Objects.requireNonNull(response, "response");
+        Objects.requireNonNull(output, "output");
+        try {
+            mapper(response.version()).writeValue(
+                    new BoundedOutputStream(output, MAX_RESPONSE_BYTES), response);
+        } catch (BoundedOutputStream.OverflowException overflow) {
+            throw new ProtocolJsonException(
+                    ProtocolErrorCode.LIMIT_EXCEEDED, "response exceeds byte limit", null);
+        } catch (IOException failure) {
+            throw new ProtocolJsonException(
+                    ProtocolErrorCode.INTERNAL_ERROR, "cannot encode protocol response", failure);
+        }
     }
 
     /** Decodes a response for clients and contract tests. */

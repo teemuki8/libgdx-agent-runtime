@@ -300,6 +300,13 @@ Raw requests are limited to 1 MiB, encoded responses to 8 MiB, JSON depth to 32,
 to 16384 code units, and query counts to both the protocol maximum and the runtime's configured
 limit. Unknown fields, trailing JSON, unknown subtypes, and unsafe polymorphic bases are rejected.
 
+The 8 MiB response bound is enforced while the actual response is serialized, not after: both
+`ProtocolJson.encode` and the stdio transport stream through a hard-cap sink, so a response that
+would cross byte `8388608` aborts with `LIMIT_EXCEEDED` without ever materializing the full array.
+On stdio, an oversized outbound message is answered with one bounded typed JSON-RPC error
+(`code -32001`, echoing the request id) instead of a partial oversized frame, and later requests
+still work; the checked bytes are exactly the bytes written before the newline terminator.
+
 ## Bundled fixture
 
 On Linux with Xvfb:

@@ -165,7 +165,13 @@ final class SimulationControlTest {
 
         runtime.controls().waitForCondition(
                 "wait", "broken", 5, 1, Duration.ofSeconds(1));
+        // Retained evidence starts pending while the command is queued.
+        assertEquals(Optional.of(ControlStopReason.PENDING),
+                runtime.controls().retainedStopReason("wait"));
         queue.removeFirst().run();
+        // A throwing condition records CALLBACK_FAILED on the retained evidence itself.
+        assertEquals(Optional.of(ControlStopReason.CALLBACK_FAILED),
+                runtime.controls().retainedStopReason("wait"));
         ControlOperation result = runtime.controls().waitForCondition(
                 "wait", "broken", 5, 1, Duration.ofSeconds(1));
 
@@ -212,7 +218,13 @@ final class SimulationControlTest {
 
         runtime.controls().waitForCondition(
                 "wait-late", "late-broken", 5, 1, Duration.ofSeconds(1));
+        // Retained evidence starts pending while the command is queued.
+        assertEquals(Optional.of(ControlStopReason.PENDING),
+                runtime.controls().retainedStopReason("wait-late"));
         queue.removeFirst().run();
+        // The condition throwing on a later check records CALLBACK_FAILED too.
+        assertEquals(Optional.of(ControlStopReason.CALLBACK_FAILED),
+                runtime.controls().retainedStopReason("wait-late"));
         ControlOperation result = runtime.controls().waitForCondition(
                 "wait-late", "late-broken", 5, 1, Duration.ofSeconds(1));
 
@@ -233,12 +245,18 @@ final class SimulationControlTest {
 
     private static void assertNoRawSecret(ControlOperation operation) {
         CommandStatus status = operation.command().status().orElseThrow();
+        assertEquals(CommandState.FAILED, status.state());
         assertEquals(false, status.diagnostic().orElse("").contains("token=secret"));
         ApplicationFailureEvidence evidence = status.applicationFailure().orElseThrow();
         assertEquals("command.failed", evidence.category());
         assertEquals("java.lang.IllegalStateException", evidence.exceptionClass());
-        assertEquals(false, (evidence.category() + evidence.exceptionClass()
-                + evidence.sanitizedDetail().orElse("")).contains("token=secret"));
+        assertEquals(false, evidence.category().contains("token=secret"));
+        assertEquals(false, evidence.correlationId().contains("token=secret"));
+        assertEquals(false, evidence.exceptionClass().contains("token=secret"));
+        assertEquals(false, evidence.legacyEnvelope().contains("token=secret"));
+        assertEquals(false, evidence.sanitizedDetail().orElse("").contains("token=secret"));
+        // The serialized record view (toString) exposes no raw detail either.
+        assertEquals(false, operation.toString().contains("token=secret"));
     }
 
     @Test

@@ -81,6 +81,15 @@ public final class SimulationControlRegistry {
         return operations.size();
     }
 
+    /**
+     * Package-private read-only observation: the retained stop reason for one submitted control
+     * operation, if still retained.
+     */
+    synchronized Optional<ControlStopReason> retainedStopReason(String requestId) {
+        Evidence evidence = operations.get(requestId);
+        return evidence == null ? Optional.empty() : Optional.of(evidence.stopReason);
+    }
+
     /** Releases application control callbacks and pending operations, keeping condition metadata. */
     synchronized void close() {
         controller = null;

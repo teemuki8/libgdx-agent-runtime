@@ -12,6 +12,14 @@ All notable changes follow Keep a Changelog structure.
   one-correlation-per-frame recording, token pairing, and the `ui_runtime_compare` loop-order
   requirement; document the token contract on the `UiFrameCorrelation` Javadoc (#38).
 
+### Security
+
+- Application callback failures expose only a stable category, exception class, and deterministic
+  correlation identifier in externally queryable evidence by default; raw exception messages and
+  stack traces no longer cross the boundary. Applications may opt into bounded sanitized detail
+  via `AgentRuntime.Builder.applicationFailureSanitizer(...)`; a throwing sanitizer fails closed
+  and raw throwables are routed to non-stdout local logging only (#50).
+
 ## [1.0.0] - 2026-08-04
 
 First production-supported release and stable 1.x compatibility baseline.

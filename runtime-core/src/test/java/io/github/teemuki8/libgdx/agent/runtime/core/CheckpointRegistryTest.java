@@ -111,7 +111,44 @@ final class CheckpointRegistryTest {
         assertTrue(failed.applicationStateMayBePartiallyChanged());
         assertTrue(failed.baselineFrameId().isEmpty());
         assertEquals(new ExecutionEpochId(0), runtime.currentEpoch());
-        assertTrue(failed.diagnostic().orElseThrow().contains("restore failed"));
+        String diagnostic = failed.diagnostic().orElseThrow();
+        assertTrue(diagnostic.contains("checkpoint.restore"));
+        assertTrue(diagnostic.contains("failure-1"));
+        assertFalse(diagnostic.contains("restore failed"));
+    }
+
+    @Test
+    void failedCheckpointEvidenceOmitsRawApplicationMessages() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("checkpoint-leak"))
+                .clock(() -> 1)
+                .commandDispatcher(dispatch::addLast)
+                .build();
+        runtime.checkpoints().register(new CheckpointProvider() {
+            @Override
+            public CheckpointHandle create() {
+                throw new IllegalStateException("token=secret-123 /home/private/save.dat");
+            }
+
+            @Override
+            public void restore(CheckpointHandle handle) {}
+
+            @Override
+            public void dispose(CheckpointHandle handle) {}
+        });
+        runtime.start();
+        runtime.checkpoints().create("save", null, "create", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+
+        CheckpointOperation failed = runtime.checkpoints().create(
+                "save", null, "create", Duration.ofSeconds(1));
+        assertEquals(CommandState.FAILED, failed.command().status().orElseThrow().state());
+        String diagnostic = failed.diagnostic().orElseThrow();
+        assertFalse(diagnostic.contains("token=secret-123"));
+        assertFalse(diagnostic.contains("/home/private/save.dat"));
+        assertTrue(diagnostic.contains("checkpoint.create"));
+        assertTrue(diagnostic.contains("failure-1"));
     }
 
     @Test

@@ -28,6 +28,7 @@ public final class AgentRuntime implements AutoCloseable {
     private final SessionId sessionId;
     private final RuntimeConfiguration configuration;
     private final RuntimeLimits limits;
+    private final ApplicationDiagnostics diagnostics;
     private final MonotonicClock monotonicClock;
     private final Clock wallClock;
     private final Thread captureThread;
@@ -67,13 +68,15 @@ public final class AgentRuntime implements AutoCloseable {
         sessionId = builder.sessionId;
         configuration = builder.configuration;
         limits = configuration.limits();
+        diagnostics = new ApplicationDiagnostics(
+                builder.applicationFailureSanitizer, limits.stringLength());
         monotonicClock = builder.monotonicClock;
         wallClock = builder.wallClock;
         captureThread = builder.captureThread;
         commands = Optional.ofNullable(builder.commandDispatcher)
                 .filter(ignored -> configuration.enabled()).map(dispatcher ->
                 new CommandDispatch(dispatcher, builder.commandDispatchLimits,
-                        monotonicClock, captureThread));
+                        monotonicClock, captureThread, diagnostics));
         scenarios = new ScenarioRegistry(this, builder.scenarioLimits);
         actions = new ActionRegistry(this, builder.actionLimits);
         assertions = new AssertionEvaluator(this);
@@ -591,7 +594,8 @@ public final class AgentRuntime implements AutoCloseable {
                 stream.forEach(entity -> observed.add(
                         new NamedEntity(source.getKey(), Objects.requireNonNull(entity, "entity"))));
             } catch (RuntimeException failure) {
-                diagnostics.add(diagnostic(source.getKey(), null, null, failure));
+                diagnostics.add(diagnostic(
+                        "provider.source", source.getKey(), null, null, failure));
             }
         }
         observed.sort(Comparator.comparing((NamedEntity value) -> value.entity().id())
@@ -632,7 +636,8 @@ public final class AgentRuntime implements AutoCloseable {
             displayName = name == null ? Optional.empty()
                     : Optional.of(limitString(name, "entity.displayName", truncations));
         } catch (RuntimeException failure) {
-            diagnostics.add(diagnostic(named.provider(), entity.id(), null, failure));
+            diagnostics.add(diagnostic(
+                    "provider.displayName", named.provider(), entity.id(), null, failure));
             displayName = Optional.empty();
         }
 
@@ -659,7 +664,8 @@ public final class AgentRuntime implements AutoCloseable {
                         limitValue(value, 1, "property." + property.name(), truncations)));
             } catch (RuntimeException failure) {
                 diagnostics.add(diagnostic(
-                        named.provider(), entity.id(), property.name(), failure));
+                        "provider.property", named.provider(), entity.id(),
+                        property.name(), failure));
             }
         }
         if (providers.size() > limits.propertiesPerEntity()) {
@@ -933,15 +939,15 @@ public final class AgentRuntime implements AutoCloseable {
         return new AgentRuntimeException(RuntimeErrorCode.INVALID_LIFECYCLE, message);
     }
 
-    private CaptureDiagnostic diagnostic(
-            String provider, EntityId entity, String property, RuntimeException failure) {
-        String message = failure.getMessage() == null ? failure.getClass().getSimpleName()
-                : failure.getMessage();
-        if (message.length() > limits.stringLength()) {
-            message = message.substring(0, limits.stringLength());
-        }
+    ApplicationDiagnostics diagnostics() {
+        return diagnostics;
+    }
+
+    private CaptureDiagnostic diagnostic(String category, String provider, EntityId entity,
+            String property, RuntimeException failure) {
         return new CaptureDiagnostic(provider, Optional.ofNullable(entity),
-                Optional.ofNullable(property), failure.getClass().getName(), message);
+                Optional.ofNullable(property), failure.getClass().getName(),
+                diagnostics.describe(category, failure));
     }
 
     private static Map<EntityId, EntitySnapshot> index(List<EntitySnapshot> entities) {
@@ -1140,6 +1146,7 @@ public final class AgentRuntime implements AutoCloseable {
         private Clock wallClock = Clock.systemUTC();
         private Thread captureThread = Thread.currentThread();
         private ApplicationCommandDispatcher commandDispatcher;
+        private ApplicationFailureSanitizer applicationFailureSanitizer;
         private CommandDispatchLimits commandDispatchLimits =
                 CommandDispatchLimits.developmentDefaults();
         private ScenarioLimits scenarioLimits = ScenarioLimits.developmentDefaults();
@@ -1187,6 +1194,22 @@ public final class AgentRuntime implements AutoCloseable {
         /** Registers the application-owned bridge used by bounded mutating commands. */
         public Builder commandDispatcher(ApplicationCommandDispatcher value) {
             commandDispatcher = Objects.requireNonNull(value, "commandDispatcher");
+            return this;
+        }
+
+        /**
+         * Sets the optional application-owned translation of callback failures into bounded public
+         * detail.
+         *
+         * <p>Without a sanitizer, failure evidence contains only the stable category, exception
+         * class, and deterministic correlation identifier; raw exception messages and stack traces
+         * are never exposed. A present sanitizer result is truncated to the configured string
+         * bound. A throwing sanitizer fails closed: the original failure is logged locally and no
+         * raw message becomes queryable.
+         */
+        public Builder applicationFailureSanitizer(ApplicationFailureSanitizer value) {
+            applicationFailureSanitizer =
+                    Objects.requireNonNull(value, "applicationFailureSanitizer");
             return this;
         }
 

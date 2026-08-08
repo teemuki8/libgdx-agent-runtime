@@ -154,7 +154,7 @@ public final class CheckpointRegistry {
             }
         } catch (RuntimeException | Error failure) {
             synchronized (this) {
-                evidence.diagnostic = diagnostic(failure);
+                evidence.diagnostic = diagnostic("checkpoint.create", failure);
             }
             throw failure;
         }
@@ -181,7 +181,7 @@ public final class CheckpointRegistry {
             }
         } catch (RuntimeException | Error failure) {
             synchronized (this) {
-                evidence.diagnostic = diagnostic(failure);
+                evidence.diagnostic = diagnostic("checkpoint.restore", failure);
             }
             throw failure;
         }
@@ -255,12 +255,8 @@ public final class CheckpointRegistry {
         };
     }
 
-    private String diagnostic(Throwable failure) {
-        String message = failure.getMessage();
-        String value = failure.getClass().getSimpleName()
-                + (message == null || message.isBlank() ? "" : ": " + message);
-        return value.length() <= limits.descriptionLength()
-                ? value : value.substring(0, limits.descriptionLength());
+    private String diagnostic(String category, Throwable failure) {
+        return runtime.diagnostics().describe(category, failure);
     }
 
     private static void requireValidTimeout(Duration timeout, long maximumNanos) {

@@ -23,8 +23,10 @@ with its prior entity snapshot as evidence. Duplicate IDs across all static/dyna
 retained as diagnostics and omitted after the first deterministic owner.
 
 Provider failures become bounded diagnostics with provider, optional entity/property, exception
-class, and message; stack traces are not externally serialized. Truncation always reports the
-dimension, observed count, retained count, and limit.
+class, a stable category, and a deterministic correlation identifier; raw application messages and
+stack traces are never externally serialized. Applications may opt into bounded sanitized detail
+through an application-owned sanitizer that fails closed when it throws. Truncation always reports
+the dimension, observed count, retained count, and limit.
 
 ## Consequences
 

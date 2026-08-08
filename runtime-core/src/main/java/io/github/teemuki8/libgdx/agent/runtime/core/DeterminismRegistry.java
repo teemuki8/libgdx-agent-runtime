@@ -85,7 +85,7 @@ public final class DeterminismRegistry {
             previouslyPaused = runtime.controls().pauseForDeterminism();
         } catch (RuntimeException | Error failure) {
             return inconclusive(spec, counters, executionNanos,
-                    "simulation pause failed: " + diagnostic(failure));
+                    "simulation pause failed: " + diagnostic("determinism.pause", failure));
         }
         long uiEvictions = runtime.uiCorrelations().evictedFrameCount();
         try {
@@ -123,7 +123,8 @@ public final class DeterminismRegistry {
             return compare(spec, runs, counters, executionNanos);
         } catch (RuntimeException | Error failure) {
             return inconclusive(spec, counters, executionNanos,
-                    "scenario reset or tick failed: " + diagnostic(failure));
+                    "scenario reset or tick failed: "
+                            + diagnostic("determinism.execute", failure));
         } finally {
             runtime.controls().restorePauseAfterDeterminism(previouslyPaused);
         }
@@ -306,12 +307,8 @@ public final class DeterminismRegistry {
                 Optional.empty(), bounds(spec, counters, executionNanos));
     }
 
-    private static String diagnostic(Throwable failure) {
-        String message = failure.getMessage();
-        if (message == null || message.isBlank()) {
-            return failure.getClass().getSimpleName();
-        }
-        return message.length() <= 384 ? message : message.substring(0, 384);
+    private String diagnostic(String category, Throwable failure) {
+        return runtime.diagnostics().describe(category, failure);
     }
 
     private DeterminismBounds bounds(

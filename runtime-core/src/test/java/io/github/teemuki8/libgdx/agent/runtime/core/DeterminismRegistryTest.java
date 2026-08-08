@@ -1,6 +1,7 @@
 package io.github.teemuki8.libgdx.agent.runtime.core;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -94,8 +95,49 @@ final class DeterminismRegistryTest {
         assertEquals(CommandState.SUCCEEDED,
                 operation.command().status().orElseThrow().state());
         assertEquals(DeterminismStatus.INCONCLUSIVE, operation.result().orElseThrow().status());
-        assertTrue(operation.result().orElseThrow().message().contains("reset rejected"));
+        String message = operation.result().orElseThrow().message();
+        assertFalse(message.contains("reset rejected"));
+        assertTrue(message.contains("determinism.execute"));
+        assertTrue(message.contains("failure-1"));
         assertEquals(1, operation.result().orElseThrow().bounds().completedRepeats());
+    }
+
+    @Test
+    void failedSimulationPauseReportsStableCategoryAndOmitsRawMessages() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        long[] value = {0};
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("determinism-pause-failure"))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .build();
+        runtime.entities().register(EntityId.of("counter"), EntityType.of("state"),
+                () -> "Counter", inspector -> inspector.property("value", () -> value[0]));
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {
+                    throw new IllegalStateException("token=secret-123 /home/private/save.dat");
+                })
+                .resume(() -> {})
+                .tick(delta -> value[0]++)
+                .build());
+        runtime.scenarios().register("seeded",
+                context -> value[0] = context.randomSeed().orElseThrow());
+        runtime.start();
+        DeterminismSpec spec = spec("seeded", 1, 1);
+
+        runtime.determinism().check(
+                spec, "determinism-pause-failure", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        DeterminismOperation operation = runtime.determinism().check(
+                spec, "determinism-pause-failure", Duration.ofSeconds(1));
+
+        assertEquals(DeterminismStatus.INCONCLUSIVE,
+                operation.result().orElseThrow().status());
+        String message = operation.result().orElseThrow().message();
+        assertFalse(message.contains("token=secret-123"));
+        assertFalse(message.contains("/home/private/save.dat"));
+        assertTrue(message.contains("determinism.pause"));
+        assertTrue(message.contains("failure-1"));
     }
 
     @Test

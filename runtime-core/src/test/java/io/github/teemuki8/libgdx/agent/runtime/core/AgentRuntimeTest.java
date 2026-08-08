@@ -114,6 +114,104 @@ final class AgentRuntimeTest {
     }
 
     @Test
+    void providerFailureDiagnosticsOmitRawMessagesAndExposeStableCategoryAndCorrelation() {
+        AgentRuntime runtime = runtime(RuntimeLimits.developmentDefaults());
+        runtime.entities().register(EntityId.of("bad"), EntityType.of("enemy"),
+                () -> "Bad", inspector -> inspector.property("health",
+                        (java.util.function.Supplier<RuntimeValue>) () -> {
+                    throw new IllegalStateException("token=secret-123 /home/private/save.dat");
+                }));
+        runtime.start();
+
+        List<CaptureDiagnostic> diagnostics =
+                runtime.latestFrame().orElseThrow().stats().diagnostics();
+        assertEquals(1, diagnostics.size());
+        String message = diagnostics.getFirst().message();
+        assertFalse(message.contains("token=secret-123"));
+        assertFalse(message.contains("/home/private/save.dat"));
+        assertTrue(message.contains("provider.property"));
+        assertTrue(message.contains("failure-1"));
+    }
+
+    @Test
+    void sanitizerDetailAppearsBoundedAndOmitsRawMessages() {
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("sanitized"))
+                .configuration(new RuntimeConfiguration(true, new RuntimeLimits(
+                        240, 2_000, 5_000, 128, 256, 256, 64, 16, 256, 16, 1_000)))
+                .clock(new AtomicLong()::incrementAndGet)
+                .wallClock(Clock.fixed(Instant.parse("2026-07-29T00:00:00Z"), ZoneOffset.UTC))
+                .applicationFailureSanitizer((context, failure) ->
+                        Optional.of("safe-detail"))
+                .build();
+        runtime.entities().register(EntityId.of("bad"), EntityType.of("enemy"),
+                () -> "Bad", inspector -> inspector.property("health",
+                        (java.util.function.Supplier<RuntimeValue>) () -> {
+                    throw new IllegalStateException("token=secret-123 /home/private/save.dat");
+                }));
+        runtime.start();
+
+        String message = runtime.latestFrame().orElseThrow().stats().diagnostics()
+                .getFirst().message();
+        assertTrue(message.contains("safe-detail"));
+        assertTrue(message.contains("provider.property"));
+        assertTrue(message.contains("failure-1"));
+        assertFalse(message.contains("token=secret-123"));
+        assertFalse(message.contains("/home/private/save.dat"));
+    }
+
+    @Test
+    void sanitizerDetailOverLimitIsTruncatedToTheConfiguredBound() {
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("sanitized-truncated"))
+                .configuration(new RuntimeConfiguration(true, new RuntimeLimits(
+                        240, 2_000, 5_000, 128, 256, 256, 64, 16, 256, 16, 1_000)))
+                .clock(new AtomicLong()::incrementAndGet)
+                .wallClock(Clock.fixed(Instant.parse("2026-07-29T00:00:00Z"), ZoneOffset.UTC))
+                .applicationFailureSanitizer((context, failure) ->
+                        Optional.of("x".repeat(64)))
+                .build();
+        runtime.entities().register(EntityId.of("bad"), EntityType.of("enemy"),
+                () -> "Bad", inspector -> inspector.property("health",
+                        (java.util.function.Supplier<RuntimeValue>) () -> {
+                    throw new IllegalStateException("token=secret-123");
+                }));
+        runtime.start();
+
+        String message = runtime.latestFrame().orElseThrow().stats().diagnostics()
+                .getFirst().message();
+        assertTrue(message.endsWith("x".repeat(16)));
+        assertFalse(message.contains("x".repeat(64)));
+    }
+
+    @Test
+    void throwingSanitizerFailsClosedWithoutExposingAnyFailureMessage() {
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("sanitizer-failure"))
+                .configuration(RuntimeConfiguration.developmentDefaults())
+                .clock(new AtomicLong()::incrementAndGet)
+                .wallClock(Clock.fixed(Instant.parse("2026-07-29T00:00:00Z"), ZoneOffset.UTC))
+                .applicationFailureSanitizer((context, failure) -> {
+                    throw new IllegalStateException("sanitizer token=secret-456");
+                })
+                .build();
+        runtime.entities().register(EntityId.of("bad"), EntityType.of("enemy"),
+                () -> "Bad", inspector -> inspector.property("health",
+                        (java.util.function.Supplier<RuntimeValue>) () -> {
+                    throw new IllegalStateException("token=secret-123 /home/private/save.dat");
+                }));
+        runtime.start();
+
+        String message = runtime.latestFrame().orElseThrow().stats().diagnostics()
+                .getFirst().message();
+        assertFalse(message.contains("token=secret-123"));
+        assertFalse(message.contains("/home/private/save.dat"));
+        assertFalse(message.contains("sanitizer token=secret-456"));
+        assertTrue(message.contains("provider.property"));
+        assertTrue(message.contains("failure-1"));
+    }
+
+    @Test
     void unregisteringReleasesProviderAndProducesRemoval() {
         AgentRuntime runtime = runtime(RuntimeLimits.developmentDefaults());
         EntityRegistration registration = runtime.entities().register(

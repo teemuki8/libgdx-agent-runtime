@@ -1,6 +1,7 @@
 package io.github.teemuki8.libgdx.agent.runtime.core;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -194,5 +195,46 @@ final class InputRegistryTest {
         assertEquals(new FrameId(1), completed.resultingFrameId().orElseThrow());
         assertTrue(completed.diagnostic().isEmpty());
         assertTrue(runtime.frame(new FrameId(1)).isPresent());
+    }
+
+    @Test
+    void failedInputHandlerEvidenceOmitsRawApplicationMessages() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("input-leak"))
+                .clock(() -> 1)
+                .commandDispatcher(dispatch::addLast)
+                .build();
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {})
+                .resume(() -> {})
+                .tick(deltaNanos -> {})
+                .build());
+        runtime.inputs().register(InputSpec.builder("keyboard")
+                .requiredString("key")
+                .handler(parameters -> {
+                    throw new IllegalStateException("token=secret-123 /home/private/save.dat");
+                })
+                .build());
+        runtime.start();
+        runtime.controls().control(true, "pause", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        RuntimeValue.ObjectValue parameters = RuntimeValues.object(
+                RuntimeValues.field("key", RuntimeValues.string("A")));
+        runtime.inputs().inject("keyboard", "input-leak", parameters,
+                OptionalLong.empty(), Duration.ofSeconds(1));
+        runtime.controls().advance("tick-leak", 1, 1, Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        dispatch.removeFirst().run();
+
+        InputInjection failed = runtime.inputs().inject(
+                "keyboard", "input-leak", parameters,
+                OptionalLong.empty(), Duration.ofSeconds(1));
+        assertEquals(InputInjectionState.FAILED, failed.state());
+        String diagnostic = failed.diagnostic().orElseThrow();
+        assertFalse(diagnostic.contains("token=secret-123"));
+        assertFalse(diagnostic.contains("/home/private/save.dat"));
+        assertTrue(diagnostic.contains("input.execution"));
+        assertTrue(diagnostic.contains("failure-1"));
     }
 }

@@ -19,6 +19,7 @@ public final class CommandDispatch {
     private final CommandDispatchLimits limits;
     private final MonotonicClock clock;
     private final Thread captureThread;
+    private final ApplicationDiagnostics diagnostics;
     private final Map<String, Entry> retained = new LinkedHashMap<>();
     private final ArrayDeque<Entry> pendingDispatch = new ArrayDeque<>();
     private final ArrayDeque<String> terminalOrder = new ArrayDeque<>();
@@ -29,11 +30,12 @@ public final class CommandDispatch {
     private boolean closed;
 
     CommandDispatch(ApplicationCommandDispatcher dispatcher, CommandDispatchLimits limits,
-            MonotonicClock clock, Thread captureThread) {
+            MonotonicClock clock, Thread captureThread, ApplicationDiagnostics diagnostics) {
         this.dispatcher = Objects.requireNonNull(dispatcher, "dispatcher");
         this.limits = Objects.requireNonNull(limits, "limits");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.captureThread = Objects.requireNonNull(captureThread, "captureThread");
+        this.diagnostics = Objects.requireNonNull(diagnostics, "diagnostics");
     }
 
     /** Returns the configured hard bounds. */
@@ -177,7 +179,7 @@ public final class CommandDispatch {
         } catch (Throwable failure) {
             synchronized (this) {
                 finish(entry, CommandState.FAILED, now(), true,
-                        diagnostic("command failed", failure));
+                        diagnostic("command.failed", failure));
             }
         }
     }
@@ -209,7 +211,7 @@ public final class CommandDispatch {
                     consumeDispatch(entry);
                     if (entry.state == CommandState.QUEUED) {
                         finish(entry, CommandState.REJECTED, now(), true,
-                                diagnostic("dispatcher rejected command", failure));
+                                diagnostic("command.dispatch.rejected", failure));
                     }
                 }
             } catch (Error failure) {
@@ -217,7 +219,7 @@ public final class CommandDispatch {
                     consumeDispatch(entry);
                     if (entry.state == CommandState.QUEUED) {
                         finish(entry, CommandState.FAILED, now(), true,
-                                diagnostic("dispatcher failed", failure));
+                                diagnostic("command.dispatch.failed", failure));
                     }
                     Entry pending;
                     while ((pending = pendingDispatch.pollFirst()) != null) {
@@ -301,11 +303,8 @@ public final class CommandDispatch {
         }
     }
 
-    private String diagnostic(String prefix, Throwable failure) {
-        String message = failure.getMessage();
-        String detail = message == null || message.isBlank()
-                ? failure.getClass().getSimpleName() : message.replace('\n', ' ').replace('\r', ' ');
-        return limit(prefix + ": " + detail);
+    private String diagnostic(String category, Throwable failure) {
+        return limit(diagnostics.describe(category, failure));
     }
 
     private String limit(String value) {

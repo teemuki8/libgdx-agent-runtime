@@ -114,6 +114,51 @@ final class CommandDispatchTest {
     }
 
     @Test
+    void commandFailureDiagnosticsOmitRawApplicationMessages() {
+        ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
+        CommandDispatch commands = runtime(applicationQueue, new AtomicLong(1),
+                CommandDispatchLimits.developmentDefaults()).commands().orElseThrow();
+        commands.submit("secret-failure", 100, () -> {
+            throw new IllegalStateException("token=secret-123 /home/private/save.dat");
+        });
+
+        applicationQueue.removeFirst().run();
+
+        CommandStatus failed = commands.status("secret-failure").status().orElseThrow();
+        assertEquals(CommandState.FAILED, failed.state());
+        String diagnostic = failed.diagnostic().orElseThrow();
+        assertFalse(diagnostic.contains("token=secret-123"));
+        assertFalse(diagnostic.contains("/home/private/save.dat"));
+        assertTrue(diagnostic.contains("command.failed"));
+        assertTrue(diagnostic.contains("failure-1"));
+    }
+
+    @Test
+    void sanitizerDetailAppearsInCommandFailureDiagnostics() {
+        ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("command-sanitized"))
+                .captureThread(Thread.currentThread())
+                .clock(() -> 1)
+                .commandDispatcher(applicationQueue::addLast)
+                .applicationFailureSanitizer((context, failure) ->
+                        Optional.of("safe-detail"))
+                .build();
+        CommandDispatch commands = runtime.commands().orElseThrow();
+        commands.submit("safe-failure", 100, () -> {
+            throw new IllegalStateException("token=secret-123");
+        });
+
+        applicationQueue.removeFirst().run();
+
+        String diagnostic = commands.status("safe-failure").status()
+                .orElseThrow().diagnostic().orElseThrow();
+        assertTrue(diagnostic.contains("safe-detail"));
+        assertTrue(diagnostic.contains("command.failed"));
+        assertFalse(diagnostic.contains("token=secret-123"));
+    }
+
+    @Test
     void disablesDispatchWithoutExplicitEnabledConfiguration() {
         assertTrue(AgentRuntime.builder().build().commands().isEmpty());
         assertTrue(AgentRuntime.builder()

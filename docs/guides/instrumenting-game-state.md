@@ -67,8 +67,10 @@ Close a registration handle outside a frame on the capture thread. The next fram
 `ENTITY_REMOVED`; historical versions remain until frame eviction.
 
 Provider failures do not escape the render loop. The frame retains provider name, optional entity
-and property, exception class, and bounded message. Stack traces are not serialized. A failed
-property is omitted and diagnostics make that omission explicit.
+and property, exception class, a stable category, and a deterministic correlation identifier. Raw
+application messages and stack traces are not serialized. An application-owned sanitizer may opt
+into bounded public detail and fails closed when it throws. A failed property is omitted and
+diagnostics make that omission explicit.
 
 Only registered fields are visible. The runtime never traverses arbitrary object fields.
 

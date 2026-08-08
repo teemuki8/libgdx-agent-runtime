@@ -155,13 +155,13 @@ public final class InputRegistry {
                 evidence.state = InputInjectionState.EXECUTED;
             } catch (RuntimeException failure) {
                 evidence.state = InputInjectionState.FAILED;
-                evidence.diagnostic = Optional.of(diagnostic(failure));
+                evidence.diagnostic = Optional.of(diagnostic("input.execution", failure));
                 if (firstRuntimeFailure == null) {
                     firstRuntimeFailure = failure;
                 }
             } catch (Error failure) {
                 evidence.state = InputInjectionState.FAILED;
-                evidence.diagnostic = Optional.of(diagnostic(failure));
+                evidence.diagnostic = Optional.of(diagnostic("input.execution", failure));
                 if (firstError == null) {
                     firstError = failure;
                 }
@@ -210,7 +210,7 @@ public final class InputRegistry {
             outstanding--;
         }
         evidence.state = InputInjectionState.FAILED;
-        evidence.diagnostic = Optional.of(diagnostic(failure));
+        evidence.diagnostic = Optional.of(diagnostic("input.schedule", failure));
     }
 
     private synchronized InputInjection snapshot(Evidence evidence, CommandLookup command) {
@@ -326,13 +326,8 @@ public final class InputRegistry {
         }
     }
 
-    private String diagnostic(Throwable failure) {
-        String message = failure.getMessage();
-        String value = message == null || message.isBlank()
-                ? failure.getClass().getSimpleName()
-                : failure.getClass().getSimpleName() + ": "
-                        + message.replace('\n', ' ').replace('\r', ' ');
-        return boundedDiagnostic(value);
+    private String diagnostic(String category, Throwable failure) {
+        return runtime.diagnostics().describe(category, failure);
     }
 
     private String boundedDiagnostic(String value) {

@@ -81,6 +81,15 @@ public final class SimulationControlRegistry {
         return operations.size();
     }
 
+    /**
+     * Package-private read-only observation: the retained stop reason for one submitted control
+     * operation, if still retained.
+     */
+    synchronized Optional<ControlStopReason> retainedStopReason(String requestId) {
+        Evidence evidence = operations.get(requestId);
+        return evidence == null ? Optional.empty() : Optional.of(evidence.stopReason);
+    }
+
     /** Releases application control callbacks and pending operations, keeping condition metadata. */
     synchronized void close() {
         controller = null;
@@ -221,8 +230,15 @@ public final class SimulationControlRegistry {
                 }
                 runtime.recordings().recordTick(
                         tick, signature.deltaNanos, runtime.currentEpoch(), expected);
-                if (satisfied(evidence, signature)) {
-                    return;
+                try {
+                    if (satisfied(evidence, signature)) {
+                        return;
+                    }
+                } catch (RuntimeException | Error failure) {
+                    synchronized (this) {
+                        evidence.stopReason = ControlStopReason.CALLBACK_FAILED;
+                    }
+                    throw failure;
                 }
             }
             synchronized (this) {

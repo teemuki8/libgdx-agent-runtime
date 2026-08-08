@@ -29,6 +29,7 @@ public final class AgentRuntime implements AutoCloseable {
     private final SessionId sessionId;
     private final RuntimeConfiguration configuration;
     private final RuntimeLimits limits;
+    private final FrameStagingLimits frameStagingLimits;
     private final ApplicationDiagnostics diagnostics;
     private final MonotonicClock monotonicClock;
     private final Clock wallClock;
@@ -52,6 +53,9 @@ public final class AgentRuntime implements AutoCloseable {
     private final Map<ChangeKey, ChangeCause> pendingCauses = new HashMap<>();
     private final List<RuntimeEvent> pendingEvents = new ArrayList<>();
     private final List<MutableDecision> pendingDecisions = new ArrayList<>();
+    private long observedEvents;
+    private long observedDecisions;
+    private long observedCauses;
 
     private volatile RuntimeStatus status = RuntimeStatus.CREATED;
     private volatile boolean closing;
@@ -70,6 +74,7 @@ public final class AgentRuntime implements AutoCloseable {
         sessionId = builder.sessionId;
         configuration = builder.configuration;
         limits = configuration.limits();
+        frameStagingLimits = configuration.frameStagingLimits();
         diagnostics = new ApplicationDiagnostics(
                 builder.applicationFailureSanitizer, sessionId.value());
         monotonicClock = builder.monotonicClock;
@@ -113,6 +118,26 @@ public final class AgentRuntime implements AutoCloseable {
     /** Returns the immutable configuration. */
     public RuntimeConfiguration configuration() {
         return configuration;
+    }
+
+    /** Returns the hard per-frame staging bounds for open-frame facts. */
+    public FrameStagingLimits frameStagingLimits() {
+        return frameStagingLimits;
+    }
+
+    /** Returns how many events are currently staged in the open frame. */
+    int stagedEventCount() {
+        return pendingEvents.size();
+    }
+
+    /** Returns how many decisions are currently staged in the open frame. */
+    int stagedDecisionCount() {
+        return pendingDecisions.size();
+    }
+
+    /** Returns how many change causes are currently staged in the open frame. */
+    int stagedCauseCount() {
+        return pendingCauses.size();
     }
 
     /** Returns the explicit registration surface. */
@@ -307,6 +332,11 @@ public final class AgentRuntime implements AutoCloseable {
     /**
      * Emits one event into the currently open frame.
      *
+     * <p>Once the frame has staged {@link RuntimeLimits#retainedEvents()} events, further events
+     * are dropped at insertion: the monotonic event ID is still assigned and returned, but the
+     * event attributes are neither read nor copied and the fact is not retained. The frame
+     * snapshot reports the saturating observed count as {@code frame.events} truncation evidence.
+     *
      * @return the event ID, or empty when capture is disabled
      */
     public Optional<EventId> emit(EventSpec event) {
@@ -317,6 +347,10 @@ public final class AgentRuntime implements AutoCloseable {
         requireOpenFrame("events may only be emitted inside a frame");
         Objects.requireNonNull(event, "event");
         EventId id = new EventId(++nextEvent);
+        observedEvents = saturatedAdd(observedEvents, 1);
+        if (pendingEvents.size() >= limits.retainedEvents()) {
+            return Optional.of(id);
+        }
         List<Truncation> truncations = new ArrayList<>();
         List<RuntimeValue.Field> attributes = limitFields(
                 event.attributeList(), limits.attributesPerItem(), "event.attributes", truncations);
@@ -331,7 +365,14 @@ public final class AgentRuntime implements AutoCloseable {
         return beginDecision(type, actor, FactMetadata.empty());
     }
 
-    /** Opens one non-nested decision with explicit application-provided fact metadata. */
+    /**
+     * Opens one non-nested decision with explicit application-provided fact metadata.
+     *
+     * <p>Once the frame has staged {@link RuntimeLimits#decisionsPerFrame()} decisions, further
+     * calls return the no-retention disabled scope whose operations are no-ops and whose ID is
+     * empty, while a retained open decision still rejects nesting. The frame snapshot reports the
+     * saturating observed count as {@code frame.decisions} truncation evidence.
+     */
     public DecisionScope beginDecision(
             DecisionType type, EntityId actor, FactMetadata metadata) {
         if (!configuration.enabled()) {
@@ -342,6 +383,10 @@ public final class AgentRuntime implements AutoCloseable {
         if (openDecision != null) {
             throw lifecycle("nested decisions are not supported in V1");
         }
+        observedDecisions = saturatedAdd(observedDecisions, 1);
+        if (pendingDecisions.size() >= limits.decisionsPerFrame()) {
+            return DISABLED_DECISION;
+        }
         MutableDecision decision =
                 new MutableDecision(new DecisionId(++nextDecision), activeFrame, type, actor,
                         metadata);
@@ -350,7 +395,17 @@ public final class AgentRuntime implements AutoCloseable {
         return decision;
     }
 
-    /** Associates the next observed property difference with an explicit cause. */
+    /**
+     * Associates the next observed property difference with an explicit cause.
+     *
+     * <p>The entity and property keys are always validated and a null cause is always rejected,
+     * even after the frame has staged {@link FrameStagingLimits#causesPerFrame()} causes. A
+     * duplicate key for an already-retained cause throws without advancing the observed count at
+     * any capacity. Only a unique valid key at full capacity is dropped: the saturating observed
+     * count advances by exactly one and the cause value is neither traversed, copied, nor
+     * retained, so it cannot attribute a difference. The frame snapshot reports
+     * {@code frame.causes} truncation evidence when the observed count exceeds the retained map.
+     */
     public void causeNextChange(EntityId entityId, String property, ChangeCause cause) {
         if (!configuration.enabled()) {
             return;
@@ -359,9 +414,16 @@ public final class AgentRuntime implements AutoCloseable {
         requireOpenFrame("change causes may only be supplied inside a frame");
         ChangeKey key = new ChangeKey(Objects.requireNonNull(entityId, "entityId"),
                 IdentifierSupport.validate(property, "property"));
-        if (pendingCauses.putIfAbsent(key, Objects.requireNonNull(cause, "cause")) != null) {
+        Objects.requireNonNull(cause, "cause");
+        if (pendingCauses.containsKey(key)) {
             throw lifecycle("a cause is already registered for " + entityId.value() + "." + property);
         }
+        if (pendingCauses.size() >= frameStagingLimits.causesPerFrame()) {
+            observedCauses = saturatedAdd(observedCauses, 1);
+            return;
+        }
+        pendingCauses.put(key, cause);
+        observedCauses = saturatedAdd(observedCauses, 1);
     }
 
     /** Returns the latest completed frame. */
@@ -508,6 +570,9 @@ public final class AgentRuntime implements AutoCloseable {
         pendingEvents.clear();
         pendingDecisions.clear();
         openDecision = null;
+        observedEvents = 0;
+        observedDecisions = 0;
+        observedCauses = 0;
         status = RuntimeStatus.CLOSED;
         rethrow(firstFailure);
     }
@@ -588,15 +653,19 @@ public final class AgentRuntime implements AutoCloseable {
                 .map(decision -> decision.snapshot(callbackFailed))
                 .toList();
         List<Truncation> frameTruncations = new ArrayList<>();
-        if (pendingDecisions.size() > decisions.size()) {
-            frameTruncations.add(new Truncation("frame.decisions", pendingDecisions.size(),
+        if (observedDecisions > decisions.size()) {
+            frameTruncations.add(new Truncation("frame.decisions", observedDecisions,
                     decisions.size(), limits.decisionsPerFrame()));
         }
         List<RuntimeEvent> events = pendingEvents.stream()
                 .limit(limits.retainedEvents()).toList();
-        if (pendingEvents.size() > events.size()) {
-            frameTruncations.add(new Truncation("frame.events", pendingEvents.size(),
+        if (observedEvents > events.size()) {
+            frameTruncations.add(new Truncation("frame.events", observedEvents,
                     events.size(), limits.retainedEvents()));
+        }
+        if (observedCauses > pendingCauses.size()) {
+            frameTruncations.add(new Truncation("frame.causes", observedCauses,
+                    pendingCauses.size(), frameStagingLimits.causesPerFrame()));
         }
 
         CaptureResult capture = captureEntities();
@@ -619,6 +688,9 @@ public final class AgentRuntime implements AutoCloseable {
         pendingCauses.clear();
         openDecision = null;
         callbackFailed = false;
+        observedEvents = 0;
+        observedDecisions = 0;
+        observedCauses = 0;
     }
 
     private CaptureResult captureEntities() {
@@ -887,6 +959,14 @@ public final class AgentRuntime implements AutoCloseable {
         if (limit <= 0 || limit > limits.queryResults()) {
             throw new AgentRuntimeException(RuntimeErrorCode.LIMIT_EXCEEDED,
                     "query limit must be between 1 and " + limits.queryResults());
+        }
+    }
+
+    private static long saturatedAdd(long left, long right) {
+        try {
+            return Math.addExact(left, right);
+        } catch (ArithmeticException failure) {
+            return Long.MAX_VALUE;
         }
     }
 
@@ -1249,6 +1329,20 @@ public final class AgentRuntime implements AutoCloseable {
         /** Sets feature state and bounds. */
         public Builder configuration(RuntimeConfiguration value) {
             configuration = Objects.requireNonNull(value, "configuration");
+            return this;
+        }
+
+        /**
+         * Sets the hard per-frame cause ceiling, overriding the configured value.
+         *
+         * <p>The staging bounds are propagated into this builder's {@link RuntimeConfiguration}, so
+         * {@link AgentRuntime#frameStagingLimits()} and {@link AgentRuntime#configuration()}
+         * always agree.
+         */
+        public Builder frameStagingLimits(FrameStagingLimits value) {
+            FrameStagingLimits staging = Objects.requireNonNull(value, "frameStagingLimits");
+            configuration = new RuntimeConfiguration(
+                    configuration.enabled(), configuration.limits(), staging);
             return this;
         }
 

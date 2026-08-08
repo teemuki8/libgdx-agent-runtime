@@ -13,11 +13,13 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.AbstractList;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.CountDownLatch;
@@ -28,6 +30,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
@@ -785,6 +788,251 @@ final class AgentRuntimeTest {
     }
 
     @Test
+    void openFrameFactsAreBoundedAtInsertion() {
+        RuntimeLimits limits = new RuntimeLimits(10, 3, 10, 10, 3, 10, 10, 642, 10, 5, 100);
+        AgentRuntime runtime = runtime(limits, new FrameStagingLimits(4));
+        runtime.start();
+        AtomicLong attributeAccesses = new AtomicLong();
+        RuntimeValue.ObjectValue payload = new RuntimeValue.ObjectValue(
+                new CountingFieldList(List.of(RuntimeValues.field("inner", RuntimeValues.integer(7))),
+                        attributeAccesses));
+        EventSpec event = EventSpec.type("bound.event").attribute("payload", payload);
+        runtime.frame(1, () -> {
+            for (int index = 0; index < 3; index++) {
+                assertTrue(runtime.emit(event).isPresent());
+            }
+            long accessesAfterRetainedEvents = attributeAccesses.get();
+            for (int index = 0; index < 10; index++) {
+                assertTrue(runtime.emit(event).isPresent());
+            }
+            assertEquals(3, runtime.stagedEventCount());
+            assertEquals(accessesAfterRetainedEvents, attributeAccesses.get(),
+                    "dropped events must not read or copy attribute values");
+
+            for (int index = 0; index < 3; index++) {
+                try (DecisionScope decision = runtime.beginDecision(
+                        DecisionType.of("bound"), EntityId.of("actor"))) {
+                    assertTrue(decision.id().isPresent());
+                    decision.reject(EntityId.of("candidate-" + index), Reason.of("reason"),
+                            RuntimeValues.field("payload", payload));
+                }
+            }
+            long accessesAfterRetainedDecisions = attributeAccesses.get();
+            for (int index = 0; index < 10; index++) {
+                try (DecisionScope decision = runtime.beginDecision(
+                        DecisionType.of("bound"), EntityId.of("actor"))) {
+                    assertTrue(decision.id().isEmpty());
+                    decision.reject(EntityId.of("candidate-" + index), Reason.of("reason"),
+                            RuntimeValues.field("payload", payload));
+                }
+            }
+            assertEquals(3, runtime.stagedDecisionCount());
+            assertEquals(accessesAfterRetainedDecisions, attributeAccesses.get(),
+                    "overflow decisions must not copy attribute values");
+
+            for (int index = 0; index < 14; index++) {
+                runtime.causeNextChange(EntityId.of("enemy"), "p" + index,
+                        ChangeCause.semantic("cause-" + index));
+            }
+            assertEquals(4, runtime.stagedCauseCount());
+        });
+
+        FrameSnapshot frame = runtime.latestFrame().orElseThrow();
+        assertEquals(3, frame.events().size());
+        assertEquals(3, frame.decisions().size());
+        assertTruncation(truncation(frame, "frame.events"), 13, 3, 3);
+        assertTruncation(truncation(frame, "frame.decisions"), 13, 3, 3);
+        assertTruncation(truncation(frame, "frame.causes"), 14, 4, 4);
+    }
+
+    @Test
+    void droppedEventIdsStayMonotonicAndStagingCountersResetPerFrame() {
+        RuntimeLimits limits = new RuntimeLimits(10, 2, 10, 10, 2, 10, 10, 642, 10, 5, 100);
+        AgentRuntime runtime = runtime(limits, new FrameStagingLimits(2));
+        runtime.start();
+        List<Long> eventIds = new ArrayList<>();
+        runtime.frame(1, () -> {
+            for (int index = 0; index < 12; index++) {
+                eventIds.add(runtime.emit(EventSpec.type("burst")
+                        .attribute("value", RuntimeValues.integer(index))).orElseThrow().value());
+            }
+        });
+        FrameSnapshot burst = runtime.latestFrame().orElseThrow();
+        assertTruncation(truncation(burst, "frame.events"), 12, 2, 2);
+
+        runtime.frame(2, () -> {
+            eventIds.add(runtime.emit(EventSpec.type("single")).orElseThrow().value());
+            try (DecisionScope decision = runtime.beginDecision(
+                    DecisionType.of("single"), EntityId.of("actor"))) {
+                assertTrue(decision.id().isPresent());
+                decision.reject(EntityId.of("candidate"), Reason.of("reason"));
+            }
+            runtime.causeNextChange(EntityId.of("enemy"), "p", ChangeCause.semantic("one"));
+        });
+        FrameSnapshot single = runtime.latestFrame().orElseThrow();
+        assertTrue(single.stats().truncations().stream()
+                        .noneMatch(value -> value.dimension().startsWith("frame.")),
+                "per-frame staging counters must reset after the previous frame");
+        assertEquals(1, single.events().size());
+        assertEquals(1, single.decisions().size());
+
+        List<Long> sorted = eventIds.stream().sorted().toList();
+        assertEquals(sorted, eventIds, "event IDs must stay monotonic even when dropped");
+        assertEquals(eventIds.size(), eventIds.stream().distinct().count());
+    }
+
+    @Test
+    void overflowDecisionScopeIsDisabledWhileRetainedOpenDecisionPreventsNesting() {
+        RuntimeLimits limits = new RuntimeLimits(10, 10, 10, 10, 2, 10, 10, 642, 10, 5, 100);
+        AgentRuntime runtime = runtime(limits, new FrameStagingLimits(4));
+        runtime.start();
+        runtime.frame(1, () -> {
+            DecisionScope first = runtime.beginDecision(
+                    DecisionType.of("first"), EntityId.of("actor"));
+            assertTrue(first.id().isPresent());
+            assertThrows(AgentRuntimeException.class,
+                    () -> runtime.beginDecision(DecisionType.of("nested"), EntityId.of("actor")));
+            first.close();
+
+            DecisionScope second = runtime.beginDecision(
+                    DecisionType.of("second"), EntityId.of("actor"));
+            assertTrue(second.id().isPresent());
+            assertThrows(AgentRuntimeException.class,
+                    () -> runtime.beginDecision(DecisionType.of("nested"), EntityId.of("actor")));
+            second.close();
+
+            DecisionScope overflow = runtime.beginDecision(
+                    DecisionType.of("overflow"), EntityId.of("actor"));
+            assertTrue(overflow.id().isEmpty());
+            overflow.accept(EntityId.of("candidate"), Reason.of("eligible"));
+            overflow.choose(EntityId.of("candidate"), Reason.of("chosen"));
+            overflow.close();
+            assertEquals(2, runtime.stagedDecisionCount());
+        });
+
+        FrameSnapshot frame = runtime.latestFrame().orElseThrow();
+        assertEquals(2, frame.decisions().size());
+        assertTruncation(truncation(frame, "frame.decisions"), 3, 2, 2);
+        assertTrue(frame.decisions().stream().allMatch(trace -> trace.candidates().isEmpty()),
+                "the overflow decision scope must retain no candidates");
+    }
+
+    @Test
+    void droppedCausesSkipRetentionAndKeepValidatingKeys() {
+        RuntimeLimits limits = new RuntimeLimits(10, 10, 10, 10, 10, 10, 10, 642, 10, 5, 100);
+        AgentRuntime runtime = runtime(limits, new FrameStagingLimits(2));
+        long[] values = new long[6];
+        runtime.entities().register(EntityId.of("enemy"), EntityType.of("enemy"),
+                () -> "Enemy",
+                inspector -> IntStream.range(0, 6).forEach(index ->
+                        inspector.property("p" + index, () -> values[index])));
+        runtime.start();
+        runtime.frame(1, () -> {
+            runtime.causeNextChange(EntityId.of("enemy"), "p0", ChangeCause.semantic("kept-0"));
+            runtime.causeNextChange(EntityId.of("enemy"), "p1", ChangeCause.semantic("kept-1"));
+            assertThrows(NullPointerException.class,
+                    () -> runtime.causeNextChange(null, "p2", ChangeCause.semantic("null-entity")));
+            assertThrows(IllegalArgumentException.class,
+                    () -> runtime.causeNextChange(EntityId.of("enemy"), " ",
+                            ChangeCause.semantic("blank-property")));
+            for (int index = 2; index < 6; index++) {
+                runtime.causeNextChange(EntityId.of("enemy"), "p" + index,
+                        ChangeCause.semantic("dropped-" + index));
+            }
+            assertEquals(2, runtime.stagedCauseCount());
+            for (int index = 0; index < 6; index++) {
+                values[index] = 1;
+            }
+        });
+
+        FrameSnapshot frame = runtime.latestFrame().orElseThrow();
+        assertTruncation(truncation(frame, "frame.causes"), 6, 2, 2);
+        Map<String, PropertyChange> changes = frame.changes().stream()
+                .filter(change -> change.property().isPresent())
+                .collect(Collectors.toMap(change -> change.property().orElseThrow(),
+                        change -> change));
+        assertEquals("kept-0", changes.get("p0").cause().semanticCode().orElseThrow());
+        assertEquals("kept-1", changes.get("p1").cause().semanticCode().orElseThrow());
+        assertEquals(ChangeCause.Kind.UNKNOWN, changes.get("p2").cause().kind());
+        assertEquals(ChangeCause.Kind.UNKNOWN, changes.get("p5").cause().kind());
+    }
+
+    @Test
+    void duplicateCausesDoNotAdvanceObservedCount() {
+        RuntimeLimits limits = new RuntimeLimits(10, 10, 10, 10, 10, 10, 10, 642, 10, 5, 100);
+        AgentRuntime runtime = runtime(limits, new FrameStagingLimits(2));
+        runtime.start();
+        runtime.frame(1, () -> {
+            runtime.causeNextChange(EntityId.of("enemy"), "p0", ChangeCause.semantic("first"));
+            assertThrows(AgentRuntimeException.class,
+                    () -> runtime.causeNextChange(EntityId.of("enemy"), "p0",
+                            ChangeCause.semantic("second")));
+            runtime.causeNextChange(EntityId.of("enemy"), "p1", ChangeCause.semantic("third"));
+            assertEquals(2, runtime.stagedCauseCount());
+            runtime.causeNextChange(EntityId.of("enemy"), "p2", ChangeCause.semantic("overflow"));
+            assertEquals(2, runtime.stagedCauseCount());
+        });
+
+        FrameSnapshot frame = runtime.latestFrame().orElseThrow();
+        assertTruncation(truncation(frame, "frame.causes"), 3, 2, 2);
+    }
+
+    @Test
+    void fullCapacityCausesKeepValidationAndDuplicateSemantics() {
+        RuntimeLimits limits = new RuntimeLimits(10, 10, 10, 10, 10, 10, 10, 642, 10, 5, 100);
+        AgentRuntime runtime = runtime(limits, new FrameStagingLimits(2));
+        runtime.start();
+        runtime.frame(1, () -> {
+            runtime.causeNextChange(EntityId.of("enemy"), "p0", ChangeCause.semantic("first"));
+            runtime.causeNextChange(EntityId.of("enemy"), "p1", ChangeCause.semantic("second"));
+            assertEquals(2, runtime.stagedCauseCount());
+            // At full capacity a duplicate retained key still throws without counting.
+            assertThrows(AgentRuntimeException.class,
+                    () -> runtime.causeNextChange(EntityId.of("enemy"), "p0",
+                            ChangeCause.semantic("duplicate")));
+            // At full capacity a null cause still throws without counting.
+            assertThrows(NullPointerException.class,
+                    () -> runtime.causeNextChange(EntityId.of("enemy"), "pX", null));
+            assertEquals(2, runtime.stagedCauseCount());
+            // The next unique valid cause is exactly one observed drop: no value traversal.
+            runtime.causeNextChange(EntityId.of("enemy"), "p2", ChangeCause.semantic("overflow"));
+            assertEquals(2, runtime.stagedCauseCount());
+        });
+
+        FrameSnapshot frame = runtime.latestFrame().orElseThrow();
+        assertTruncation(truncation(frame, "frame.causes"), 3, 2, 2);
+    }
+
+    @Test
+    void frameStagingLimitsRejectNonPositiveCausesPerFrame() {
+        assertThrows(IllegalArgumentException.class, () -> new FrameStagingLimits(0));
+        assertThrows(IllegalArgumentException.class, () -> new FrameStagingLimits(-1));
+        assertTrue(FrameStagingLimits.developmentDefaults().causesPerFrame() > 0);
+    }
+
+    @Test
+    void frameStagingLimitsPropagateFromBuilderAndConfiguration() {
+        FrameStagingLimits staging = new FrameStagingLimits(7);
+        AgentRuntime fromBuilder = AgentRuntime.builder().frameStagingLimits(staging).build();
+        assertEquals(staging, fromBuilder.frameStagingLimits());
+        assertEquals(staging, fromBuilder.configuration().frameStagingLimits());
+
+        AgentRuntime fromConfig = AgentRuntime.builder()
+                .configuration(new RuntimeConfiguration(true,
+                        RuntimeLimits.developmentDefaults(), new FrameStagingLimits(9)))
+                .build();
+        assertEquals(9, fromConfig.frameStagingLimits().causesPerFrame());
+
+        assertEquals(FrameStagingLimits.developmentDefaults(),
+                new RuntimeConfiguration(true, RuntimeLimits.developmentDefaults())
+                        .frameStagingLimits());
+        assertEquals(FrameStagingLimits.developmentDefaults(),
+                RuntimeConfiguration.developmentDefaults().frameStagingLimits());
+        assertEquals(FrameStagingLimits.developmentDefaults(),
+                RuntimeConfiguration.disabled().frameStagingLimits());
+    }
+
+    @Test
     void manyFramesAndEventsRemainWithinConfiguredRetention() {
         RuntimeLimits limits =
                 new RuntimeLimits(20, 50, 10, 10, 10, 10, 10, 642, 10, 5, 100);
@@ -1429,6 +1677,42 @@ final class AgentRuntimeTest {
 
     private record CloseHandle(int value) implements CheckpointHandle {}
 
+    private static Truncation truncation(FrameSnapshot frame, String dimension) {
+        return frame.stats().truncations().stream()
+                .filter(value -> value.dimension().equals(dimension))
+                .findFirst().orElseThrow();
+    }
+
+    private static void assertTruncation(
+            Truncation value, long observed, long retained, long limit) {
+        assertEquals(observed, value.observed());
+        assertEquals(retained, value.retained());
+        assertEquals(limit, value.limit());
+    }
+
+    /** Counts every read of the wrapped fields so tests can observe attribute copies. */
+    private static final class CountingFieldList extends AbstractList<RuntimeValue.Field> {
+        private final List<RuntimeValue.Field> delegate;
+        private final AtomicLong accesses;
+
+        CountingFieldList(List<RuntimeValue.Field> delegate, AtomicLong accesses) {
+            this.delegate = delegate;
+            this.accesses = accesses;
+        }
+
+        @Override
+        public RuntimeValue.Field get(int index) {
+            accesses.incrementAndGet();
+            return delegate.get(index);
+        }
+
+        @Override
+        public int size() {
+            accesses.incrementAndGet();
+            return delegate.size();
+        }
+    }
+
     private static InspectableEntity entity(String id, long index) {
         return InspectableEntity.of(EntityId.of(id), EntityType.of("enemy"),
                 () -> "Entity " + id,
@@ -1440,6 +1724,16 @@ final class AgentRuntimeTest {
         return AgentRuntime.builder()
                 .sessionId(SessionId.of("test-session-" + System.nanoTime()))
                 .configuration(new RuntimeConfiguration(true, limits))
+                .clock(time::incrementAndGet)
+                .wallClock(Clock.fixed(Instant.parse("2026-07-29T00:00:00Z"), ZoneOffset.UTC))
+                .build();
+    }
+
+    private static AgentRuntime runtime(RuntimeLimits limits, FrameStagingLimits staging) {
+        AtomicLong time = new AtomicLong();
+        return AgentRuntime.builder()
+                .sessionId(SessionId.of("test-session-" + System.nanoTime()))
+                .configuration(new RuntimeConfiguration(true, limits, staging))
                 .clock(time::incrementAndGet)
                 .wallClock(Clock.fixed(Instant.parse("2026-07-29T00:00:00Z"), ZoneOffset.UTC))
                 .build();

@@ -60,9 +60,9 @@ final class RuntimeValueTest {
 
     @Test
     void enforcesStringCollectionAndDepthLimits() {
-        RuntimeLimits limits = new RuntimeLimits(1, 1, 1, 1, 1, 1, 1, 4, 2, 2, 1);
+        RuntimeLimits limits = new RuntimeLimits(1, 1, 1, 1, 1, 1, 1, 642, 2, 2, 1);
         assertThrows(IllegalArgumentException.class,
-                () -> RuntimeValueValidator.validate(RuntimeValues.string("12345"), limits));
+                () -> RuntimeValueValidator.validate(RuntimeValues.string("x".repeat(643)), limits));
         assertThrows(IllegalArgumentException.class, () -> RuntimeValueValidator.validate(
                 RuntimeValues.list(RuntimeValues.integer(1), RuntimeValues.integer(2),
                         RuntimeValues.integer(3)), limits));

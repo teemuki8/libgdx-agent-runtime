@@ -155,13 +155,13 @@ public final class InputRegistry {
                 evidence.state = InputInjectionState.EXECUTED;
             } catch (RuntimeException failure) {
                 evidence.state = InputInjectionState.FAILED;
-                evidence.diagnostic = Optional.of(diagnostic("input.execution", failure));
+                recordFailure(evidence, "input.execution", failure);
                 if (firstRuntimeFailure == null) {
                     firstRuntimeFailure = failure;
                 }
             } catch (Error failure) {
                 evidence.state = InputInjectionState.FAILED;
-                evidence.diagnostic = Optional.of(diagnostic("input.execution", failure));
+                recordFailure(evidence, "input.execution", failure);
                 if (firstError == null) {
                     firstError = failure;
                 }
@@ -210,7 +210,7 @@ public final class InputRegistry {
             outstanding--;
         }
         evidence.state = InputInjectionState.FAILED;
-        evidence.diagnostic = Optional.of(diagnostic("input.schedule", failure));
+        recordFailure(evidence, "input.schedule", failure);
     }
 
     private synchronized InputInjection snapshot(Evidence evidence, CommandLookup command) {
@@ -219,7 +219,8 @@ public final class InputRegistry {
                 evidence.inputId, evidence.requestId, command, evidence.state,
                 evidence.targetTick, evidence.actualTick, evidence.executionEpochId,
                 evidence.submittedFrameId, evidence.resultingFrameId,
-                evidence.recordedParameters, evidence.parametersRedacted, evidence.diagnostic);
+                evidence.recordedParameters, evidence.parametersRedacted, evidence.diagnostic,
+                evidence.applicationFailure);
         runtime.recordings().recordInput(injection);
         return injection;
     }
@@ -326,8 +327,11 @@ public final class InputRegistry {
         }
     }
 
-    private String diagnostic(String category, Throwable failure) {
-        return boundedDiagnostic(runtime.diagnostics().describe(category, failure));
+    private void recordFailure(Evidence evidence, String category, Throwable failure) {
+        ApplicationFailureEvidence failureEvidence =
+                runtime.diagnostics().describe(category, failure);
+        evidence.diagnostic = Optional.of(failureEvidence.legacyEnvelope());
+        evidence.applicationFailure = Optional.of(failureEvidence);
     }
 
     private String boundedDiagnostic(String value) {
@@ -366,6 +370,7 @@ public final class InputRegistry {
         private Optional<FrameId> resultingFrameId = Optional.empty();
         private Optional<RuntimeValue.ObjectValue> recordedParameters = Optional.empty();
         private Optional<String> diagnostic = Optional.empty();
+        private Optional<ApplicationFailureEvidence> applicationFailure = Optional.empty();
 
         Evidence(String inputId, String requestId, RuntimeValue.ObjectValue parameters,
                 OptionalLong requestedTargetTick, long targetTick,

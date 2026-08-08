@@ -153,8 +153,11 @@ public final class CheckpointRegistry {
                 evidence.descriptor = descriptor;
             }
         } catch (RuntimeException | Error failure) {
+            ApplicationFailureEvidence failureEvidence =
+                    runtime.diagnostics().describe("checkpoint.create", failure);
             synchronized (this) {
-                evidence.diagnostic = diagnostic("checkpoint.create", failure);
+                evidence.diagnostic = failureEvidence.legacyEnvelope();
+                evidence.applicationFailure = Optional.of(failureEvidence);
             }
             throw failure;
         }
@@ -180,8 +183,11 @@ public final class CheckpointRegistry {
                 evidence.partial = false;
             }
         } catch (RuntimeException | Error failure) {
+            ApplicationFailureEvidence failureEvidence =
+                    runtime.diagnostics().describe("checkpoint.restore", failure);
             synchronized (this) {
-                evidence.diagnostic = diagnostic("checkpoint.restore", failure);
+                evidence.diagnostic = failureEvidence.legacyEnvelope();
+                evidence.applicationFailure = Optional.of(failureEvidence);
             }
             throw failure;
         }
@@ -198,7 +204,7 @@ public final class CheckpointRegistry {
                     Optional.ofNullable(evidence.descriptor),
                     Optional.ofNullable(evidence.baselineEpoch),
                     Optional.ofNullable(evidence.baselineFrame), evidence.partial,
-                    Optional.ofNullable(evidence.diagnostic));
+                    Optional.ofNullable(evidence.diagnostic), evidence.applicationFailure);
         }
     }
 
@@ -255,12 +261,6 @@ public final class CheckpointRegistry {
         };
     }
 
-    private String diagnostic(String category, Throwable failure) {
-        String message = runtime.diagnostics().describe(category, failure);
-        return message.length() <= limits.descriptionLength()
-                ? message : message.substring(0, limits.descriptionLength());
-    }
-
     private static void requireValidTimeout(Duration timeout, long maximumNanos) {
         Objects.requireNonNull(timeout, "timeout");
         final long nanos;
@@ -285,6 +285,7 @@ public final class CheckpointRegistry {
         private FrameId baselineFrame;
         private boolean partial;
         private String diagnostic;
+        private Optional<ApplicationFailureEvidence> applicationFailure = Optional.empty();
 
         private Evidence(Request request) {
             this.request = request;

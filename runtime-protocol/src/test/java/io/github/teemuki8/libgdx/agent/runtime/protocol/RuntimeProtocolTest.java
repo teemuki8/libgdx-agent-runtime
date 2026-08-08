@@ -969,6 +969,77 @@ final class RuntimeProtocolTest {
 
     private record TestCheckpoint(int value) implements CheckpointHandle {}
 
+    @Test
+    void legacyProtocolSnapshotRetainsDiagnosticFieldsAndEnvelopeOnly() throws Exception {
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("legacy-diag"))
+                .clock(() -> 1)
+                .build();
+        runtime.entities().register(EntityId.of("bad"), EntityType.of("enemy"),
+                () -> "Bad", inspector -> inspector.property("health",
+                        (java.util.function.Supplier<io.github.teemuki8.libgdx.agent.runtime.core
+                                .RuntimeValue>) () -> {
+                    throw new IllegalStateException("token=secret-123 /home/private/save.dat");
+                }));
+        runtime.start();
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime)) {
+            RuntimeProtocolService service = new RuntimeProtocolService(registry);
+            RuntimeResponse response = service.execute(new RuntimeRequest(
+                    ProtocolVersion.V1, "diag-snapshot", "legacy-diag",
+                    new RuntimeCommand.Snapshot(null, null, false, null, false, 10)));
+            byte[] encoded = ProtocolJson.encode(response);
+            String json = new String(encoded, StandardCharsets.UTF_8);
+            assertFalse(json.contains("token=secret-123"));
+            assertFalse(json.contains("/home/private/save.dat"));
+            assertFalse(json.contains("sanitizedDetail"));
+            assertFalse(json.contains("applicationFailure"));
+            com.fasterxml.jackson.databind.JsonNode diagnostic = ProtocolJson.mapper()
+                    .readTree(encoded).path("result").path("snapshot").path("stats")
+                    .path("diagnostics").get(0);
+            assertFalse(diagnostic.isMissingNode());
+            assertEquals("java.lang.IllegalStateException",
+                    diagnostic.get("exceptionClass").asText());
+            assertEquals("legacy-diag|failure-1|provider.property"
+                    + "|java.lang.IllegalStateException",
+                    diagnostic.get("message").asText());
+            assertFalse(diagnostic.has("failure"));
+        }
+    }
+
+    @Test
+    void legacyProtocolCommandStatusDiagnosticIsEnvelopeOnly() throws Exception {
+        ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("legacy-command"))
+                .captureThread(Thread.currentThread())
+                .clock(() -> 1)
+                .commandDispatcher(applicationQueue::addLast)
+                .build();
+        runtime.start();
+        runtime.commands().orElseThrow().submit("fail-1", 100, () -> {
+            throw new IllegalStateException("token=secret-123 /home/private/save.dat");
+        });
+        applicationQueue.removeFirst().run();
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime)) {
+            RuntimeProtocolService service = new RuntimeProtocolService(registry);
+            RuntimeResponse response = service.execute(new RuntimeRequest(
+                    ProtocolVersion.V1_2, "diag-status", "legacy-command",
+                    new RuntimeCommand.CommandStatus("fail-1")));
+            byte[] encoded = ProtocolJson.encode(response);
+            String json = new String(encoded, StandardCharsets.UTF_8);
+            assertFalse(json.contains("token=secret-123"));
+            assertFalse(json.contains("sanitizedDetail"));
+            assertFalse(json.contains("applicationFailure"));
+            com.fasterxml.jackson.databind.JsonNode status = ProtocolJson.mapper()
+                    .readTree(encoded).path("result").path("command").path("status");
+            assertEquals("legacy-command|failure-2|command.failed"
+                    + "|java.lang.IllegalStateException",
+                    status.get("diagnostic").asText());
+        }
+    }
+
     private static AgentRuntime verticalRuntime() {
         long[] health = {100};
         AgentRuntime runtime = AgentRuntime.builder()

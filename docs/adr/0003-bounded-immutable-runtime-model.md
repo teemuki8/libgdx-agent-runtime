@@ -22,11 +22,15 @@ property-added changes. A later new entity emits `ENTITY_ADDED`; removal emits `
 with its prior entity snapshot as evidence. Duplicate IDs across all static/dynamic providers are
 retained as diagnostics and omitted after the first deterministic owner.
 
-Provider failures become bounded diagnostics with provider, optional entity/property, exception
-class, a stable category, and a deterministic correlation identifier; raw application messages and
-stack traces are never externally serialized. Applications may opt into bounded sanitized detail
-through an application-owned sanitizer that fails closed when it throws. Truncation always reports
-the dimension, observed count, retained count, and limit.
+Provider and callback failures become structured `ApplicationFailureEvidence` with provider,
+optional entity/property, a stable category, the exception class, and a deterministic
+session-prefixed correlation identifier; raw application messages and stack traces are never
+externally serialized. Applications may opt into bounded sanitized detail (at most 1_024 code
+units) through an application-owned sanitizer that fails closed when it throws; the detail is
+visible only in the structured field. Protocol 1.x projections render the 642-character legacy
+envelope (`correlationId|category|exceptionClass`) and never expose sanitized or raw detail, so
+the four diagnostic-text limits validate a 642 minimum. Truncation always reports the dimension,
+observed count, retained count, and limit.
 
 ## Consequences
 

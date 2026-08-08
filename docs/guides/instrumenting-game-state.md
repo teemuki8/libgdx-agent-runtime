@@ -67,10 +67,12 @@ Close a registration handle outside a frame on the capture thread. The next fram
 `ENTITY_REMOVED`; historical versions remain until frame eviction.
 
 Provider failures do not escape the render loop. The frame retains provider name, optional entity
-and property, exception class, a stable category, and a deterministic correlation identifier. Raw
+and property, and structured failure evidence: a stable category, the exception class, a
+deterministic session-prefixed correlation identifier, and optional sanitized detail. Raw
 application messages and stack traces are not serialized. An application-owned sanitizer may opt
-into bounded public detail and fails closed when it throws. A failed property is omitted and
-diagnostics make that omission explicit.
+into bounded public detail that appears only in the structured field and never in the legacy
+642-character envelope rendered by protocol 1.x; a throwing sanitizer fails closed. A failed
+property is omitted and diagnostics make that omission explicit.
 
 Only registered fields are visible. The runtime never traverses arbitrary object fields.
 

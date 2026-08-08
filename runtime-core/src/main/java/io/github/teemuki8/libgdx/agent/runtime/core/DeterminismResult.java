@@ -10,7 +10,7 @@ public record DeterminismResult(DeterminismStatus status, String message,
         Optional<ExecutionEpochId> leftExecutionEpochId,
         Optional<ExecutionEpochId> rightExecutionEpochId, Optional<FrameId> leftFrameId,
         Optional<FrameId> rightFrameId, Optional<DeterminismDifference> difference,
-        DeterminismBounds bounds) {
+        DeterminismBounds bounds, Optional<ApplicationFailureEvidence> applicationFailure) {
     /** Validates complete divergence evidence and bounded messaging. */
     public DeterminismResult {
         Objects.requireNonNull(status, "status");
@@ -23,7 +23,10 @@ public record DeterminismResult(DeterminismStatus status, String message,
         rightFrameId = Objects.requireNonNull(rightFrameId, "rightFrameId");
         difference = Objects.requireNonNull(difference, "difference");
         Objects.requireNonNull(bounds, "bounds");
-        if (message.isBlank() || message.length() > 512) {
+        applicationFailure = applicationFailure == null
+                ? Optional.empty() : applicationFailure;
+        if (message.isBlank()
+                || message.length() > ApplicationFailureEvidence.LEGACY_ENVELOPE_CAPACITY) {
             throw new IllegalArgumentException("determinism message is outside the public bound");
         }
         boolean divergentEvidence = epochRelativeTick.isPresent()

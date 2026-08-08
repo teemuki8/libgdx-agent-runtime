@@ -9,10 +9,15 @@ This document makes lifecycle and evidence edge cases explicit.
    history until frame eviction.
 5. Static IDs are unique at registration. Across dynamic sources, static wins, then source name
    order; later duplicates are omitted with a diagnostic.
-6. Property failures omit that property and retain provider, entity, property, exception class, a
-   stable category, and a deterministic correlation identifier without a stack trace. Raw
-   application exception messages are never exposed by default; an application-owned sanitizer may
-   opt into bounded public detail and fails closed when it throws.
+6. Property failures omit that property and retain provider, entity, property, and structured
+   `ApplicationFailureEvidence` (category, exception class, session-prefixed correlation
+   identifier, optional sanitized detail) without a stack trace. Raw application exception
+   messages are never exposed by default; an application-owned sanitizer may opt into bounded
+   public detail that appears only in the structured field and never in the legacy 642-character
+   envelope (`correlationId|category|exceptionClass`) rendered by protocol 1.x projections.
+   Diagnostic-text limits (`RuntimeLimits.stringLength`, `CommandDispatchLimits.diagnosticLength`,
+   `CheckpointLimits.descriptionLength`, `InputLimits.stringLength`) validate a 642 minimum so the
+   envelope always fits.
 7. `NaN` and infinity are rejected. Decimals use canonical finite `BigDecimal`, at most 128 digits
    of precision and bounded scale.
 8. Entities sort by ID and properties/attributes/object fields sort by name.

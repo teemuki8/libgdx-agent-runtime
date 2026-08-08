@@ -7,7 +7,8 @@ import java.util.Optional;
 public record CheckpointOperation(Kind kind, String checkpointId, String requestId,
         CommandLookup command, Optional<CheckpointDescriptor> descriptor,
         Optional<ExecutionEpochId> baselineEpochId, Optional<FrameId> baselineFrameId,
-        boolean applicationStateMayBePartiallyChanged, Optional<String> diagnostic) {
+        boolean applicationStateMayBePartiallyChanged, Optional<String> diagnostic,
+        Optional<ApplicationFailureEvidence> applicationFailure) {
     /** Checkpoint mutation kind. */
     public enum Kind { CREATE, RESTORE }
 
@@ -21,6 +22,8 @@ public record CheckpointOperation(Kind kind, String checkpointId, String request
         baselineEpochId = Objects.requireNonNull(baselineEpochId, "baselineEpochId");
         baselineFrameId = Objects.requireNonNull(baselineFrameId, "baselineFrameId");
         diagnostic = Objects.requireNonNull(diagnostic, "diagnostic");
+        applicationFailure = applicationFailure == null
+                ? Optional.empty() : applicationFailure;
         diagnostic.ifPresent(value -> {
             if (value.isBlank() || value.length() > 16_384) {
                 throw new IllegalArgumentException("checkpoint diagnostic is invalid");

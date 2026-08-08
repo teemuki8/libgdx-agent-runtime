@@ -94,12 +94,16 @@ final class DeterminismRegistryTest {
 
         assertEquals(CommandState.SUCCEEDED,
                 operation.command().status().orElseThrow().state());
-        assertEquals(DeterminismStatus.INCONCLUSIVE, operation.result().orElseThrow().status());
-        String message = operation.result().orElseThrow().message();
+        DeterminismResult result = operation.result().orElseThrow();
+        assertEquals(DeterminismStatus.INCONCLUSIVE, result.status());
+        ApplicationFailureEvidence failure = result.applicationFailure().orElseThrow();
+        assertEquals("determinism.execute", failure.category());
+        String message = result.message();
+        assertEquals(failure.legacyEnvelope(), message);
         assertFalse(message.contains("reset rejected"));
-        assertTrue(message.contains("determinism.execute"));
-        assertTrue(message.contains("failure-1"));
-        assertEquals(1, operation.result().orElseThrow().bounds().completedRepeats());
+        assertTrue(message.startsWith("determinism|failure-"));
+        assertTrue(message.endsWith("|determinism.execute|java.lang.IllegalStateException"));
+        assertEquals(1, result.bounds().completedRepeats());
     }
 
     @Test
@@ -131,13 +135,16 @@ final class DeterminismRegistryTest {
         DeterminismOperation operation = runtime.determinism().check(
                 spec, "determinism-pause-failure", Duration.ofSeconds(1));
 
-        assertEquals(DeterminismStatus.INCONCLUSIVE,
-                operation.result().orElseThrow().status());
-        String message = operation.result().orElseThrow().message();
+        DeterminismResult result = operation.result().orElseThrow();
+        assertEquals(DeterminismStatus.INCONCLUSIVE, result.status());
+        ApplicationFailureEvidence failure = result.applicationFailure().orElseThrow();
+        assertEquals("determinism.pause", failure.category());
+        String message = result.message();
+        assertEquals(failure.legacyEnvelope(), message);
         assertFalse(message.contains("token=secret-123"));
         assertFalse(message.contains("/home/private/save.dat"));
-        assertTrue(message.contains("determinism.pause"));
-        assertTrue(message.contains("failure-1"));
+        assertTrue(message.startsWith("determinism-pause-failure|failure-"));
+        assertTrue(message.endsWith("|determinism.pause|java.lang.IllegalStateException"));
     }
 
     @Test
@@ -149,7 +156,7 @@ final class DeterminismRegistryTest {
                 .clock(() -> 1)
                 .commandDispatcher(queue::addLast)
                 .applicationFailureSanitizer((context, failure) ->
-                        Optional.of("z".repeat(1000)))
+                        Optional.of("z".repeat(2_000)))
                 .build();
         runtime.entities().register(EntityId.of("counter"), EntityType.of("state"),
                 () -> "Counter", inspector -> inspector.property("value", () -> value[0]));
@@ -167,13 +174,15 @@ final class DeterminismRegistryTest {
         DeterminismOperation operation = runtime.determinism().check(
                 spec, "determinism-sanitizer-bound", Duration.ofSeconds(1));
 
-        assertEquals(DeterminismStatus.INCONCLUSIVE,
-                operation.result().orElseThrow().status());
-        String message = operation.result().orElseThrow().message();
-        assertTrue(message.length() <= 512);
-        assertTrue(message.contains("determinism.execute"));
-        assertTrue(message.contains("failure-1"));
-        assertFalse(message.contains("z".repeat(1000)));
+        DeterminismResult result = operation.result().orElseThrow();
+        assertEquals(DeterminismStatus.INCONCLUSIVE, result.status());
+        ApplicationFailureEvidence failure = result.applicationFailure().orElseThrow();
+        assertEquals(ApplicationFailureEvidence.MAX_SANITIZED_DETAIL_LENGTH,
+                failure.sanitizedDetail().orElseThrow().length());
+        String message = result.message();
+        assertEquals(failure.legacyEnvelope(), message);
+        assertTrue(message.length() <= ApplicationFailureEvidence.LEGACY_ENVELOPE_CAPACITY);
+        assertFalse(message.contains("z".repeat(8)));
         assertFalse(message.contains("token=secret-123"));
         assertFalse(message.contains("/home/private/save.dat"));
     }

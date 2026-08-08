@@ -9,7 +9,8 @@ public record InputInjection(String inputId, String requestId, CommandLookup com
         InputInjectionState state, long targetTick, OptionalLong actualTick,
         ExecutionEpochId executionEpochId, Optional<FrameId> submittedFrameId,
         Optional<FrameId> resultingFrameId, Optional<RuntimeValue.ObjectValue> recordedParameters,
-        boolean parametersRedacted, Optional<String> diagnostic) {
+        boolean parametersRedacted, Optional<String> diagnostic,
+        Optional<ApplicationFailureEvidence> applicationFailure) {
     /** Validates immutable correlated input evidence. */
     public InputInjection {
         IdentifierSupport.validate(inputId, "input id");
@@ -24,6 +25,8 @@ public record InputInjection(String inputId, String requestId, CommandLookup com
         resultingFrameId = Objects.requireNonNull(resultingFrameId, "resultingFrameId");
         recordedParameters = Objects.requireNonNull(recordedParameters, "recordedParameters");
         diagnostic = Objects.requireNonNull(diagnostic, "diagnostic");
+        applicationFailure = applicationFailure == null
+                ? Optional.empty() : applicationFailure;
         if (parametersRedacted && recordedParameters.isPresent()) {
             throw new IllegalArgumentException("redacted input cannot expose parameters");
         }

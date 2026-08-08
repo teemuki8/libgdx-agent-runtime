@@ -82,7 +82,7 @@ final class ScenarioRegistryTest {
         AtomicInteger resets = new AtomicInteger();
         AgentRuntime runtime = AgentRuntime.builder().clock(() -> 1)
                 .commandDispatcher(queue::addLast)
-                .commandDispatchLimits(new CommandDispatchLimits(2, 1, 1, 1_000, 100))
+                .commandDispatchLimits(new CommandDispatchLimits(2, 1, 1, 1_000, 642))
                 .scenarioLimits(new ScenarioLimits(2, 2)).build();
         runtime.scenarios().register("one", resets::incrementAndGet);
         runtime.start();

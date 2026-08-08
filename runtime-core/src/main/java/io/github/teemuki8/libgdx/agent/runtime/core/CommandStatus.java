@@ -12,7 +12,8 @@ public record CommandStatus(
         Optional<Long> startedAtNanos,
         Optional<Long> completedAtNanos,
         boolean outcomeKnown,
-        Optional<String> diagnostic) {
+        Optional<String> diagnostic,
+        Optional<ApplicationFailureEvidence> applicationFailure) {
     /** Validates and copies status fields. */
     public CommandStatus {
         IdentifierSupport.validate(requestId, "requestId");
@@ -23,6 +24,8 @@ public record CommandStatus(
         startedAtNanos = Objects.requireNonNull(startedAtNanos, "startedAtNanos");
         completedAtNanos = Objects.requireNonNull(completedAtNanos, "completedAtNanos");
         diagnostic = Objects.requireNonNull(diagnostic, "diagnostic");
+        applicationFailure = applicationFailure == null
+                ? Optional.empty() : applicationFailure;
         startedAtNanos.ifPresent(value -> requireTime(value, "startedAtNanos"));
         completedAtNanos.ifPresent(value -> requireTime(value, "completedAtNanos"));
         startedAtNanos.ifPresent(value -> requireAtLeast(

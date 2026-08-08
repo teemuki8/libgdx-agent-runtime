@@ -69,7 +69,7 @@ public final class AgentRuntime implements AutoCloseable {
         configuration = builder.configuration;
         limits = configuration.limits();
         diagnostics = new ApplicationDiagnostics(
-                builder.applicationFailureSanitizer, limits.stringLength());
+                builder.applicationFailureSanitizer, sessionId.value());
         monotonicClock = builder.monotonicClock;
         wallClock = builder.wallClock;
         captureThread = builder.captureThread;
@@ -608,7 +608,10 @@ public final class AgentRuntime implements AutoCloseable {
             if (named.entity().id().equals(priorId)) {
                 diagnostics.add(new CaptureDiagnostic(named.provider(),
                         Optional.of(named.entity().id()), Optional.empty(),
-                        AgentRuntimeException.class.getName(), "duplicate entity ID"));
+                        new ApplicationFailureEvidence("capture.duplicateEntityId",
+                                AgentRuntimeException.class.getName(),
+                                AgentRuntime.this.diagnostics.nextCorrelationId(),
+                                Optional.empty())));
                 continue;
             }
             priorId = named.entity().id();
@@ -649,8 +652,11 @@ public final class AgentRuntime implements AutoCloseable {
         for (EntityInspector.PropertyProvider property : providers) {
             if (property.name().equals(previousName)) {
                 diagnostics.add(new CaptureDiagnostic(named.provider(), Optional.of(entity.id()),
-                        Optional.of(property.name()), IllegalArgumentException.class.getName(),
-                        "duplicate property name"));
+                        Optional.of(property.name()),
+                        new ApplicationFailureEvidence("capture.duplicateProperty",
+                                IllegalArgumentException.class.getName(),
+                                AgentRuntime.this.diagnostics.nextCorrelationId(),
+                                Optional.empty())));
                 continue;
             }
             previousName = property.name();
@@ -945,12 +951,8 @@ public final class AgentRuntime implements AutoCloseable {
 
     private CaptureDiagnostic diagnostic(String category, String provider, EntityId entity,
             String property, RuntimeException failure) {
-        String message = diagnostics.describe(category, failure);
-        if (message.length() > limits.stringLength()) {
-            message = message.substring(0, limits.stringLength());
-        }
         return new CaptureDiagnostic(provider, Optional.ofNullable(entity),
-                Optional.ofNullable(property), failure.getClass().getName(), message);
+                Optional.ofNullable(property), diagnostics.describe(category, failure));
     }
 
     private static Map<EntityId, EntitySnapshot> index(List<EntitySnapshot> entities) {

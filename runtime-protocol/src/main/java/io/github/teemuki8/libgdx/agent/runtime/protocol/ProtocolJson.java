@@ -1,5 +1,6 @@
 package io.github.teemuki8.libgdx.agent.runtime.protocol;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import com.fasterxml.jackson.core.JsonFactory;
@@ -10,9 +11,17 @@ import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.json.JsonMapper;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import io.github.teemuki8.libgdx.agent.runtime.core.ApplicationFailureEvidence;
+import io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic;
+import io.github.teemuki8.libgdx.agent.runtime.core.CheckpointOperation;
+import io.github.teemuki8.libgdx.agent.runtime.core.CommandStatus;
+import io.github.teemuki8.libgdx.agent.runtime.core.DeterminismResult;
+import io.github.teemuki8.libgdx.agent.runtime.core.InputInjection;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue;
+import java.util.Optional;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeAssertion;
 import io.github.teemuki8.libgdx.agent.runtime.core.RecordingActionEntry;
 import io.github.teemuki8.libgdx.agent.runtime.core.RecordingEntry;
@@ -141,6 +150,11 @@ public final class ProtocolJson {
         mapper.addMixIn(RuntimeValue.class, RuntimeValueMixin.class);
         mapper.addMixIn(RuntimeAssertion.class, RuntimeAssertionMixin.class);
         mapper.addMixIn(RecordingEntry.class, RecordingEntryMixin.class);
+        mapper.addMixIn(CaptureDiagnostic.class, CaptureDiagnosticMixin.class);
+        mapper.addMixIn(CommandStatus.class, CommandStatusMixin.class);
+        mapper.addMixIn(CheckpointOperation.class, CheckpointOperationMixin.class);
+        mapper.addMixIn(InputInjection.class, InputInjectionMixin.class);
+        mapper.addMixIn(DeterminismResult.class, DeterminismResultMixin.class);
         return mapper;
     }
 
@@ -192,6 +206,37 @@ public final class ProtocolJson {
         @JsonSubTypes.Type(value = RecordingTickEntry.class, name = "tick")
     })
     private interface RecordingEntryMixin {}
+
+    /**
+     * Projects capture diagnostics to the legacy protocol 1.x wire shape; the structured failure
+     * evidence is never serialized directly.
+     */
+    @JsonSerialize(using = CaptureDiagnosticLegacySerializer.class)
+    private interface CaptureDiagnosticMixin {}
+
+    /** Keeps the structured application failure out of the protocol 1.x command wire shape. */
+    private interface CommandStatusMixin {
+        @JsonIgnore
+        Optional<ApplicationFailureEvidence> applicationFailure();
+    }
+
+    /** Keeps the structured application failure out of the protocol 1.x checkpoint wire shape. */
+    private interface CheckpointOperationMixin {
+        @JsonIgnore
+        Optional<ApplicationFailureEvidence> applicationFailure();
+    }
+
+    /** Keeps the structured application failure out of the protocol 1.x input wire shape. */
+    private interface InputInjectionMixin {
+        @JsonIgnore
+        Optional<ApplicationFailureEvidence> applicationFailure();
+    }
+
+    /** Keeps the structured application failure out of the protocol 1.x determinism wire shape. */
+    private interface DeterminismResultMixin {
+        @JsonIgnore
+        Optional<ApplicationFailureEvidence> applicationFailure();
+    }
 
     /** Local codec failure with a stable safe category. */
     @SuppressWarnings("serial")

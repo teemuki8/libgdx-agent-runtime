@@ -307,7 +307,7 @@ final class RecordingRegistryTest {
                 RecordingStopReason.REQUESTED, List.of(), true, false, 0, 0, 0);
         CommandStatus queuedStatus = new CommandStatus(
                 "grow-request", CommandState.QUEUED, 1, 1_000_000_001,
-                Optional.empty(), Optional.empty(), false, Optional.empty());
+                Optional.empty(), Optional.empty(), false, Optional.empty(), Optional.empty());
         RecordingActionEntry queuedEntry = new RecordingActionEntry(
                 0, new ActionInvocation(
                         "grow", "grow-request", CommandLookup.found(queuedStatus),

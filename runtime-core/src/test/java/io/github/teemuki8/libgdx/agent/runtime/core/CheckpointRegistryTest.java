@@ -21,7 +21,7 @@ final class CheckpointRegistryTest {
                 .sessionId(SessionId.of("checkpoints"))
                 .clock(() -> 1)
                 .commandDispatcher(dispatch::addLast)
-                .checkpointLimits(new CheckpointLimits(1, 8, 64))
+                .checkpointLimits(new CheckpointLimits(1, 8, 642))
                 .build();
         runtime.entities().register(EntityId.of("state"), EntityType.of("fixture"),
                 () -> "State", inspector -> inspector.property("value", () -> state[0]));
@@ -111,9 +111,12 @@ final class CheckpointRegistryTest {
         assertTrue(failed.applicationStateMayBePartiallyChanged());
         assertTrue(failed.baselineFrameId().isEmpty());
         assertEquals(new ExecutionEpochId(0), runtime.currentEpoch());
+        ApplicationFailureEvidence failure = failed.applicationFailure().orElseThrow();
+        assertEquals("checkpoint.restore", failure.category());
         String diagnostic = failed.diagnostic().orElseThrow();
-        assertTrue(diagnostic.contains("checkpoint.restore"));
-        assertTrue(diagnostic.contains("failure-1"));
+        assertEquals(failure.legacyEnvelope(), diagnostic);
+        assertTrue(diagnostic.startsWith("failed-checkpoint|failure-"));
+        assertTrue(diagnostic.endsWith("|checkpoint.restore|java.lang.IllegalStateException"));
         assertFalse(diagnostic.contains("restore failed"));
     }
 
@@ -144,11 +147,15 @@ final class CheckpointRegistryTest {
         CheckpointOperation failed = runtime.checkpoints().create(
                 "save", null, "create", Duration.ofSeconds(1));
         assertEquals(CommandState.FAILED, failed.command().status().orElseThrow().state());
+        ApplicationFailureEvidence failure = failed.applicationFailure().orElseThrow();
+        assertEquals("checkpoint.create", failure.category());
         String diagnostic = failed.diagnostic().orElseThrow();
+        assertEquals(failure.legacyEnvelope(), diagnostic);
+        assertTrue(diagnostic.startsWith("checkpoint-leak|failure-"));
+        assertTrue(diagnostic.endsWith("|checkpoint.create|java.lang.IllegalStateException"));
         assertFalse(diagnostic.contains("token=secret-123"));
         assertFalse(diagnostic.contains("/home/private/save.dat"));
-        assertTrue(diagnostic.contains("checkpoint.create"));
-        assertTrue(diagnostic.contains("failure-1"));
+        assertTrue(failure.sanitizedDetail().isEmpty());
     }
 
     @Test
@@ -158,7 +165,7 @@ final class CheckpointRegistryTest {
                 .sessionId(SessionId.of("checkpoint-bound"))
                 .clock(() -> 1)
                 .commandDispatcher(dispatch::addLast)
-                .checkpointLimits(new CheckpointLimits(1, 8, 24))
+                .checkpointLimits(new CheckpointLimits(1, 8, 642))
                 .build();
         runtime.checkpoints().register(new CheckpointProvider() {
             @Override
@@ -179,8 +186,9 @@ final class CheckpointRegistryTest {
         CheckpointOperation failed = runtime.checkpoints().create(
                 "save", null, "create", Duration.ofSeconds(1));
         String diagnostic = failed.diagnostic().orElseThrow();
-        assertTrue(diagnostic.length() <= 24);
-        assertTrue(diagnostic.contains("failure-1"));
+        assertTrue(diagnostic.length() <= 642);
+        assertTrue(diagnostic.startsWith("checkpoint-bound|failure-"));
+        assertTrue(diagnostic.endsWith("|checkpoint.create|java.lang.IllegalStateException"));
         assertFalse(diagnostic.contains("token=secret-123"));
         assertFalse(diagnostic.contains("/home/private/save.dat"));
     }
@@ -192,7 +200,7 @@ final class CheckpointRegistryTest {
                 .sessionId(SessionId.of("failed-disposal"))
                 .clock(() -> 1)
                 .commandDispatcher(dispatch::addLast)
-                .checkpointLimits(new CheckpointLimits(1, 8, 64))
+                .checkpointLimits(new CheckpointLimits(1, 8, 642))
                 .build();
         runtime.checkpoints().register(new CheckpointProvider() {
             @Override public CheckpointHandle create() {

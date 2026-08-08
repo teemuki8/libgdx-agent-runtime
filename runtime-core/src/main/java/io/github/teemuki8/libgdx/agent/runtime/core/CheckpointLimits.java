@@ -10,10 +10,14 @@ public record CheckpointLimits(int retainedCheckpoints, int retainedOperations,
                 || descriptionLength <= 0 || descriptionLength > 16_384) {
             throw new IllegalArgumentException("checkpoint limit is outside the supported range");
         }
+        if (descriptionLength < ApplicationFailureEvidence.LEGACY_ENVELOPE_CAPACITY) {
+            throw new IllegalArgumentException("descriptionLength must be at least "
+                    + ApplicationFailureEvidence.LEGACY_ENVELOPE_CAPACITY);
+        }
     }
 
     /** Returns conservative development defaults. */
     public static CheckpointLimits developmentDefaults() {
-        return new CheckpointLimits(32, 256, 512);
+        return new CheckpointLimits(32, 256, 1_024);
     }
 }

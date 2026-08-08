@@ -72,7 +72,7 @@ final class InputRegistryTest {
                 .sessionId(SessionId.of("input-bounds"))
                 .clock(() -> 1)
                 .commandDispatcher(dispatch::addLast)
-                .inputLimits(new InputLimits(4, 4, 1, 4, 2, 32))
+                .inputLimits(new InputLimits(4, 4, 1, 4, 2, 642))
                 .build();
         runtime.controls().register(SimulationControllerSpec.builder()
                 .pause(() -> {})
@@ -134,8 +134,8 @@ final class InputRegistryTest {
                 .clock(() -> 1)
                 .commandDispatcher(dispatch::addLast)
                 .commandDispatchLimits(new CommandDispatchLimits(1, 8, 8,
-                        Duration.ofSeconds(1).toNanos(), 64))
-                .inputLimits(new InputLimits(2, 2, 1, 4, 2, 64))
+                        Duration.ofSeconds(1).toNanos(), 642))
+                .inputLimits(new InputLimits(2, 2, 1, 4, 2, 642))
                 .build();
         runtime.controls().register(SimulationControllerSpec.builder()
                 .pause(() -> {}).resume(() -> {}).tick(deltaNanos -> {}).build());
@@ -231,11 +231,15 @@ final class InputRegistryTest {
                 "keyboard", "input-leak", parameters,
                 OptionalLong.empty(), Duration.ofSeconds(1));
         assertEquals(InputInjectionState.FAILED, failed.state());
+        ApplicationFailureEvidence failure = failed.applicationFailure().orElseThrow();
+        assertEquals("input.execution", failure.category());
         String diagnostic = failed.diagnostic().orElseThrow();
+        assertEquals(failure.legacyEnvelope(), diagnostic);
+        assertTrue(diagnostic.startsWith("input-leak|failure-"));
+        assertTrue(diagnostic.endsWith("|input.execution|java.lang.IllegalStateException"));
         assertFalse(diagnostic.contains("token=secret-123"));
         assertFalse(diagnostic.contains("/home/private/save.dat"));
-        assertTrue(diagnostic.contains("input.execution"));
-        assertTrue(diagnostic.contains("failure-1"));
+        assertTrue(failure.sanitizedDetail().isEmpty());
     }
 
     @Test
@@ -245,7 +249,7 @@ final class InputRegistryTest {
                 .sessionId(SessionId.of("input-bound"))
                 .clock(() -> 1)
                 .commandDispatcher(dispatch::addLast)
-                .inputLimits(new InputLimits(4, 4, 1, 4, 2, 32))
+                .inputLimits(new InputLimits(4, 4, 1, 4, 2, 642))
                 .build();
         runtime.controls().register(SimulationControllerSpec.builder()
                 .pause(() -> {})
@@ -274,8 +278,9 @@ final class InputRegistryTest {
                 OptionalLong.empty(), Duration.ofSeconds(1));
         assertEquals(InputInjectionState.FAILED, failed.state());
         String diagnostic = failed.diagnostic().orElseThrow();
-        assertTrue(diagnostic.length() <= 32);
-        assertTrue(diagnostic.contains("failure-1"));
+        assertTrue(diagnostic.length() <= 642);
+        assertTrue(diagnostic.startsWith("input-bound|failure-"));
+        assertTrue(diagnostic.endsWith("|input.execution|java.lang.IllegalStateException"));
         assertFalse(diagnostic.contains("token=secret-123"));
         assertFalse(diagnostic.contains("/home/private/save.dat"));
     }

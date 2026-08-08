@@ -100,14 +100,28 @@ public final class DeterminismRegistry {
                                 OptionalLong.of(spec.randomSeed()), spec.configuration()));
                 ArrayList<FrameEvidence> frames = new ArrayList<>();
                 FrameSnapshot baselineSnapshot = runtime.frame(baseline).orElseThrow();
-                frames.add(capture(baselineSnapshot, spec.profile(), counters));
+                Optional<FrameEvidence> baselineEvidence =
+                        capture(baselineSnapshot, spec.profile(), counters);
+                if (baselineEvidence.isEmpty()) {
+                    return inconclusive(spec, counters, executionNanos,
+                            counters.incompleteReason.orElse(
+                                    "determinism evidence bounds were exceeded"));
+                }
+                frames.add(baselineEvidence.orElseThrow());
                 for (int tick = 1; tick <= spec.ticksPerRepeat(); tick++) {
                     if (expired(deadline)) {
                         return inconclusive(spec, counters, executionNanos,
                                 "execution deadline elapsed");
                     }
                     FrameSnapshot frame = runtime.controls().tickForDeterminism(spec.deltaNanos());
-                    frames.add(capture(frame, spec.profile(), counters));
+                    Optional<FrameEvidence> evidence =
+                            capture(frame, spec.profile(), counters);
+                    if (evidence.isEmpty()) {
+                        return inconclusive(spec, counters, executionNanos,
+                                counters.incompleteReason.orElse(
+                                        "determinism evidence bounds were exceeded"));
+                    }
+                    frames.add(evidence.orElseThrow());
                 }
                 runs.add(new RunEvidence(runtime.currentEpoch(), List.copyOf(frames)));
                 counters.completedRepeats++;
@@ -130,8 +144,85 @@ public final class DeterminismRegistry {
         }
     }
 
-    private FrameEvidence capture(FrameSnapshot frame, DeterminismProfile profile, Counters counters) {
+    private Optional<FrameEvidence> capture(
+            FrameSnapshot frame, DeterminismProfile profile, Counters counters) {
         SnapshotComparisonScope scope = profile.comparisonScope();
+        int selectedEntities = 0;
+        long selectedFacts = 0;
+        long entitiesBytes = 0;
+        for (EntitySnapshot entity : frame.entities()) {
+            if (!scope.entityIds().isEmpty() && !scope.entityIds().contains(entity.id())) {
+                continue;
+            }
+            selectedEntities++;
+            entitiesBytes = DeterminismCanonicalSize.add(entitiesBytes,
+                    DeterminismCanonicalSize.entity(
+                            entity.id(), entity.type(), entity.displayName()));
+            long propertyBytes = 0;
+            for (RuntimeValue.Field property : entity.properties()) {
+                if ((scope.properties().isEmpty()
+                        || scope.properties().contains(property.name()))
+                        && !scope.excludedProperties().contains(property.name())) {
+                    selectedFacts++;
+                    propertyBytes = DeterminismCanonicalSize.add(propertyBytes,
+                            DeterminismCanonicalSize.field(property));
+                }
+            }
+            entitiesBytes = DeterminismCanonicalSize.add(entitiesBytes,
+                    DeterminismCanonicalSize.listPrefix());
+            entitiesBytes = DeterminismCanonicalSize.add(entitiesBytes, propertyBytes);
+            entitiesBytes = DeterminismCanonicalSize.add(entitiesBytes,
+                    DeterminismCanonicalSize.listPrefix());
+        }
+        long eventsBytes = 0;
+        if (scope.includeEvents()) {
+            for (RuntimeEvent event : frame.events()) {
+                eventsBytes = DeterminismCanonicalSize.add(eventsBytes,
+                        DeterminismCanonicalSize.event(event));
+                selectedFacts++;
+            }
+        }
+        long decisionsBytes = 0;
+        if (scope.includeDecisions()) {
+            for (DecisionTrace decision : frame.decisions()) {
+                decisionsBytes = DeterminismCanonicalSize.add(decisionsBytes,
+                        DeterminismCanonicalSize.decision(decision));
+                selectedFacts++;
+            }
+        }
+        long uiBytes = 0;
+        if (profile.includeUiCorrelations()) {
+            for (UiFrameCorrelation correlation : runtime.uiCorrelations().correlationsFor(
+                    frame.executionEpochId(), frame.frameId())) {
+                uiBytes = DeterminismCanonicalSize.add(uiBytes,
+                        DeterminismCanonicalSize.ui(correlation));
+                selectedFacts++;
+            }
+        }
+        counters.observeEntities(selectedEntities, limits.maximumEntitiesPerFrame());
+        counters.observeFacts(selectedFacts, limits.maximumFactsPerFrame());
+        if (selectedEntities > limits.maximumEntitiesPerFrame()
+                || selectedFacts > limits.maximumFactsPerFrame()) {
+            counters.incompleteReason = Optional.of(
+                    selectedEntities > limits.maximumEntitiesPerFrame()
+                            ? "determinism entity count limit exceeded"
+                            : "determinism fact count limit exceeded");
+            return Optional.empty();
+        }
+        long candidateBytes = DeterminismCanonicalSize.frame(frame.frameId(),
+                entitiesBytes, eventsBytes, decisionsBytes, uiBytes);
+        long observedBytes = DeterminismCanonicalSize.add(counters.encodedBytes, candidateBytes);
+        if (observedBytes > limits.maximumEncodedEvidenceBytes()) {
+            counters.incompleteReason = Optional.of(
+                    "encoded determinism evidence limit exceeded");
+            return Optional.empty();
+        }
+        if (!frame.stats().diagnostics().isEmpty() || !frame.stats().truncations().isEmpty()
+                || frame.events().stream().anyMatch(value -> !value.truncations().isEmpty())
+                || frame.decisions().stream().anyMatch(value -> !value.truncations().isEmpty())) {
+            counters.incompleteReason = Optional.of(
+                    "capture diagnostics or truncation could hide a divergence");
+        }
         List<EntitySnapshot> entities = frame.entities().stream()
                 .filter(entity -> scope.entityIds().isEmpty()
                         || scope.entityIds().contains(entity.id()))
@@ -146,28 +237,9 @@ public final class DeterminismRegistry {
                         frame.executionEpochId(), frame.frameId()).stream()
                         .map(ComparableUi::from).toList()
                 : List.of();
-        long facts = entities.stream().mapToLong(value -> value.properties().size()).sum()
-                + events.size() + decisions.size() + ui.size();
-        counters.observedEntities += entities.size();
-        counters.observedFacts += facts;
-        if (entities.size() > limits.maximumEntitiesPerFrame()
-                || facts > limits.maximumFactsPerFrame()) {
-            counters.incompleteReason = Optional.of("determinism evidence count limit exceeded");
-        }
-        if (!frame.stats().diagnostics().isEmpty() || !frame.stats().truncations().isEmpty()
-                || entities.stream().anyMatch(EntitySnapshot::truncated)
-                || frame.events().stream().anyMatch(value -> !value.truncations().isEmpty())
-                || frame.decisions().stream().anyMatch(value -> !value.truncations().isEmpty())) {
-            counters.incompleteReason = Optional.of(
-                    "capture diagnostics or truncation could hide a divergence");
-        }
-        FrameEvidence evidence = new FrameEvidence(
-                frame.frameId(), entities, events, decisions, ui);
-        counters.encodedBytes += evidence.toString().getBytes(StandardCharsets.UTF_8).length;
-        if (counters.encodedBytes > limits.maximumEncodedEvidenceBytes()) {
-            counters.incompleteReason = Optional.of("encoded determinism evidence limit exceeded");
-        }
-        return evidence;
+        counters.encodedBytes = observedBytes;
+        return Optional.of(new FrameEvidence(
+                frame.frameId(), entities, events, decisions, ui));
     }
 
     private DeterminismResult compare(DeterminismSpec spec, List<RunEvidence> runs,
@@ -439,6 +511,21 @@ public final class DeterminismRegistry {
         private long observedFacts;
         private long encodedBytes;
         private Optional<String> incompleteReason = Optional.empty();
+
+        private void observeEntities(long delta, int limit) {
+            observedEntities = saturate(observedEntities, delta, limit);
+        }
+
+        private void observeFacts(long delta, int limit) {
+            observedFacts = saturate(observedFacts, delta, limit);
+        }
+    }
+
+    private static long saturate(long current, long delta, long limit) {
+        if (delta >= limit - current) {
+            return limit;
+        }
+        return current + delta;
     }
 
     private record RunEvidence(ExecutionEpochId epoch, List<FrameEvidence> frames) {}

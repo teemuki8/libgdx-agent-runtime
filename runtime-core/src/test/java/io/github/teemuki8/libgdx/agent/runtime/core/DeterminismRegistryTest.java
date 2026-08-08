@@ -216,33 +216,181 @@ final class DeterminismRegistryTest {
     }
 
     @Test
-    void encodedEvidenceExhaustionMakesEqualityInconclusive() {
+    void entityLimitExhaustionStopsBeforeRetainingOrTicking() {
         ArrayDeque<Runnable> queue = new ArrayDeque<>();
         long[] value = {0};
+        int[] resets = {0};
+        int[] ticks = {0};
         AgentRuntime runtime = AgentRuntime.builder()
-                .sessionId(SessionId.of("determinism-evidence-limit"))
+                .sessionId(SessionId.of("determinism-entity-limit"))
                 .clock(() -> 1)
                 .commandDispatcher(queue::addLast)
                 .determinismLimits(new DeterminismLimits(
-                        1, 2, 1, 1, 1, 128, Duration.ofSeconds(1).toNanos()))
+                        1, 2, 2, 1, 100, 1_024, Duration.ofSeconds(1).toNanos()))
+                .build();
+        runtime.entities().register(EntityId.of("counter"), EntityType.of("state"),
+                () -> "Counter", inspector -> inspector.property("value", () -> value[0]));
+        runtime.entities().register(EntityId.of("health"), EntityType.of("state"),
+                () -> "Health", inspector -> inspector.property("points", () -> 100L));
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {}).resume(() -> {})
+                .tick(delta -> {
+                    value[0]++;
+                    ticks[0]++;
+                })
+                .build());
+        runtime.scenarios().register("seeded", context -> {
+            resets[0]++;
+            value[0] = context.randomSeed().orElseThrow();
+        });
+        runtime.start();
+        DeterminismSpec spec = new DeterminismSpec(
+                "seeded", 1, RuntimeValues.object(), 2, 2, 1,
+                new DeterminismProfile(new SnapshotComparisonScope(
+                        List.of(EntityId.of("counter"), EntityId.of("health")),
+                        List.of("value", "points"), List.of(), false, false), false));
+
+        runtime.determinism().check(spec, "entity-limit", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        DeterminismResult result = runtime.determinism().check(
+                spec, "entity-limit", Duration.ofSeconds(1)).result().orElseThrow();
+
+        assertEquals(DeterminismStatus.INCONCLUSIVE, result.status());
+        assertTrue(result.message().contains("entity"));
+        assertTrue(result.message().contains("limit"));
+        assertEquals(0, result.bounds().completedRepeats());
+        assertEquals(1, result.bounds().observedEntities());
+        assertEquals(2, result.bounds().observedFacts());
+        assertEquals(0, result.bounds().encodedEvidenceBytes());
+        assertEquals(1, resets[0]);
+        assertEquals(0, ticks[0]);
+    }
+
+    @Test
+    void factLimitExhaustionStopsBeforeRetainingOrTicking() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        long[] value = {0};
+        int[] resets = {0};
+        int[] ticks = {0};
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("determinism-fact-limit"))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .determinismLimits(new DeterminismLimits(
+                        1, 2, 2, 10, 1, 1_024, Duration.ofSeconds(1).toNanos()))
+                .build();
+        runtime.entities().register(EntityId.of("counter"), EntityType.of("state"),
+                () -> "Counter", inspector -> {
+                    inspector.property("value", () -> value[0]);
+                    inspector.property("extra", () -> 7L);
+                });
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {}).resume(() -> {})
+                .tick(delta -> {
+                    value[0]++;
+                    ticks[0]++;
+                })
+                .build());
+        runtime.scenarios().register("seeded", context -> {
+            resets[0]++;
+            value[0] = context.randomSeed().orElseThrow();
+        });
+        runtime.start();
+        DeterminismSpec spec = new DeterminismSpec(
+                "seeded", 1, RuntimeValues.object(), 2, 2, 1,
+                new DeterminismProfile(new SnapshotComparisonScope(
+                        List.of(EntityId.of("counter")),
+                        List.of("value", "extra"), List.of(), false, false), false));
+
+        runtime.determinism().check(spec, "fact-limit", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        DeterminismResult result = runtime.determinism().check(
+                spec, "fact-limit", Duration.ofSeconds(1)).result().orElseThrow();
+
+        assertEquals(DeterminismStatus.INCONCLUSIVE, result.status());
+        assertTrue(result.message().contains("fact"));
+        assertTrue(result.message().contains("limit"));
+        assertEquals(0, result.bounds().completedRepeats());
+        assertEquals(1, result.bounds().observedEntities());
+        assertEquals(1, result.bounds().observedFacts());
+        assertEquals(0, result.bounds().encodedEvidenceBytes());
+        assertEquals(1, resets[0]);
+        assertEquals(0, ticks[0]);
+    }
+
+    @Test
+    void encodedByteLimitExhaustionRetainsOnlyAdmittedFramesAndStops() {
+        EntitySnapshot counter = new EntitySnapshot(EntityId.of("counter"),
+                EntityType.of("state"), Optional.of("Counter"),
+                List.of(new RuntimeValue.Field("value", RuntimeValues.integer(1))),
+                List.of());
+        long perFrame = DeterminismCanonicalSize.frame(
+                new FrameId(0), List.of(counter), List.of(), List.of(), List.of());
+        assertEquals(82, perFrame);
+        int byteLimit = Math.toIntExact(perFrame * 2 - 1);
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        long[] value = {0};
+        int[] resets = {0};
+        int[] ticks = {0};
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("determinism-byte-limit"))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .determinismLimits(new DeterminismLimits(
+                        1, 2, 2, 10, 10, byteLimit, Duration.ofSeconds(1).toNanos()))
                 .build();
         runtime.entities().register(EntityId.of("counter"), EntityType.of("state"),
                 () -> "Counter", inspector -> inspector.property("value", () -> value[0]));
         runtime.controls().register(SimulationControllerSpec.builder()
-                .pause(() -> {}).resume(() -> {}).tick(delta -> value[0]++).build());
-        runtime.scenarios().register("seeded",
-                context -> value[0] = context.randomSeed().orElseThrow());
+                .pause(() -> {}).resume(() -> {})
+                .tick(delta -> {
+                    value[0]++;
+                    ticks[0]++;
+                })
+                .build());
+        runtime.scenarios().register("seeded", context -> {
+            resets[0]++;
+            value[0] = context.randomSeed().orElseThrow();
+        });
         runtime.start();
-        DeterminismSpec spec = spec("seeded", 1, 1);
+        DeterminismSpec spec = spec("seeded", 1, 2);
 
-        runtime.determinism().check(spec, "evidence-limit", Duration.ofSeconds(1));
+        runtime.determinism().check(spec, "byte-limit", Duration.ofSeconds(1));
         queue.removeFirst().run();
         DeterminismResult result = runtime.determinism().check(
-                spec, "evidence-limit", Duration.ofSeconds(1)).result().orElseThrow();
+                spec, "byte-limit", Duration.ofSeconds(1)).result().orElseThrow();
 
         assertEquals(DeterminismStatus.INCONCLUSIVE, result.status());
         assertTrue(result.message().contains("encoded determinism evidence limit"));
-        assertTrue(result.bounds().encodedEvidenceBytes() > 128);
+        assertEquals(perFrame, result.bounds().encodedEvidenceBytes());
+        assertTrue(result.bounds().encodedEvidenceBytes() <= byteLimit);
+        assertEquals(2, result.bounds().observedEntities());
+        assertEquals(2, result.bounds().observedFacts());
+        assertEquals(0, result.bounds().completedRepeats());
+        assertEquals(1, resets[0]);
+        assertEquals(1, ticks[0]);
+    }
+
+    @Test
+    void canonicalEvidenceSizeIsExactTypeTaggedEncoding() {
+        EntitySnapshot counter = new EntitySnapshot(EntityId.of("counter"),
+                EntityType.of("state"), Optional.of("Counter"),
+                List.of(new RuntimeValue.Field("value", RuntimeValues.integer(1))),
+                List.of());
+        RuntimeEvent event = new RuntimeEvent(new EventId(1), new FrameId(0),
+                EventType.of("hit"), Optional.of(EntityId.of("counter")),
+                Optional.empty(),
+                List.of(new RuntimeValue.Field("amount", RuntimeValues.integer(2))),
+                List.of());
+        DecisionTrace decision = new DecisionTrace(new DecisionId(1), new FrameId(0),
+                DecisionType.of("attack"), EntityId.of("counter"), List.of(),
+                Optional.empty(), Optional.empty(), FactMetadata.empty(),
+                DecisionTrace.Completion.COMPLETED, List.of());
+        UiFrameCorrelation ui = new UiFrameCorrelation(new ExecutionEpochId(0),
+                new FrameId(0), "ui-session", Optional.of("frame-1"), Optional.empty());
+        long size = DeterminismCanonicalSize.frame(new FrameId(0), List.of(counter),
+                List.of(event), List.of(decision), List.of(ui));
+        assertEquals(186, size);
     }
 
     @Test

@@ -13,6 +13,7 @@ strict closed input schemas (`additionalProperties: false`), and a maximum reque
 | `runtime_frames` | `sessionId` | `fromFrame`, `toFrame`, `limit` |
 | `runtime_snapshot` | `sessionId` | `frameId`, `entityId`, `entityIdPrefix`, `entityType`, `entityTypePrefix`, `limit` |
 | `runtime_entity` | `sessionId`, `entityId` | `fromFrame`, `toFrame`, `limit` |
+| `runtime_entity_history` | `sessionId`, `entityId` | `fromFrame`, `toFrame`, `versionOffset`, `versionLimit` |
 | `runtime_changes` | `sessionId` | range, `entityId`, `entityType`, `property`, `limit` |
 | `runtime_events` | `sessionId` | range, `eventType`, `eventTypePrefix`, `subject`, `source`, `limit` |
 | `runtime_decisions` | `sessionId` | range, `decisionType`, `actor`, `chosenCandidate`, `reasonCode`, `limit` |
@@ -73,6 +74,13 @@ Start and stop use that dispatcher and protocol 1.12; retrieval returns immutabl
 simulation control, and a scenario with a deterministic reset handler are available. It uses
 protocol 1.13.
 
+\*\*\*\*\*\*\*\*\*\* `runtime_entity_history` uses protocol 2.0 and is always available in the
+server-start catalog. It pages retained versions with its own `versionOffset`/`versionLimit`
+cursor, reports the newest-frame `current` presence (empty once the entity is removed), the
+bounded final pre-removal `finalRetainedState`, partial-eviction evidence, and retained-frame
+bounds. Once every retained frame holding the entity is evicted it returns the typed
+`ENTITY_HISTORY_NOT_RETAINED` error instead of fabricating state.
+
 Every identifier is a nonblank string of at most 256 UTF-16 code units. Frame fields are
 non-negative integers. Prefix matching is available only where the schema has an explicit prefix
 boolean; there are no regular expressions or generic expressions.
@@ -82,7 +90,9 @@ boolean; there are no regular expressions or generic expressions.
 Protocol 1.0 retains the exact original capabilities result. Set `protocolMinor` from `1` to `13`
 on `runtime_capabilities` to request extension metadata. The baseline read-only MCP tools continue
 to use 1.0. Command status and cancellation use protocol 1.2; epoch queries use protocol 1.3;
-scenario catalog and reset use protocol 1.4.
+scenario catalog and reset use protocol 1.4. Protocol 2.0 (the additive major bump carried by
+`runtime_entity_history`) enables every V1.13 command and reports the full capability matrix while
+protocols 1.0-1.13 keep their exact frozen wire shapes and negotiation.
 Attributed fact queries use protocol 1.5. Their `sourceSubsystem` is separate from the event `source`
 entity ID. A `sourceLocation` in output is an unverified, bounded application-provided label;
 correlation indicates association, not inferred causality.

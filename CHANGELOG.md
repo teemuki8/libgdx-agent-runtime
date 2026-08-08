@@ -4,6 +4,24 @@ All notable changes follow Keep a Changelog structure.
 
 ## [Unreleased]
 
+### Added
+
+- Removed entities remain queryable while retained history exists: the additive
+  `AgentRuntime.entityHistory(EntityId, FrameRange, long versionOffset, int versionLimit)` returns
+  an immutable `EntityHistoryPage` with newest-frame `current`, the bounded final pre-removal
+  `finalRetainedState` snapshot (never synthesized), independent version cursors
+  (`nextVersionOffset`/`hasMoreVersions`), partial-eviction and retained-frame-bound metadata, and
+  a distinct `ENTITY_HISTORY_NOT_RETAINED` failure once every retained frame holding the entity is
+  evicted. `EntitySnapshot`/`PropertyChange` shapes and the existing two-argument
+  `entityHistory(EntityId, FrameRange)` remain frozen (#48).
+- Protocol `2.0` (`ProtocolVersion.V2`, now `CURRENT`): an explicit `capability(version, command)`
+  predicate enables every existing V1.13 command plus the additive `runtime_entity_history`
+  command and `ENTITY_HISTORY_NOT_RETAINED` failure regardless of the zero minor, while
+  protocols 1.0-1.13 keep their exact frozen shapes, error codes, and negotiation. Protocol 2.0
+  responses also carry the structured `ApplicationFailureEvidence` from callback-bearing
+  command, checkpoint, input, and determinism results; protocol 1.x projects only the
+  642-bounded legacy envelope and never sanitized or raw detail (#48).
+
 ### Changed
 
 - Documentation: state that stdio MCP hosting is exclusive (one stdio server per process) and

@@ -45,13 +45,19 @@ public final class ProtocolJson {
     /** Maximum remotely requested result items. */
     public static final int MAX_RESULT_ITEMS = 1_000;
     private static final int MAX_IDENTIFIER_LENGTH = 256;
-    private static final ObjectMapper MAPPER = createMapper();
+    private static final ObjectMapper MAPPER = createMapper(false);
+    private static final ObjectMapper STRUCTURED_MAPPER = createMapper(true);
 
     private ProtocolJson() {}
 
-    /** Returns an isolated copy of the canonical mapper. */
+    /** Returns an isolated copy of the canonical protocol 1.x mapper. */
     public static ObjectMapper mapper() {
         return MAPPER.copy();
+    }
+
+    /** Returns the mapper matching one response version: structured diagnostics under 2.0. */
+    public static ObjectMapper mapper(ProtocolVersion version) {
+        return version.isV2() ? STRUCTURED_MAPPER.copy() : MAPPER.copy();
     }
 
     /** Decodes a byte-bounded strict request. */
@@ -71,12 +77,14 @@ public final class ProtocolJson {
 
     /** Encodes a locally constructed request with the same byte bound. */
     public static byte[] encode(RuntimeRequest request) {
-        return encodeBounded(request, MAX_REQUEST_BYTES, "request");
+        return encodeBounded(request, MAX_REQUEST_BYTES, "request", MAPPER);
     }
 
     /** Encodes a response and enforces the response byte bound. */
     public static byte[] encode(RuntimeResponse response) {
-        return encodeBounded(response, MAX_RESPONSE_BYTES, "response");
+        Objects.requireNonNull(response, "response");
+        return encodeBounded(response, MAX_RESPONSE_BYTES, "response",
+                mapper(response.version()));
     }
 
     /** Decodes a response for clients and contract tests. */
@@ -116,10 +124,11 @@ public final class ProtocolJson {
         return value;
     }
 
-    private static byte[] encodeBounded(Object value, int maximum, String kind) {
+    private static byte[] encodeBounded(
+            Object value, int maximum, String kind, ObjectMapper mapper) {
         Objects.requireNonNull(value, "value");
         try {
-            byte[] encoded = MAPPER.writeValueAsBytes(value);
+            byte[] encoded = mapper.writeValueAsBytes(value);
             if (encoded.length > maximum) {
                 throw new ProtocolJsonException(
                         ProtocolErrorCode.LIMIT_EXCEEDED, kind + " exceeds byte limit", null);
@@ -131,7 +140,7 @@ public final class ProtocolJson {
         }
     }
 
-    private static ObjectMapper createMapper() {
+    private static ObjectMapper createMapper(boolean structuredDiagnostics) {
         JsonFactory factory = JsonFactory.builder().streamReadConstraints(
                 StreamReadConstraints.builder()
                         .maxNestingDepth(MAX_NESTING_DEPTH)
@@ -148,16 +157,27 @@ public final class ProtocolJson {
                 .addModule(new Jdk8Module())
                 .addModule(new JavaTimeModule())
                 .build();
+        mapper.addMixIn(ApplicationFailureEvidence.class, ApplicationFailureEvidenceMixin.class);
         mapper.addMixIn(RuntimeValue.class, RuntimeValueMixin.class);
         mapper.addMixIn(RuntimeAssertion.class, RuntimeAssertionMixin.class);
         mapper.addMixIn(RecordingEntry.class, RecordingEntryMixin.class);
-        mapper.addMixIn(CaptureDiagnostic.class, CaptureDiagnosticMixin.class);
+        mapper.addMixIn(CaptureDiagnostic.class, structuredDiagnostics
+                ? CaptureDiagnosticStructuredMixin.class : CaptureDiagnosticMixin.class);
         mapper.addMixIn(CommandStatus.class, CommandStatusMixin.class);
         mapper.addMixIn(CheckpointOperation.class, CheckpointOperationMixin.class);
         mapper.addMixIn(InputInjection.class, InputInjectionMixin.class);
         mapper.addMixIn(DeterminismResult.class, DeterminismResultMixin.class);
         return mapper;
     }
+
+    /**
+     * Omits absent structured-evidence components from the protocol 2.0 wire so an empty
+     * {@code sanitizedDetail} never appears as a null field; protocol 1.x never serializes this
+     * record directly.
+     */
+    @com.fasterxml.jackson.annotation.JsonInclude(
+            com.fasterxml.jackson.annotation.JsonInclude.Include.NON_ABSENT)
+    private interface ApplicationFailureEvidenceMixin {}
 
     @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "valueType")
     @JsonSubTypes({
@@ -216,6 +236,14 @@ public final class ProtocolJson {
     @JsonSerialize(using = CaptureDiagnosticLegacySerializer.class)
     @JsonDeserialize(using = CaptureDiagnosticLegacyDeserializer.class)
     private interface CaptureDiagnosticMixin {}
+
+    /**
+     * Projects capture diagnostics to the closed protocol 2.0 wire shape with the full structured
+     * failure evidence; both wire shapes decode back into safe structured evidence.
+     */
+    @JsonSerialize(using = CaptureDiagnosticStructuredSerializer.class)
+    @JsonDeserialize(using = CaptureDiagnosticLegacyDeserializer.class)
+    private interface CaptureDiagnosticStructuredMixin {}
 
     /** Keeps the structured application failure out of the protocol 1.x command wire shape. */
     private interface CommandStatusMixin {

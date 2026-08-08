@@ -3,11 +3,13 @@ package io.github.teemuki8.libgdx.agent.runtime.protocol;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
+import io.github.teemuki8.libgdx.agent.runtime.core.ApplicationFailureEvidence;
 import io.github.teemuki8.libgdx.agent.runtime.core.DecisionTrace;
 import io.github.teemuki8.libgdx.agent.runtime.core.CommandLookup;
 import io.github.teemuki8.libgdx.agent.runtime.core.CheckpointDescriptor;
 import io.github.teemuki8.libgdx.agent.runtime.core.CheckpointOperation;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityHistory;
+import io.github.teemuki8.libgdx.agent.runtime.core.EntityHistoryPage;
 import io.github.teemuki8.libgdx.agent.runtime.core.EpochFramePage;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntitySnapshot;
 import io.github.teemuki8.libgdx.agent.runtime.core.FrameSnapshot;
@@ -99,7 +101,8 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         @JsonSubTypes.Type(value = Result.RecordingOperationResult.class,
                 name = "recordingOperation"),
         @JsonSubTypes.Type(value = Result.RecordingChunkResult.class, name = "recordingChunk"),
-        @JsonSubTypes.Type(value = Result.Determinism.class, name = "determinism")
+        @JsonSubTypes.Type(value = Result.Determinism.class, name = "determinism"),
+        @JsonSubTypes.Type(value = Result.EntityHistory.class, name = "entityHistory")
     })
     sealed interface Result permits Result.Sessions, Result.Capabilities, Result.Frames,
             Result.Snapshot, Result.Entity, Result.Changes, Result.Events, Result.Decisions,
@@ -107,7 +110,7 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
             Result.Scenarios, Result.Reset, Result.Actions, Result.Action, Result.Assertion,
             Result.Control, Result.Inputs, Result.Input, Result.Checkpoints, Result.Checkpoint,
             Result.UiBindings, Result.UiFrames, Result.RecordingOperationResult,
-            Result.RecordingChunkResult, Result.Determinism {
+            Result.RecordingChunkResult, Result.Determinism, Result.EntityHistory {
         /** Published session catalog. */
         record Sessions(List<SessionInfo> sessions) implements Result {
             /** Copies sessions. */
@@ -160,7 +163,16 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         record Snapshot(FrameSnapshot snapshot, boolean filtered, boolean hasMore) implements Result {}
 
         /** Latest and historical entity evidence. */
-        record Entity(EntitySnapshot latest, EntityHistory history) implements Result {}
+        record Entity(EntitySnapshot latest,
+                io.github.teemuki8.libgdx.agent.runtime.core.EntityHistory history)
+                implements Result {}
+
+        /** Paginated retained history page for one entity, including removed entities. */
+        record EntityHistory(EntityHistoryPage page) implements Result {
+            public EntityHistory {
+                Objects.requireNonNull(page, "page");
+            }
+        }
 
         /** Bounded change results. */
         record Changes(QueryPage<PropertyChange> page) implements Result {}
@@ -172,9 +184,18 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         record Decisions(QueryPage<DecisionTrace> page) implements Result {}
 
         /** Retained, expired, or unknown application command status. */
-        record CommandStatus(CommandLookup command) implements Result {
+        record CommandStatus(CommandLookup command,
+                @JsonInclude(JsonInclude.Include.NON_ABSENT)
+                Optional<ApplicationFailureEvidence> applicationFailure) implements Result {
+            /** Creates a protocol-1.x command status without structured evidence. */
+            public CommandStatus(CommandLookup command) {
+                this(command, Optional.empty());
+            }
+
             public CommandStatus {
                 Objects.requireNonNull(command, "command");
+                applicationFailure = Objects.requireNonNull(
+                        applicationFailure, "applicationFailure");
             }
         }
 
@@ -205,9 +226,18 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         }
 
         /** Correlated reset status and optional completed baseline evidence. */
-        record Reset(ScenarioReset reset) implements Result {
+        record Reset(ScenarioReset reset,
+                @JsonInclude(JsonInclude.Include.NON_ABSENT)
+                Optional<ApplicationFailureEvidence> applicationFailure) implements Result {
+            /** Creates a protocol-1.x reset result without structured evidence. */
+            public Reset(ScenarioReset reset) {
+                this(reset, Optional.empty());
+            }
+
             public Reset {
                 Objects.requireNonNull(reset, "reset");
+                applicationFailure = Objects.requireNonNull(
+                        applicationFailure, "applicationFailure");
             }
         }
 
@@ -222,9 +252,18 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         }
 
         /** Correlated semantic-action outcome and frame evidence. */
-        record Action(ActionInvocation invocation) implements Result {
+        record Action(ActionInvocation invocation,
+                @JsonInclude(JsonInclude.Include.NON_ABSENT)
+                Optional<ApplicationFailureEvidence> applicationFailure) implements Result {
+            /** Creates a protocol-1.x action result without structured evidence. */
+            public Action(ActionInvocation invocation) {
+                this(invocation, Optional.empty());
+            }
+
             public Action {
                 Objects.requireNonNull(invocation, "invocation");
+                applicationFailure = Objects.requireNonNull(
+                        applicationFailure, "applicationFailure");
             }
         }
 
@@ -237,10 +276,20 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
 
         /** Discoverable control state and optional correlated mutation outcome. */
         record Control(SimulationControlDescriptor descriptor,
-                Optional<ControlOperation> operation) implements Result {
+                Optional<ControlOperation> operation,
+                @JsonInclude(JsonInclude.Include.NON_ABSENT)
+                Optional<ApplicationFailureEvidence> applicationFailure) implements Result {
+            /** Creates a protocol-1.x control result without structured evidence. */
+            public Control(SimulationControlDescriptor descriptor,
+                    Optional<ControlOperation> operation) {
+                this(descriptor, operation, Optional.empty());
+            }
+
             public Control {
                 Objects.requireNonNull(descriptor, "descriptor");
                 operation = Objects.requireNonNull(operation, "operation");
+                applicationFailure = Objects.requireNonNull(
+                        applicationFailure, "applicationFailure");
             }
         }
 
@@ -255,9 +304,18 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         }
 
         /** Correlated controlled-tick input scheduling and execution evidence. */
-        record Input(InputInjection injection) implements Result {
+        record Input(InputInjection injection,
+                @JsonInclude(JsonInclude.Include.NON_ABSENT)
+                Optional<ApplicationFailureEvidence> applicationFailure) implements Result {
+            /** Creates a protocol-1.x input result without structured evidence. */
+            public Input(InputInjection injection) {
+                this(injection, Optional.empty());
+            }
+
             public Input {
                 Objects.requireNonNull(injection, "injection");
+                applicationFailure = Objects.requireNonNull(
+                        applicationFailure, "applicationFailure");
             }
         }
 
@@ -272,9 +330,18 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         }
 
         /** Correlated checkpoint mutation and optional baseline evidence. */
-        record Checkpoint(CheckpointOperation operation) implements Result {
+        record Checkpoint(CheckpointOperation operation,
+                @JsonInclude(JsonInclude.Include.NON_ABSENT)
+                Optional<ApplicationFailureEvidence> applicationFailure) implements Result {
+            /** Creates a protocol-1.x checkpoint result without structured evidence. */
+            public Checkpoint(CheckpointOperation operation) {
+                this(operation, Optional.empty());
+            }
+
             public Checkpoint {
                 Objects.requireNonNull(operation, "operation");
+                applicationFailure = Objects.requireNonNull(
+                        applicationFailure, "applicationFailure");
             }
         }
 
@@ -293,9 +360,18 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         }
 
         /** Recording lifecycle command evidence. */
-        record RecordingOperationResult(RecordingOperation operation) implements Result {
+        record RecordingOperationResult(RecordingOperation operation,
+                @JsonInclude(JsonInclude.Include.NON_ABSENT)
+                Optional<ApplicationFailureEvidence> applicationFailure) implements Result {
+            /** Creates a protocol-1.x recording result without structured evidence. */
+            public RecordingOperationResult(RecordingOperation operation) {
+                this(operation, Optional.empty());
+            }
+
             public RecordingOperationResult {
                 Objects.requireNonNull(operation, "operation");
+                applicationFailure = Objects.requireNonNull(
+                        applicationFailure, "applicationFailure");
             }
         }
 
@@ -307,9 +383,18 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         }
 
         /** Bounded repeated-scenario determinism operation evidence. */
-        record Determinism(DeterminismOperation operation) implements Result {
+        record Determinism(DeterminismOperation operation,
+                @JsonInclude(JsonInclude.Include.NON_ABSENT)
+                Optional<ApplicationFailureEvidence> applicationFailure) implements Result {
+            /** Creates a protocol-1.x determinism result without structured evidence. */
+            public Determinism(DeterminismOperation operation) {
+                this(operation, Optional.empty());
+            }
+
             public Determinism {
                 Objects.requireNonNull(operation, "operation");
+                applicationFailure = Objects.requireNonNull(
+                        applicationFailure, "applicationFailure");
             }
         }
     }

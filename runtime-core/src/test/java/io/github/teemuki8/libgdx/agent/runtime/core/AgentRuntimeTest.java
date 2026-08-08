@@ -483,6 +483,189 @@ final class AgentRuntimeTest {
     }
 
     @Test
+    void entityHistoryPagePagesRemovedEntityWithIndependentVersionCursor() {
+        AgentRuntime runtime = runtime(RuntimeLimits.developmentDefaults());
+        boolean[] include = {true};
+        long[] health = {100};
+        runtime.entities().registerSource("enemies", () -> include[0]
+                ? Stream.of(InspectableEntity.of(EntityId.of("enemy-1"), EntityType.of("enemy"),
+                        () -> "Enemy", inspector -> inspector.property("health", () -> health[0])))
+                : Stream.empty());
+        runtime.start();
+        for (int frame = 1; frame <= 5; frame++) {
+            int value = frame;
+            runtime.frame(1, () -> health[0] = 100 - value * 5);
+        }
+        include[0] = false;
+        runtime.frame(1, () -> {});
+        assertTrue(runtime.latestFrame().orElseThrow().changes().stream()
+                .anyMatch(change -> change.entityId().equals(EntityId.of("enemy-1"))
+                        && change.kind() == ChangeKind.ENTITY_REMOVED));
+
+        EntityId id = EntityId.of("enemy-1");
+        FrameRange range = FrameRange.of(1, 7);
+        EntityHistoryPage first = runtime.entityHistory(id, range, 0, 2);
+        assertTrue(first.current().isEmpty());
+        EntitySnapshot finalState = first.finalRetainedState().orElseThrow();
+        assertEquals(75L, ((RuntimeValue.IntegerValue) finalState.property("health")
+                .orElseThrow()).value());
+        assertEquals(runtime.frame(new FrameId(5)).orElseThrow().entity(id).orElseThrow(),
+                finalState);
+        assertEquals(List.of(1L, 2L), first.versions().stream()
+                .map(version -> version.frameId().value()).toList());
+        assertEquals(2, first.nextVersionOffset());
+        assertTrue(first.hasMoreVersions());
+        assertFalse(first.requestedRangePartiallyEvicted());
+        assertEquals(Optional.of(new FrameId(0)), first.oldestRetainedFrame());
+        assertEquals(Optional.of(new FrameId(6)), first.newestRetainedFrame());
+
+        EntityHistoryPage second = runtime.entityHistory(id, range, 2, 2);
+        assertEquals(List.of(3L, 4L), second.versions().stream()
+                .map(version -> version.frameId().value()).toList());
+        assertEquals(4, second.nextVersionOffset());
+        assertTrue(second.hasMoreVersions());
+
+        EntityHistoryPage third = runtime.entityHistory(id, range, 4, 2);
+        assertEquals(List.of(5L), third.versions().stream()
+                .map(version -> version.frameId().value()).toList());
+        assertEquals(5, third.nextVersionOffset());
+        assertFalse(third.hasMoreVersions());
+        assertEquals(third.finalRetainedState().orElseThrow(),
+                third.versions().getFirst().snapshot());
+
+        // Version pagination is independent from change pagination: one wide page sees all
+        // retained versions without any change-limit trimming.
+        EntityHistoryPage wide = runtime.entityHistory(id, range, 0, 100);
+        assertEquals(5, wide.versions().size());
+        assertEquals(5, wide.nextVersionOffset());
+        assertFalse(wide.hasMoreVersions());
+        assertEquals(2, runtime.changes(new ChangeQuery(range, Optional.of(id),
+                Optional.empty(), Optional.empty(), 2)).items().size());
+    }
+
+    @Test
+    void entityHistoryPageReportsFullyEvictedHistoryAsNotRetained() {
+        RuntimeLimits limits = new RuntimeLimits(1, 2_000, 5_000, 128, 256, 256, 64,
+                4_096, 256, 16, 1_000);
+        AgentRuntime runtime = runtime(limits);
+        boolean[] include = {true};
+        runtime.entities().registerSource("enemies", () -> include[0]
+                ? Stream.of(entity("enemy-1", 1))
+                : Stream.empty());
+        runtime.start();
+        runtime.frame(1, () -> {});
+        runtime.frame(1, () -> {});
+        include[0] = false;
+        runtime.frame(1, () -> {});
+        AgentRuntimeException failure = assertThrows(AgentRuntimeException.class,
+                () -> runtime.entityHistory(EntityId.of("enemy-1"), FrameRange.of(1, 3), 0, 10));
+        assertEquals(RuntimeErrorCode.ENTITY_HISTORY_NOT_RETAINED, failure.code());
+    }
+
+    @Test
+    void entityHistoryPageRejectsInvalidOffsetAndLimit() {
+        AgentRuntime runtime = runtime(RuntimeLimits.developmentDefaults());
+        runtime.start();
+        runtime.frame(1, () -> {});
+        EntityId id = EntityId.of("enemy-1");
+        FrameRange range = FrameRange.of(1, 1);
+        assertEquals(RuntimeErrorCode.INVALID_QUERY, assertThrows(AgentRuntimeException.class,
+                () -> runtime.entityHistory(id, range, -1, 10)).code());
+        assertEquals(RuntimeErrorCode.LIMIT_EXCEEDED, assertThrows(AgentRuntimeException.class,
+                () -> runtime.entityHistory(id, range, 0, 0)).code());
+        assertEquals(RuntimeErrorCode.LIMIT_EXCEEDED, assertThrows(AgentRuntimeException.class,
+                () -> runtime.entityHistory(id, range, 0, 1_001)).code());
+        assertThrows(NullPointerException.class,
+                () -> runtime.entityHistory(null, range, 0, 10));
+        assertThrows(NullPointerException.class,
+                () -> runtime.entityHistory(id, null, 0, 10));
+    }
+
+    @Test
+    void entityHistoryPageReportsPartialEvictionWithFinalStateStillRetained() {
+        RuntimeLimits limits = new RuntimeLimits(3, 2_000, 5_000, 128, 256, 256, 64,
+                4_096, 256, 16, 1_000);
+        AgentRuntime runtime = runtime(limits);
+        boolean[] include = {true};
+        long[] health = {100};
+        runtime.entities().registerSource("enemies", () -> include[0]
+                ? Stream.of(InspectableEntity.of(EntityId.of("enemy-1"), EntityType.of("enemy"),
+                        () -> "Enemy", inspector -> inspector.property("health", () -> health[0])))
+                : Stream.empty());
+        runtime.start();
+        for (int frame = 1; frame <= 5; frame++) {
+            int value = frame;
+            runtime.frame(1, () -> health[0] = 100 - value * 5);
+        }
+        include[0] = false;
+        runtime.frame(1, () -> {});
+        // retainedFrames=3 keeps frames 4..6; frame 5 holds the final pre-removal snapshot.
+        EntityId id = EntityId.of("enemy-1");
+        EntityHistoryPage page = runtime.entityHistory(id, FrameRange.of(1, 6), 0, 100);
+        assertTrue(page.requestedRangePartiallyEvicted());
+        assertEquals(Optional.of(new FrameId(4)), page.oldestRetainedFrame());
+        assertEquals(Optional.of(new FrameId(6)), page.newestRetainedFrame());
+        assertEquals(List.of(4L, 5L), page.versions().stream()
+                .map(version -> version.frameId().value()).toList());
+        assertEquals(runtime.frame(new FrameId(5)).orElseThrow().entity(id).orElseThrow(),
+                page.finalRetainedState().orElseThrow());
+        assertTrue(page.current().isEmpty());
+        assertFalse(page.hasMoreVersions());
+    }
+
+    @Test
+    void entityHistoryPageIsQueryableFromAnyThreadWithoutCaptureOwnership() throws Exception {
+        AgentRuntime runtime = runtime(RuntimeLimits.developmentDefaults());
+        runtime.entities().registerSource("enemies", () -> Stream.of(entity("enemy-1", 1)));
+        runtime.start();
+        runtime.frame(1, () -> {});
+        runtime.frame(1, () -> {});
+        EntityId id = EntityId.of("enemy-1");
+        FutureTask<EntityHistoryPage> query = new FutureTask<>(
+                () -> runtime.entityHistory(id, FrameRange.of(0, 2), 0, 10));
+        new Thread(query, "entity-history-query").start();
+        EntityHistoryPage page = query.get(5, TimeUnit.SECONDS);
+        assertEquals(3, page.versions().size());
+        assertEquals(Optional.of(new FrameId(0)), page.oldestRetainedFrame());
+    }
+
+    @Test
+    void entityHistoryPageValidatesInvariantsAndDefensiveCopies() {
+        EntityId id = EntityId.of("enemy-1");
+        EntitySnapshot snapshot = new EntitySnapshot(id, EntityType.of("enemy"),
+                Optional.empty(), List.of(), List.of());
+        assertThrows(NullPointerException.class, () -> new EntityHistoryPage(null,
+                Optional.empty(), Optional.empty(), List.of(), 0, false, false,
+                Optional.empty(), Optional.empty()));
+        assertThrows(IllegalArgumentException.class, () -> new EntityHistoryPage(id,
+                Optional.empty(), Optional.empty(), List.of(), -1, false, false,
+                Optional.empty(), Optional.empty()));
+        assertThrows(IllegalArgumentException.class, () -> new EntityHistoryPage(id,
+                Optional.empty(), Optional.empty(), List.of(), 0, true, false,
+                Optional.empty(), Optional.empty()));
+        assertThrows(IllegalArgumentException.class, () -> new EntityHistoryPage(id,
+                Optional.of(snapshot), Optional.empty(), List.of(), 0, false, false,
+                Optional.empty(), Optional.empty()));
+        assertThrows(IllegalArgumentException.class, () -> new EntityHistoryPage(id,
+                Optional.empty(), Optional.empty(),
+                List.of(new EntityHistory.Version(new FrameId(1),
+                        new EntitySnapshot(EntityId.of("other"), EntityType.of("enemy"),
+                                Optional.empty(), List.of(), List.of()))),
+                1, false, false, Optional.empty(), Optional.empty()));
+
+        List<EntityHistory.Version> source = new ArrayList<>(List.of(
+                new EntityHistory.Version(new FrameId(1), snapshot)));
+        EntityHistoryPage page = new EntityHistoryPage(id, Optional.empty(),
+                Optional.of(snapshot), source, 1, false, false,
+                Optional.of(new FrameId(1)), Optional.of(new FrameId(1)));
+        source.clear();
+        assertEquals(1, page.versions().size());
+        assertEquals(snapshot, page.finalRetainedState().orElseThrow());
+        assertEquals(Optional.of(new FrameId(1)), page.oldestRetainedFrame());
+        assertEquals(Optional.of(new FrameId(1)), page.newestRetainedFrame());
+    }
+
+    @Test
     void recordsDecisionFilteringAbortionAndExplicitCause() {
         MutableEnemy enemy = new MutableEnemy("enemy", 100, 0, 0);
         AgentRuntime runtime = runtime(RuntimeLimits.developmentDefaults());

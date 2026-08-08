@@ -12,6 +12,7 @@ import io.github.teemuki8.libgdx.agent.runtime.core.CommandState;
 import io.github.teemuki8.libgdx.agent.runtime.core.CommandDispatchLimits;
 import io.github.teemuki8.libgdx.agent.runtime.core.BaselineKind;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
+import io.github.teemuki8.libgdx.agent.runtime.core.FrameId;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeAssertion;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import io.github.teemuki8.libgdx.agent.runtime.mcp.RuntimeToolHandler;
@@ -39,6 +40,7 @@ import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -467,6 +469,132 @@ final class FixtureProtocolAndMcpTest {
             assertTrue(mcp.structuredContent().toString().contains("PASS"));
         }
         fixture.runtime.close();
+    }
+
+    @Test
+    void fixtureRemovedEntityHistoryIsQueryableUnderProtocolTwo() {
+        Fixture fixture = fixture();
+        try (PublishedRuntime publication = fixture.registry.publish(fixture.runtime)) {
+            assertEquals(fixture.runtime.sessionId(), publication.sessionId());
+            RuntimeProtocolService service = new RuntimeProtocolService(fixture.registry);
+            RuntimeResponse.Result.EntityHistory page = assertInstanceOf(
+                    RuntimeResponse.Result.EntityHistory.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V2, "fixture-history",
+                                    DeterministicSimulation.SESSION_ID.value(),
+                                    new RuntimeCommand.EntityHistory(
+                                            "enemy-2", 1, 45, 0, 10)))).result());
+            assertTrue(page.page().current().isEmpty());
+            assertEquals(RuntimeValues.enumValue("DEAD"), page.page().finalRetainedState()
+                    .orElseThrow().property("state").orElseThrow());
+            assertEquals(10, page.page().versions().size());
+            assertEquals(10, page.page().nextVersionOffset());
+            assertTrue(page.page().hasMoreVersions());
+            assertFalse(page.page().requestedRangePartiallyEvicted());
+
+            RuntimeResponse.Result.EntityHistory second = assertInstanceOf(
+                    RuntimeResponse.Result.EntityHistory.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V2, "fixture-history-2",
+                                    DeterministicSimulation.SESSION_ID.value(),
+                                    new RuntimeCommand.EntityHistory(
+                                            "enemy-2", 1, 45, 10, 100)))).result());
+            assertEquals(29, second.page().versions().size());
+            assertFalse(second.page().hasMoreVersions());
+            assertEquals(39, second.page().versions().getLast().frameId().value());
+            assertEquals(Optional.of(new FrameId(0)), second.page().oldestRetainedFrame());
+        }
+        fixture.runtime.close();
+    }
+
+    @Test
+    void fixtureRemovedEntityHistoryIsQueryableThroughMcp() {
+        Fixture fixture = fixture();
+        try (PublishedRuntime publication = fixture.registry.publish(fixture.runtime);
+                RuntimeToolHandler handler =
+                        new RuntimeToolHandler(new RuntimeProtocolService(fixture.registry))) {
+            assertEquals(fixture.runtime.sessionId(), publication.sessionId());
+            McpSchema.CallToolResult first = handler.handle(call(
+                    "runtime_entity_history", Map.of(
+                            "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                            "entityId", "enemy-2", "fromFrame", 1, "toFrame", 45,
+                            "versionOffset", 0, "versionLimit", 8)))
+                    .block(Duration.ofSeconds(5));
+            assertNotNull(first);
+            assertFalse(first.isError());
+            Map<?, ?> content = assertInstanceOf(Map.class, first.structuredContent());
+            Map<?, ?> page = assertInstanceOf(Map.class, content.get("page"));
+            assertEquals(8, ((List<?>) page.get("versions")).size());
+            assertEquals(8L, ((Number) page.get("nextVersionOffset")).longValue());
+            assertEquals(true, page.get("hasMoreVersions"));
+            assertTrue(page.containsKey("finalRetainedState"));
+        }
+        fixture.runtime.close();
+    }
+
+    @Test
+    void fixtureMcpCarriesStructuredFailureEvidenceForCommandAndControlFamilies() {
+        ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(DeterministicSimulation.SESSION_ID)
+                .clock(() -> 1)
+                .commandDispatcher(applicationQueue::addLast)
+                .build();
+        runtime.controls().register(
+                io.github.teemuki8.libgdx.agent.runtime.core.SimulationControllerSpec.builder()
+                        .pause(() -> {
+                            throw new IllegalStateException(
+                                    "token=secret-123 /home/private/save.dat");
+                        })
+                        .resume(() -> {})
+                        .tick(deltaNanos -> {})
+                        .build());
+        runtime.start();
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime);
+                RuntimeToolHandler handler =
+                        new RuntimeToolHandler(new RuntimeProtocolService(registry))) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            runtime.commands().orElseThrow().submit(
+                    "fixture-fail", 1_000, () -> {
+                        throw new IllegalStateException(
+                                "token=secret-123 /home/private/save.dat");
+                    });
+            applicationQueue.removeFirst().run();
+            McpSchema.CallToolResult status = handler.handle(call(
+                    "runtime_command_status", Map.of(
+                            "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                            "commandRequestId", "fixture-fail")))
+                    .block(Duration.ofSeconds(5));
+            assertNotNull(status);
+            assertFalse(status.isError());
+            Map<?, ?> statusContent = assertInstanceOf(Map.class, status.structuredContent());
+            Map<?, ?> statusEvidence = assertInstanceOf(Map.class,
+                    statusContent.get("applicationFailure"));
+            assertEquals("command.failed", statusEvidence.get("category"));
+            assertEquals("java.lang.IllegalStateException",
+                    statusEvidence.get("exceptionClass"));
+            assertFalse(statusContent.toString().contains("token=secret-123"));
+            assertFalse(statusContent.containsKey("sanitizedDetail"));
+
+            Map<String, Object> pause = Map.of(
+                    "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                    "action", "PAUSE", "controlRequestId", "fixture-pause",
+                    "timeoutNanos", 1_000_000_000);
+            assertFalse(handler.handle(call("runtime_control", pause))
+                    .block(Duration.ofSeconds(5)).isError());
+            applicationQueue.removeFirst().run();
+            McpSchema.CallToolResult control = handler.handle(call("runtime_control", pause))
+                    .block(Duration.ofSeconds(5));
+            assertNotNull(control);
+            assertFalse(control.isError());
+            Map<?, ?> controlContent = assertInstanceOf(Map.class, control.structuredContent());
+            Map<?, ?> controlEvidence = assertInstanceOf(Map.class,
+                    controlContent.get("applicationFailure"));
+            assertEquals("command.failed", controlEvidence.get("category"));
+            assertFalse(controlContent.toString().contains("token=secret-123"));
+        }
+        runtime.close();
     }
 
     private static McpSchema.CallToolRequest call(

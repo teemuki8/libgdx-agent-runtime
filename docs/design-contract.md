@@ -32,7 +32,11 @@ This document makes lifecycle and evidence edge cases explicit.
 15. After close, completed retained history and `CLOSED` status remain; live providers are released.
 16. Protocol `1.0` remains frozen, protocol `1.1` adds extension-aware capability metadata, and
     protocol `1.2` adds application-command status and pre-dispatch cancellation. Any other exact
-    version returns `PROTOCOL_VERSION_UNSUPPORTED` before command execution.
+    version returns `PROTOCOL_VERSION_UNSUPPORTED` before command execution. Protocol `2.0` is an
+    additive major bump: an explicit `capability(version, command)` predicate enables every
+    V1.13 command under 2.0 despite its zero minor, plus the `runtime_entity_history` command and
+    structured `ApplicationFailureEvidence` in callback-bearing failure results; protocols
+    1.0-1.13 keep their exact frozen shapes, error codes, and negotiation path.
 17. Capture truncations contain dimension/observed/retained/limit. Query pages separately contain
     `hasMore` and retention-range metadata.
 18. Only explicit `RuntimeValue` providers cross the boundary. No reflection, object traversal,
@@ -118,6 +122,14 @@ Disabled runtimes retain no providers or frames and perform no serialization.
     the sentinel-based observed count as dimension/observed/retained/limit. Static-before-dynamic
     precedence, entity-ID ordering, and duplicate diagnostics apply only within the bounded
     observation set (statics plus the bounded source prefix).
+32b. Removed entities remain queryable while any retained frame still holds their immutable
+    snapshot. The additive `EntityHistoryPage` reports newest-frame `current` presence (empty once
+    removed), the bounded final pre-removal `finalRetainedState` sourced from retained frame
+    snapshots (never synthesized from the removal change), versions paged by their own
+    overflow-safe positional cursor (`nextVersionOffset`/`hasMoreVersions`) independent from change
+    pagination, partial-eviction evidence matching `QueryPage`, and retained-frame bounds. Once
+    every retained frame holding the entity is evicted, history queries fail with the distinct
+    `ENTITY_HISTORY_NOT_RETAINED` category instead of inventing state.
 33. Events, decisions, and explicit change causes are bounded while the frame is still open.
     `emit` retains at most `RuntimeLimits.retainedEvents` facts, `beginDecision` at most
     `RuntimeLimits.decisionsPerFrame`, and `causeNextChange` at most

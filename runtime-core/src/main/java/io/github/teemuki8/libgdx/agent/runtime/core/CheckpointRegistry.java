@@ -10,11 +10,12 @@ import java.util.Optional;
 public final class CheckpointRegistry {
     private final AgentRuntime runtime;
     private final CheckpointLimits limits;
-    private final LinkedHashMap<String, Retained> checkpoints = new LinkedHashMap<>();
-    private final LinkedHashMap<String, CheckpointDescriptor> catalog = new LinkedHashMap<>();
+    private LinkedHashMap<String, Retained> checkpoints = new LinkedHashMap<>();
+    private LinkedHashMap<String, CheckpointDescriptor> catalog = new LinkedHashMap<>();
     private final LinkedHashMap<String, Request> requests = new LinkedHashMap<>();
     private final LinkedHashMap<String, Evidence> operations = new LinkedHashMap<>();
     private CheckpointProvider provider;
+    private Throwable stagingFailure;
 
     CheckpointRegistry(AgentRuntime runtime, CheckpointLimits limits) {
         this.runtime = runtime;
@@ -135,29 +136,70 @@ public final class CheckpointRegistry {
     }
 
     private void executeCreate(String requestId, Evidence evidence, CheckpointProvider callbacks) {
+        boolean installed = false;
+        CheckpointHandle handle = null;
+        Retained evicted = null;
         try {
             runtime.requireCheckpointMutation();
-            synchronized (this) {
-                if (checkpoints.size() >= limits.retainedCheckpoints()) {
-                    String oldest = checkpoints.keySet().iterator().next();
-                    Retained evicted = checkpoints.remove(oldest);
-                    catalog.remove(oldest);
-                    callbacks.dispose(evicted.handle());
-                }
-            }
             FrameSnapshot source = runtime.latestFrame().orElseThrow(() ->
                     new IllegalStateException("checkpoint creation requires a completed frame"));
-            CheckpointHandle handle = Objects.requireNonNull(callbacks.create(),
+            handle = Objects.requireNonNull(callbacks.create(),
                     "checkpoint provider returned a null handle");
             CheckpointDescriptor descriptor = new CheckpointDescriptor(
                     evidence.request.checkpointId(), source.executionEpochId(), source.frameId(),
                     evidence.request.description(), runtime.wallTime(), requestId);
             synchronized (this) {
-                checkpoints.put(descriptor.id(), new Retained(descriptor, handle));
-                catalog.put(descriptor.id(), descriptor);
+                if (checkpoints.containsKey(descriptor.id())) {
+                    throw new IllegalStateException(
+                            "checkpoint id was created concurrently");
+                }
+                // The eviction decision is made here from the CURRENT maps: a synchronous
+                // reentrant nested create during callbacks.create() may already have replaced
+                // the oldest entry, so a candidate captured before the callback would be stale.
+                // Stage complete replacement snapshots (handles and descriptor catalog) before
+                // touching live state, so a staging fault cannot leave the maps partially
+                // published.
+                LinkedHashMap<String, Retained> stagedCheckpoints =
+                        new LinkedHashMap<>(checkpoints);
+                LinkedHashMap<String, CheckpointDescriptor> stagedCatalog =
+                        new LinkedHashMap<>(catalog);
+                if (stagedCheckpoints.size() >= limits.retainedCheckpoints()) {
+                    String oldest = stagedCheckpoints.keySet().iterator().next();
+                    evicted = stagedCheckpoints.get(oldest);
+                    stagedCheckpoints.remove(oldest);
+                    stagedCatalog.remove(oldest);
+                }
+                stagedCheckpoints.put(descriptor.id(), new Retained(descriptor, handle));
+                stagedCatalog.put(descriptor.id(), descriptor);
+                // Only inert work remains before publication: throw the one-shot injected
+                // failure unchanged, then assign both staged references.
+                throwStagingFailure();
+                // Publish both maps with non-throwing reference assignments; the staged
+                // LinkedHashMaps preserve creation order and retention bounds.
+                checkpoints = stagedCheckpoints;
+                catalog = stagedCatalog;
                 evidence.descriptor = descriptor;
+                installed = true;
+            }
+            handle = null;
+            if (evicted != null) {
+                try {
+                    callbacks.dispose(evicted.handle());
+                } catch (RuntimeException | Error cleanupFailure) {
+                    // The replacement is already installed; a failure to release the evicted
+                    // handle must not fail the committed create or roll back the install.
+                }
             }
         } catch (RuntimeException | Error failure) {
+            if (!installed && handle != null) {
+                try {
+                    callbacks.dispose(handle);
+                } catch (RuntimeException | Error cleanupFailure) {
+                    if (cleanupFailure != failure) {
+                        failure.addSuppressed(cleanupFailure);
+                    }
+                }
+            }
             ApplicationFailureEvidence failureEvidence = describeFailure(
                     requestId, "checkpoint.create", failure);
             synchronized (this) {
@@ -232,12 +274,43 @@ public final class CheckpointRegistry {
         checkpoints.clear();
         requests.clear();
         operations.clear();
+        stagingFailure = null;
         provider = null;
         if (firstFailure instanceof RuntimeException failure) {
             throw failure;
         }
         if (firstFailure instanceof Error failure) {
             throw failure;
+        }
+    }
+
+    /**
+     * Package-private fault-injection seam for failure-atomicity tests: the exact failure is
+     * thrown, unmodified, after the replacement snapshots are staged and before they are
+     * published. The failure is inert — no user code ever runs at publication.
+     */
+    synchronized void injectStagingFault(Error fault) {
+        stagingFailure = Objects.requireNonNull(fault, "fault");
+    }
+
+    /** Package-private fault-injection seam for failure-atomicity tests; see the Error overload. */
+    synchronized void injectStagingFault(RuntimeException fault) {
+        stagingFailure = Objects.requireNonNull(fault, "fault");
+    }
+
+    /** Package-private close observation: whether a staging failure is currently injected. */
+    synchronized boolean hasStagingFailure() {
+        return stagingFailure != null;
+    }
+
+    private void throwStagingFailure() {
+        Throwable failure = stagingFailure;
+        stagingFailure = null;
+        if (failure instanceof RuntimeException runtimeFailure) {
+            throw runtimeFailure;
+        }
+        if (failure != null) {
+            throw (Error) failure;
         }
     }
 

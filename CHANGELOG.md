@@ -73,6 +73,13 @@ All notable changes follow Keep a Changelog structure.
   when an earlier hook fails, later failures are attached as suppressed, `CLOSED` is always
   published, and the first failure is rethrown. Closing is atomic with in-flight submissions, new
   submissions reject with `RUNTIME_CLOSED`, and repeated `close()` is a no-op (#41).
+- Checkpoint replacement is now failure atomic: the new handle is created before the oldest
+  retained checkpoint is evicted, the retained entry is installed and the chosen old entry removed
+  in one synchronized block, and only the evicted handle is disposed afterward. A failed
+  replacement keeps every prior descriptor/handle listed and restorable with no disposal, an
+  installation failure disposes only the newly created handle while preserving the original
+  registry and suppressing its cleanup failure in favor of the primary command failure, and a
+  post-install eviction disposal failure never fails the committed create (#46).
 
 ### Compatibility notes (2.0)
 

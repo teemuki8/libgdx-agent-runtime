@@ -268,6 +268,37 @@ final class AgentRuntimeTest {
     }
 
     @Test
+    void maxLengthSessionStillInvokesConfiguredSanitizer() {
+        String sessionId = "s".repeat(256);
+        java.util.concurrent.atomic.AtomicBoolean invoked =
+                new java.util.concurrent.atomic.AtomicBoolean();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of(sessionId))
+                .configuration(RuntimeConfiguration.developmentDefaults())
+                .clock(new AtomicLong()::incrementAndGet)
+                .wallClock(Clock.fixed(Instant.parse("2026-07-29T00:00:00Z"), ZoneOffset.UTC))
+                .applicationFailureSanitizer((context, failure) -> {
+                    invoked.set(true);
+                    assertTrue(context.correlationId()
+                            .startsWith(sessionId + "|failure-1"));
+                    return Optional.of("safe-detail");
+                })
+                .build();
+        runtime.entities().register(EntityId.of("bad"), EntityType.of("enemy"),
+                () -> "Bad", inspector -> inspector.property("health",
+                        (java.util.function.Supplier<RuntimeValue>) () -> {
+                    throw new IllegalStateException("token=secret-123");
+                }));
+        runtime.start();
+
+        ApplicationFailureEvidence failure = runtime.latestFrame().orElseThrow().stats()
+                .diagnostics().getFirst().failure();
+        assertTrue(invoked.get(), "sanitizer must run for a valid max-length session");
+        assertEquals(Optional.of("safe-detail"), failure.sanitizedDetail());
+        assertEquals(sessionId + "|failure-1", failure.correlationId());
+    }
+
+    @Test
     void distinctSessionsProduceDistinctCorrelationIds() {
         AgentRuntime first = runtime(RuntimeLimits.developmentDefaults());
         AgentRuntime second = runtime(RuntimeLimits.developmentDefaults());

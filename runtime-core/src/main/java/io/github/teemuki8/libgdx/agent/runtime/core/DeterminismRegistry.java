@@ -67,7 +67,8 @@ public final class DeterminismRegistry {
         long executionNanos = Math.min(timeoutNanos, limits.maximumExecutionNanos());
         long deadline = deadline(executionNanos);
         CommandLookup lookup = dispatch.submit(requestId, timeout, () ->
-                retained.result = Optional.of(execute(spec, deadline, executionNanos)));
+                retained.result = Optional.of(
+                        execute(spec, deadline, executionNanos, requestId)));
         return snapshot(requestId, retained, lookup);
     }
 
@@ -77,7 +78,7 @@ public final class DeterminismRegistry {
     }
 
     private DeterminismResult execute(
-            DeterminismSpec spec, long deadline, long executionNanos) {
+            DeterminismSpec spec, long deadline, long executionNanos, String requestId) {
         ArrayList<RunEvidence> runs = new ArrayList<>();
         Counters counters = new Counters();
         boolean previouslyPaused;
@@ -85,7 +86,7 @@ public final class DeterminismRegistry {
             previouslyPaused = runtime.controls().pauseForDeterminism();
         } catch (RuntimeException | Error failure) {
             return inconclusive(spec, counters, executionNanos,
-                    failureEvidence("determinism.pause", failure));
+                    failureEvidence(requestId, "determinism.pause", failure));
         }
         long uiEvictions = runtime.uiCorrelations().evictedFrameCount();
         try {
@@ -123,7 +124,7 @@ public final class DeterminismRegistry {
             return compare(spec, runs, counters, executionNanos);
         } catch (RuntimeException | Error failure) {
             return inconclusive(spec, counters, executionNanos,
-                    failureEvidence("determinism.execute", failure));
+                    failureEvidence(requestId, "determinism.execute", failure));
         } finally {
             runtime.controls().restorePauseAfterDeterminism(previouslyPaused);
         }
@@ -318,8 +319,13 @@ public final class DeterminismRegistry {
                 Optional.empty(), bounds(spec, counters, executionNanos), applicationFailure);
     }
 
-    private ApplicationFailureEvidence failureEvidence(String category, Throwable failure) {
-        return runtime.diagnostics().describe(category, failure);
+    private ApplicationFailureEvidence failureEvidence(
+            String requestId, String category, Throwable failure) {
+        Optional<String> correlationId =
+                runtime.commands().orElseThrow().correlationId(requestId);
+        return correlationId.isPresent()
+                ? runtime.diagnostics().describe(category, failure, correlationId.orElseThrow())
+                : runtime.diagnostics().describe(category, failure);
     }
 
     private DeterminismBounds bounds(

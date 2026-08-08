@@ -118,6 +118,18 @@ public final class CommandDispatch {
         return lookupWithoutExpiry(requestId, now());
     }
 
+    /**
+     * Returns the admission-reserved failure correlation for one retained request, if any.
+     *
+     * <p>Feature registries use this to reuse the command's correlation for the same thrown
+     * callback failure instead of allocating a second identifier.
+     */
+    synchronized Optional<String> correlationId(String requestId) {
+        Entry entry = retained.get(requestId);
+        return entry == null ? Optional.empty()
+                : Optional.ofNullable(entry.dispatchCorrelationId);
+    }
+
     /** Cancels only a command that has not begun application-thread execution. */
     public synchronized CommandCancellation cancel(String requestId) {
         IdentifierSupport.validate(requestId, "requestId");
@@ -178,7 +190,8 @@ public final class CommandDispatch {
                 finish(entry, CommandState.SUCCEEDED, now(), true, null);
             }
         } catch (Throwable failure) {
-            ApplicationFailureEvidence evidence = diagnostics.describe("command.failed", failure);
+            ApplicationFailureEvidence evidence = diagnostics.describe(
+                    "command.failed", failure, entry.dispatchCorrelationId);
             synchronized (this) {
                 finish(entry, CommandState.FAILED, now(), true,
                         evidence.legacyEnvelope(), Optional.of(evidence));

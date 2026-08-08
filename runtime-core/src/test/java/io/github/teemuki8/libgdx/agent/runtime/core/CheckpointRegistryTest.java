@@ -156,6 +156,9 @@ final class CheckpointRegistryTest {
         assertFalse(diagnostic.contains("token=secret-123"));
         assertFalse(diagnostic.contains("/home/private/save.dat"));
         assertTrue(failure.sanitizedDetail().isEmpty());
+        assertEquals(failure.correlationId(), failed.command().status().orElseThrow()
+                .applicationFailure().orElseThrow().correlationId(),
+                "feature failure must reuse the admitted command correlation");
     }
 
     @Test

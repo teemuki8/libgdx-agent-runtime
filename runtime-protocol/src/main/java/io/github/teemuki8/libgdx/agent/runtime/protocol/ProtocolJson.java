@@ -11,6 +11,7 @@ import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.json.JsonMapper;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -209,9 +210,11 @@ public final class ProtocolJson {
 
     /**
      * Projects capture diagnostics to the legacy protocol 1.x wire shape; the structured failure
-     * evidence is never serialized directly.
+     * evidence is never serialized directly and legacy wire messages decode back into safe
+     * structured evidence.
      */
     @JsonSerialize(using = CaptureDiagnosticLegacySerializer.class)
+    @JsonDeserialize(using = CaptureDiagnosticLegacyDeserializer.class)
     private interface CaptureDiagnosticMixin {}
 
     /** Keeps the structured application failure out of the protocol 1.x command wire shape. */

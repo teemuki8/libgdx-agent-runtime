@@ -132,10 +132,36 @@ final class CommandDispatchTest {
         ApplicationFailureEvidence failure = failed.applicationFailure().orElseThrow();
         assertEquals("command.failed", failure.category());
         String diagnostic = failed.diagnostic().orElseThrow();
-        assertEquals("game|failure-2|command.failed|java.lang.IllegalStateException", diagnostic);
+        assertEquals("game|failure-1|command.failed|java.lang.IllegalStateException", diagnostic);
         assertFalse(diagnostic.contains("token=secret-123"));
         assertFalse(diagnostic.contains("/home/private/save.dat"));
         assertTrue(failure.sanitizedDetail().isEmpty());
+    }
+
+    @Test
+    void commandRunFailuresCorrelateInAcceptanceOrder() {
+        ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
+        CommandDispatch commands = runtime(applicationQueue, new AtomicLong(1),
+                CommandDispatchLimits.developmentDefaults()).commands().orElseThrow();
+        commands.submit("one", 100, () -> {
+            throw new IllegalStateException("first failure");
+        });
+        commands.submit("two", 100, () -> {
+            throw new IllegalStateException("second failure");
+        });
+        commands.submit("three", 100, () -> {
+            throw new IllegalStateException("third failure");
+        });
+        applicationQueue.removeFirst().run();
+        applicationQueue.removeFirst().run();
+        applicationQueue.removeFirst().run();
+
+        assertEquals("game|failure-1|command.failed|java.lang.IllegalStateException",
+                commands.status("one").status().orElseThrow().diagnostic().orElseThrow());
+        assertEquals("game|failure-2|command.failed|java.lang.IllegalStateException",
+                commands.status("two").status().orElseThrow().diagnostic().orElseThrow());
+        assertEquals("game|failure-3|command.failed|java.lang.IllegalStateException",
+                commands.status("three").status().orElseThrow().diagnostic().orElseThrow());
     }
 
     @Test
@@ -160,7 +186,7 @@ final class CommandDispatchTest {
         assertEquals(Optional.of("safe-detail"),
                 failed.applicationFailure().orElseThrow().sanitizedDetail());
         String diagnostic = failed.diagnostic().orElseThrow();
-        assertTrue(diagnostic.contains("command-sanitized|failure-2|command.failed"));
+        assertTrue(diagnostic.contains("command-sanitized|failure-1|command.failed"));
         assertFalse(diagnostic.contains("safe-detail"));
         assertFalse(diagnostic.contains("token=secret-123"));
     }

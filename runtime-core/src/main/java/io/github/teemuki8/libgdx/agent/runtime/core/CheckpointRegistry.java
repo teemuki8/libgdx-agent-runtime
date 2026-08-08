@@ -127,7 +127,7 @@ public final class CheckpointRegistry {
         if (evidence.request.kind() == CheckpointOperation.Kind.CREATE) {
             executeCreate(requestId, evidence, callbacks);
         } else {
-            executeRestore(evidence, callbacks);
+            executeRestore(requestId, evidence, callbacks);
         }
     }
 
@@ -153,8 +153,8 @@ public final class CheckpointRegistry {
                 evidence.descriptor = descriptor;
             }
         } catch (RuntimeException | Error failure) {
-            ApplicationFailureEvidence failureEvidence =
-                    runtime.diagnostics().describe("checkpoint.create", failure);
+            ApplicationFailureEvidence failureEvidence = describeFailure(
+                    requestId, "checkpoint.create", failure);
             synchronized (this) {
                 evidence.diagnostic = failureEvidence.legacyEnvelope();
                 evidence.applicationFailure = Optional.of(failureEvidence);
@@ -163,7 +163,8 @@ public final class CheckpointRegistry {
         }
     }
 
-    private void executeRestore(Evidence evidence, CheckpointProvider callbacks) {
+    private void executeRestore(
+            String requestId, Evidence evidence, CheckpointProvider callbacks) {
         Retained retained;
         synchronized (this) {
             retained = checkpoints.get(evidence.request.checkpointId());
@@ -183,8 +184,8 @@ public final class CheckpointRegistry {
                 evidence.partial = false;
             }
         } catch (RuntimeException | Error failure) {
-            ApplicationFailureEvidence failureEvidence =
-                    runtime.diagnostics().describe("checkpoint.restore", failure);
+            ApplicationFailureEvidence failureEvidence = describeFailure(
+                    requestId, "checkpoint.restore", failure);
             synchronized (this) {
                 evidence.diagnostic = failureEvidence.legacyEnvelope();
                 evidence.applicationFailure = Optional.of(failureEvidence);
@@ -259,6 +260,15 @@ public final class CheckpointRegistry {
             case REJECTED, SUCCEEDED, FAILED, TIMED_OUT, CANCELLED -> true;
             case QUEUED, EXECUTING -> false;
         };
+    }
+
+    private ApplicationFailureEvidence describeFailure(
+            String requestId, String category, Throwable failure) {
+        Optional<String> correlationId =
+                runtime.commands().orElseThrow().correlationId(requestId);
+        return correlationId.isPresent()
+                ? runtime.diagnostics().describe(category, failure, correlationId.orElseThrow())
+                : runtime.diagnostics().describe(category, failure);
     }
 
     private static void requireValidTimeout(Duration timeout, long maximumNanos) {

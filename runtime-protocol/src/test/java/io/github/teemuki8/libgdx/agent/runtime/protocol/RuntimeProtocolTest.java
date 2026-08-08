@@ -1004,7 +1004,45 @@ final class RuntimeProtocolTest {
                     + "|java.lang.IllegalStateException",
                     diagnostic.get("message").asText());
             assertFalse(diagnostic.has("failure"));
+
+            RuntimeResponse.Success success = assertInstanceOf(RuntimeResponse.Success.class,
+                    ProtocolJson.decodeResponse(encoded));
+            RuntimeResponse.Result.Snapshot snapshot = assertInstanceOf(
+                    RuntimeResponse.Result.Snapshot.class, success.result());
+            io.github.teemuki8.libgdx.agent.runtime.core.ApplicationFailureEvidence failure =
+                    snapshot.snapshot().stats().diagnostics().getFirst().failure();
+            assertEquals("provider.property", failure.category());
+            assertEquals("java.lang.IllegalStateException", failure.exceptionClass());
+            assertEquals("legacy-diag|failure-1", failure.correlationId());
+            assertEquals("legacy-diag|failure-1|provider.property"
+                    + "|java.lang.IllegalStateException", failure.legacyEnvelope());
+            assertTrue(failure.sanitizedDetail().isEmpty());
         }
+    }
+
+    @Test
+    void legacyProtocolDecodesHistoricRawDiagnosticWithoutRetainingSecrets() throws Exception {
+        String historic = """
+                {"provider":"enemies","entityId":{"value":"bad"},"property":"health",
+                 "exceptionClass":"java.lang.IllegalStateException",
+                 "message":"token=secret-123 /home/private/save.dat"}""";
+        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic decoded =
+                ProtocolJson.mapper().readValue(historic,
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class);
+        io.github.teemuki8.libgdx.agent.runtime.core.ApplicationFailureEvidence failure =
+                decoded.failure();
+        assertEquals("legacy.capture", failure.category());
+        assertEquals("java.lang.IllegalStateException", failure.exceptionClass());
+        assertTrue(failure.sanitizedDetail().isEmpty());
+        assertFalse(failure.correlationId().contains("token=secret-123"));
+        assertFalse(failure.correlationId().contains("/home/private/save.dat"));
+        assertFalse(failure.legacyEnvelope().contains("token=secret-123"));
+        assertFalse(failure.legacyEnvelope().contains("/home/private/save.dat"));
+        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic again =
+                ProtocolJson.mapper().readValue(historic,
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class);
+        assertEquals(failure.correlationId(), again.failure().correlationId(),
+                "legacy synthesis must be deterministic");
     }
 
     @Test
@@ -1034,7 +1072,7 @@ final class RuntimeProtocolTest {
             assertFalse(json.contains("applicationFailure"));
             com.fasterxml.jackson.databind.JsonNode status = ProtocolJson.mapper()
                     .readTree(encoded).path("result").path("command").path("status");
-            assertEquals("legacy-command|failure-2|command.failed"
+            assertEquals("legacy-command|failure-1|command.failed"
                     + "|java.lang.IllegalStateException",
                     status.get("diagnostic").asText());
         }

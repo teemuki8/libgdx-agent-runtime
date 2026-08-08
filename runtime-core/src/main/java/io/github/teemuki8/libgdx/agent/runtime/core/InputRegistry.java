@@ -328,8 +328,11 @@ public final class InputRegistry {
     }
 
     private void recordFailure(Evidence evidence, String category, Throwable failure) {
-        ApplicationFailureEvidence failureEvidence =
-                runtime.diagnostics().describe(category, failure);
+        Optional<String> correlationId = runtime.commands().orElseThrow()
+                .correlationId(evidence.requestId);
+        ApplicationFailureEvidence failureEvidence = correlationId.isPresent()
+                ? runtime.diagnostics().describe(category, failure, correlationId.orElseThrow())
+                : runtime.diagnostics().describe(category, failure);
         evidence.diagnostic = Optional.of(failureEvidence.legacyEnvelope());
         evidence.applicationFailure = Optional.of(failureEvidence);
     }

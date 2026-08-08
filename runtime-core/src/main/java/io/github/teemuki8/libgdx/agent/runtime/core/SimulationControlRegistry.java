@@ -5,6 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.BooleanSupplier;
 
 /** Optional bounded coordinator for application-owned simulation control. */
 public final class SimulationControlRegistry {
@@ -12,7 +13,9 @@ public final class SimulationControlRegistry {
     private final ControlLimits limits;
     private final LinkedHashMap<String, Evidence> operations = new LinkedHashMap<>();
     private SimulationControllerSpec controller;
-    private LinkedHashMap<String, SimulationControllerSpec.Condition> conditions =
+    private LinkedHashMap<String, ControlConditionDescriptor> conditions =
+            new LinkedHashMap<>();
+    private LinkedHashMap<String, BooleanSupplier> conditionPredicates =
             new LinkedHashMap<>();
     private boolean paused;
     private long currentTick;
@@ -33,14 +36,19 @@ public final class SimulationControlRegistry {
             throw new AgentRuntimeException(
                     RuntimeErrorCode.LIMIT_EXCEEDED, "condition registration limit reached");
         }
-        LinkedHashMap<String, SimulationControllerSpec.Condition> index = new LinkedHashMap<>();
+        LinkedHashMap<String, ControlConditionDescriptor> index = new LinkedHashMap<>();
+        LinkedHashMap<String, BooleanSupplier> predicates = new LinkedHashMap<>();
         for (SimulationControllerSpec.Condition condition : spec.conditions()) {
-            if (index.putIfAbsent(condition.id(), condition) != null) {
+            if (index.putIfAbsent(condition.id(),
+                    new ControlConditionDescriptor(
+                            condition.id(), condition.description())) != null) {
                 throw new IllegalArgumentException("condition id is already registered");
             }
+            predicates.put(condition.id(), condition.predicate());
         }
         controller = spec;
         conditions = index;
+        conditionPredicates = predicates;
     }
 
     /** Reports whether application code registered a controller. */
@@ -55,13 +63,30 @@ public final class SimulationControlRegistry {
 
     /** Returns registered semantic conditions in stable registration order. */
     public synchronized List<ControlConditionDescriptor> conditions() {
-        return conditions.values().stream().map(condition ->
-                new ControlConditionDescriptor(condition.id(), condition.description())).toList();
+        return List.copyOf(conditions.values());
     }
 
     /** Returns configured hard control bounds. */
     public ControlLimits limits() {
         return limits;
+    }
+
+    /** Package-private close observation: number of retained application control callbacks. */
+    synchronized int retainedControlCallbacks() {
+        return (controller == null ? 0 : 1) + conditionPredicates.size();
+    }
+
+    /** Package-private close observation: number of retained pending control operations. */
+    synchronized int retainedControlOperations() {
+        return operations.size();
+    }
+
+    /** Releases application control callbacks and pending operations, keeping condition metadata. */
+    synchronized void close() {
+        controller = null;
+        conditionPredicates.clear();
+        operations.clear();
+        paused = false;
     }
 
     /** Returns the number of successfully completed application-defined controlled ticks. */
@@ -77,6 +102,7 @@ public final class SimulationControlRegistry {
 
     /** Submits or polls one idempotently correlated pause or resume operation. */
     public ControlOperation control(boolean pause, String requestId, Duration timeout) {
+        runtime.requireSubmissionsOpen();
         SimulationControllerSpec spec = requireController();
         CommandDispatch dispatch = requireDispatch();
         requireTimeout(timeout, dispatch.limits().maximumTimeoutNanos());
@@ -143,6 +169,7 @@ public final class SimulationControlRegistry {
 
     private ControlOperation tickOperation(
             String requestId, Signature signature, Duration timeout) {
+        runtime.requireSubmissionsOpen();
         SimulationControllerSpec spec = requireController();
         CommandDispatch dispatch = requireDispatch();
         requireTimeout(timeout, dispatch.limits().maximumTimeoutNanos());
@@ -268,11 +295,11 @@ public final class SimulationControlRegistry {
 
     private boolean satisfied(Evidence evidence, Signature signature) {
         if (signature.conditionId.isPresent()) {
-            SimulationControllerSpec.Condition condition;
+            BooleanSupplier predicate;
             synchronized (this) {
-                condition = conditions.get(signature.conditionId.orElseThrow());
+                predicate = conditionPredicates.get(signature.conditionId.orElseThrow());
             }
-            if (condition.predicate().getAsBoolean()) {
+            if (predicate != null && predicate.getAsBoolean()) {
                 synchronized (this) {
                     evidence.stopReason = ControlStopReason.CONDITION_SATISFIED;
                 }
@@ -298,6 +325,7 @@ public final class SimulationControlRegistry {
     }
 
     private synchronized Evidence evidence(String requestId, Signature signature) {
+        runtime.requireSubmissionsOpen();
         IdentifierSupport.validate(requestId, "control request id");
         Evidence existing = operations.get(requestId);
         if (existing != null) {

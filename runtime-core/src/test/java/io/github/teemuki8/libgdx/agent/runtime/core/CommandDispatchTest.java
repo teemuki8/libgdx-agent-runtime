@@ -332,6 +332,32 @@ final class CommandDispatchTest {
         assertEquals(0, executions.get());
     }
 
+    @Test
+    void closeRejectsQueuedCommandsReleasesClosuresAndStaysIdempotent() {
+        ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
+        AtomicInteger executions = new AtomicInteger();
+        AgentRuntime runtime = runtime(applicationQueue, new AtomicLong(1),
+                CommandDispatchLimits.developmentDefaults());
+        CommandDispatch commands = runtime.commands().orElseThrow();
+        commands.submit("reset-1", Duration.ofSeconds(1), executions::incrementAndGet);
+        commands.submit("reset-2", Duration.ofSeconds(1), executions::incrementAndGet);
+        assertEquals(2, commands.retainedLiveCommands());
+
+        commands.close();
+        commands.close();
+
+        assertEquals(CommandState.REJECTED,
+                commands.status("reset-1").status().orElseThrow().state());
+        assertEquals(CommandState.REJECTED,
+                commands.status("reset-2").status().orElseThrow().state());
+        applicationQueue.forEach(Runnable::run);
+        assertEquals(0, executions.get());
+        assertEquals(0, commands.retainedLiveCommands());
+        assertEquals(CommandState.REJECTED,
+                commands.submit("reset-3", Duration.ofSeconds(1),
+                        executions::incrementAndGet).status().orElseThrow().state());
+    }
+
     private static AgentRuntime runtime(ArrayDeque<Runnable> applicationQueue,
             AtomicLong clock, CommandDispatchLimits limits) {
         return AgentRuntime.builder()

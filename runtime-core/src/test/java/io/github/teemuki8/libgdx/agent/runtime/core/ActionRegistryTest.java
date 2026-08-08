@@ -14,6 +14,39 @@ import org.junit.jupiter.api.Test;
 
 final class ActionRegistryTest {
     @Test
+    void closeReleasesHandlersAndPendingInvocationsButRetainsTheCatalog() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        AtomicInteger executions = new AtomicInteger();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("action-close"))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .build();
+        runtime.actions().register(ActionSpec.builder("attack")
+                .description("Attacks one target")
+                .handler(ignored -> executions.incrementAndGet())
+                .build());
+        runtime.start();
+        RuntimeValue.ObjectValue parameters = RuntimeValues.object();
+        runtime.actions().invoke("attack", "request-1", parameters,
+                Optional.of("attack-1"), Duration.ofSeconds(1));
+        assertEquals(1, runtime.actions().retainedPendingInvocations());
+
+        runtime.close();
+
+        assertEquals(List.of("attack"),
+                runtime.actions().list().stream().map(ActionDescriptor::id).toList());
+        assertEquals(0, runtime.actions().retainedActionHandlers());
+        assertEquals(0, runtime.actions().retainedPendingInvocations());
+        queue.forEach(Runnable::run);
+        assertEquals(0, executions.get());
+        AgentRuntimeException closed = assertThrows(AgentRuntimeException.class,
+                () -> runtime.actions().invoke("attack", "request-2", parameters,
+                        Optional.of("attack-2"), Duration.ofSeconds(1)));
+        assertEquals(RuntimeErrorCode.RUNTIME_CLOSED, closed.code());
+    }
+
+    @Test
     void validatesDispatchesOnceAndReportsFrameEvidence() {
         ArrayDeque<Runnable> queue = new ArrayDeque<>();
         AtomicInteger executions = new AtomicInteger();

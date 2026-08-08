@@ -4,17 +4,27 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.IntStream;
@@ -695,6 +705,601 @@ final class AgentRuntimeTest {
                 FrameRange.of(0, 1), Optional.of("wave."), true,
                 Optional.empty(), Optional.empty(), 10)).items().size() == 2);
     }
+
+    @Test
+    void closeReleasesCallbacksAndPendingWorkWhileRetainingCatalogsAndEvidence() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        AtomicInteger resets = new AtomicInteger();
+        AtomicInteger actionRuns = new AtomicInteger();
+        AtomicInteger inputRuns = new AtomicInteger();
+        AtomicInteger tickRuns = new AtomicInteger();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("close-release"))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .build();
+        runtime.scenarios().register("reset", "Restores state", context -> resets.incrementAndGet());
+        runtime.actions().register(ActionSpec.builder("attack")
+                .description("Attacks one target")
+                .handler(ignored -> actionRuns.incrementAndGet()).build());
+        runtime.inputs().register(InputSpec.builder("key")
+                .description("Pressed key")
+                .requiredString("key")
+                .handler(ignored -> inputRuns.incrementAndGet()).build());
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {}).resume(() -> {}).tick(delta -> tickRuns.incrementAndGet())
+                .condition("ready", "Ready state", () -> false).build());
+        runtime.start();
+        runtime.frame(1, () -> {});
+
+        runtime.controls().control(true, "pause-1", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        RuntimeValue.ObjectValue parameters = RuntimeValues.object(
+                RuntimeValues.field("key", RuntimeValues.string("X")));
+        runtime.inputs().inject("key", "input-1", parameters, OptionalLong.empty(),
+                Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        assertEquals(1, runtime.inputs().retainedPendingInjections());
+        runtime.scenarios().reset("reset", "reset-1", Duration.ofSeconds(1));
+        runtime.actions().invoke("attack", "action-1", RuntimeValues.object(),
+                Optional.empty(), Duration.ofSeconds(1));
+        assertEquals(1, runtime.controls().retainedControlOperations());
+
+        runtime.close();
+
+        assertEquals(RuntimeStatus.CLOSED, runtime.status());
+        // Immutable catalogs remain queryable after close.
+        assertEquals(List.of("reset"),
+                runtime.scenarios().list().stream().map(ScenarioDescriptor::id).toList());
+        assertTrue(runtime.scenarios().determinismAvailable());
+        assertEquals(List.of("attack"),
+                runtime.actions().list().stream().map(ActionDescriptor::id).toList());
+        assertEquals(List.of("key"),
+                runtime.inputs().list().stream().map(InputDescriptor::id).toList());
+        assertEquals(List.of("ready"),
+                runtime.controls().conditions().stream().map(ControlConditionDescriptor::id).toList());
+        assertFalse(runtime.controls().descriptor().available());
+        // Completed immutable history remains queryable.
+        assertTrue(runtime.latestFrame().isPresent());
+        // Every application callback and pending-work store is empty.
+        assertEquals(0, runtime.scenarios().retainedResetCallbacks());
+        assertEquals(0, runtime.scenarios().retainedPendingResets());
+        assertEquals(0, runtime.actions().retainedActionHandlers());
+        assertEquals(0, runtime.actions().retainedPendingInvocations());
+        assertEquals(0, runtime.inputs().retainedInputHandlers());
+        assertEquals(0, runtime.inputs().retainedPendingInjections());
+        assertEquals(0, runtime.controls().retainedControlCallbacks());
+        assertEquals(0, runtime.controls().retainedControlOperations());
+        // Queued application work cannot execute after close.
+        queue.forEach(Runnable::run);
+        assertEquals(0, resets.get());
+        assertEquals(0, actionRuns.get());
+        assertEquals(0, inputRuns.get());
+        assertEquals(0, tickRuns.get());
+        // Terminal command evidence remains queryable.
+        assertEquals(CommandState.REJECTED, runtime.commands().orElseThrow()
+                .status("reset-1").status().orElseThrow().state());
+        // New submissions reject the closed runtime.
+        assertClosedSubmission(() -> runtime.scenarios().reset(
+                "reset", "reset-2", Duration.ofSeconds(1)));
+        assertClosedSubmission(() -> runtime.actions().invoke("attack", "action-2",
+                RuntimeValues.object(), Optional.empty(), Duration.ofSeconds(1)));
+        assertClosedSubmission(() -> runtime.inputs().inject("key", "input-2", parameters,
+                OptionalLong.empty(), Duration.ofSeconds(1)));
+        assertClosedSubmission(() -> runtime.controls().control(true, "pause-2",
+                Duration.ofSeconds(1)));
+        assertClosedSubmission(() -> runtime.controls().advance(
+                "advance-2", 1, 1, Duration.ofSeconds(1)));
+    }
+
+    @Test
+    void closeAttemptsEveryHookSuppressesLaterFailuresAndStaysIdempotent() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        List<Integer> disposed = new ArrayList<>();
+        AtomicInteger created = new AtomicInteger();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("close-suppression"))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .checkpointLimits(new CheckpointLimits(2, 8, 642))
+                .build();
+        runtime.scenarios().register("reset", "Reset", context -> {});
+        runtime.actions().register(ActionSpec.builder("attack").handler(ignored -> {}).build());
+        runtime.inputs().register(InputSpec.builder("key").handler(ignored -> {}).build());
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {}).resume(() -> {}).tick(delta -> {}).build());
+        runtime.checkpoints().register(new CheckpointProvider() {
+            @Override
+            public CheckpointHandle create() {
+                return new CloseHandle(created.incrementAndGet());
+            }
+
+            @Override
+            public void restore(CheckpointHandle handle) {}
+
+            @Override
+            public void dispose(CheckpointHandle handle) {
+                int value = ((CloseHandle) handle).value();
+                disposed.add(value);
+                if (value == 1) {
+                    throw new IllegalStateException("dispose failed");
+                }
+            }
+        });
+        runtime.start();
+        runtime.checkpoints().create("one", null, "create-one", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        runtime.checkpoints().create("two", null, "create-two", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class, runtime::close);
+        assertEquals("dispose failed", failure.getMessage());
+        assertEquals(List.of(1, 2), disposed,
+                "the second checkpoint must still be disposed after the first failure");
+        assertEquals(RuntimeStatus.CLOSED, runtime.status());
+        assertEquals(0, runtime.scenarios().retainedResetCallbacks());
+        assertEquals(0, runtime.actions().retainedActionHandlers());
+        assertEquals(0, runtime.inputs().retainedInputHandlers());
+        assertEquals(0, runtime.controls().retainedControlCallbacks());
+        assertEquals(0, runtime.checkpoints().retainedCheckpoints());
+        assertEquals(0, runtime.checkpoints().retainedOperations());
+        // A second close is a no-op.
+        runtime.close();
+        assertEquals(RuntimeStatus.CLOSED, runtime.status());
+    }
+
+    @Test
+    void closeAttachesLaterHookFailuresAsSuppressedAndStillPublishesClosed() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        AtomicLong clock = new AtomicLong(1);
+        List<Integer> disposed = new ArrayList<>();
+        AtomicInteger created = new AtomicInteger();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("close-suppressed-chain"))
+                .clock(clock::get)
+                .commandDispatcher(queue::addLast)
+                .checkpointLimits(new CheckpointLimits(2, 8, 642))
+                .build();
+        runtime.checkpoints().register(new CheckpointProvider() {
+            @Override
+            public CheckpointHandle create() {
+                return new CloseHandle(created.incrementAndGet());
+            }
+
+            @Override
+            public void restore(CheckpointHandle handle) {}
+
+            @Override
+            public void dispose(CheckpointHandle handle) {
+                int value = ((CloseHandle) handle).value();
+                disposed.add(value);
+                if (value == 1) {
+                    throw new IllegalStateException("dispose failed");
+                }
+                throw new IllegalStateException("second dispose failed");
+            }
+        });
+        runtime.start();
+        runtime.checkpoints().create("one", null, "create-one", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        runtime.checkpoints().create("two", null, "create-two", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        clock.set(-1);
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class, runtime::close);
+        assertEquals("monotonic clock returned a negative value", failure.getMessage());
+        Throwable[] suppressed = failure.getSuppressed();
+        assertEquals(1, suppressed.length, "the later command hook failure must be suppressed");
+        assertEquals("dispose failed", suppressed[0].getMessage(),
+                "the checkpoint disposal failure must follow the command hook failure");
+        assertEquals(RuntimeStatus.CLOSED, runtime.status());
+        assertEquals(List.of(1, 2), disposed,
+                "both retained handles must be disposed before the failure propagates");
+        assertEquals(0, runtime.checkpoints().retainedCheckpoints());
+        assertEquals(0, runtime.checkpoints().retainedOperations());
+        assertEquals(0, runtime.inputs().retainedInputHandlers());
+        assertEquals(0, runtime.controls().retainedControlCallbacks());
+        // A second close is a no-op.
+        runtime.close();
+        assertEquals(RuntimeStatus.CLOSED, runtime.status());
+    }
+
+    @Test
+    void closeIgnoresIdenticalRepeatedFailuresWithoutSelfSuppression() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        List<Integer> disposed = new ArrayList<>();
+        AtomicInteger created = new AtomicInteger();
+        IllegalStateException shared = new IllegalStateException("shared dispose failure");
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("close-shared-failure"))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .checkpointLimits(new CheckpointLimits(2, 8, 642))
+                .build();
+        runtime.checkpoints().register(new CheckpointProvider() {
+            @Override
+            public CheckpointHandle create() {
+                return new CloseHandle(created.incrementAndGet());
+            }
+
+            @Override
+            public void restore(CheckpointHandle handle) {}
+
+            @Override
+            public void dispose(CheckpointHandle handle) {
+                disposed.add(((CloseHandle) handle).value());
+                throw shared;
+            }
+        });
+        runtime.start();
+        runtime.checkpoints().create("one", null, "create-one", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        runtime.checkpoints().create("two", null, "create-two", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class, runtime::close);
+        assertSame(shared, failure,
+                "the first identical instance must be rethrown unchanged");
+        assertEquals(0, failure.getSuppressed().length,
+                "a throwable must never suppress itself");
+        assertEquals(List.of(1, 2), disposed,
+                "cleanup must continue after the identical repeated failure");
+        assertEquals(RuntimeStatus.CLOSED, runtime.status());
+        assertEquals(0, runtime.checkpoints().retainedCheckpoints());
+        assertEquals(0, runtime.checkpoints().retainedOperations());
+        assertEquals(0, runtime.inputs().retainedInputHandlers());
+        assertEquals(0, runtime.controls().retainedControlCallbacks());
+        // A second close is a no-op.
+        runtime.close();
+        assertEquals(RuntimeStatus.CLOSED, runtime.status());
+    }
+
+    @Test
+    void repeatedCreateRegisterStartCloseRetainsNoCallbacks() {
+        for (int iteration = 0; iteration < 3; iteration++) {
+            ArrayDeque<Runnable> queue = new ArrayDeque<>();
+            AgentRuntime runtime = AgentRuntime.builder()
+                    .sessionId(SessionId.of("loop-" + iteration))
+                    .clock(() -> 1)
+                    .commandDispatcher(queue::addLast)
+                    .build();
+            runtime.scenarios().register("reset", "Reset", context -> {});
+            runtime.actions().register(ActionSpec.builder("attack").handler(ignored -> {}).build());
+            runtime.inputs().register(InputSpec.builder("key").handler(ignored -> {}).build());
+            runtime.controls().register(SimulationControllerSpec.builder()
+                    .pause(() -> {}).resume(() -> {}).tick(delta -> {}).build());
+            runtime.start();
+            runtime.close();
+            assertEquals(0, runtime.scenarios().retainedResetCallbacks());
+            assertEquals(0, runtime.actions().retainedActionHandlers());
+            assertEquals(0, runtime.inputs().retainedInputHandlers());
+            assertEquals(0, runtime.controls().retainedControlCallbacks());
+            assertEquals(0, runtime.commands().orElseThrow().retainedLiveCommands());
+            assertEquals(0, runtime.commands().orElseThrow().retainedPendingDispatches());
+        }
+    }
+
+    @Test
+    void closeSerializesWithInFlightInjectAndRetainsNoEvidence() throws Exception {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        AtomicBoolean armed = new AtomicBoolean();
+        CountDownLatch dispatchEntered = new CountDownLatch(1);
+        CountDownLatch releaseDispatch = new CountDownLatch(1);
+        CountDownLatch releaseSignal = new CountDownLatch(1);
+        AtomicInteger executions = new AtomicInteger();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("input-close-race"))
+                .clock(() -> 1)
+                .commandDispatcher(task -> {
+                    queue.addLast(task);
+                    if (armed.get()) {
+                        dispatchEntered.countDown();
+                        try {
+                            if (!releaseDispatch.await(5, TimeUnit.SECONDS)) {
+                                throw new IllegalStateException("dispatch latch timed out");
+                            }
+                        } catch (InterruptedException failure) {
+                            throw new IllegalStateException(failure);
+                        }
+                    }
+                })
+                .build();
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {}).resume(() -> {}).tick(delta -> {}).build());
+        runtime.inputs().register(InputSpec.builder("keyboard")
+                .requiredString("key")
+                .handler(ignored -> executions.incrementAndGet()).build());
+        runtime.start();
+        runtime.controls().control(true, "pause-1", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+
+        Thread releaser = new Thread(() -> {
+            try {
+                if (!releaseSignal.await(5, TimeUnit.SECONDS)) {
+                    return;
+                }
+            } catch (InterruptedException failure) {
+                throw new IllegalStateException(failure);
+            }
+            releaseDispatch.countDown();
+        }, "inject-releaser");
+        releaser.start();
+        armed.set(true);
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            RuntimeValue.ObjectValue parameters = RuntimeValues.object(
+                    RuntimeValues.field("key", RuntimeValues.string("X")));
+            var inject = executor.submit(() -> runtime.inputs().inject(
+                    "keyboard", "race-input", parameters, OptionalLong.empty(),
+                    Duration.ofSeconds(1)));
+            assertTrue(dispatchEntered.await(5, TimeUnit.SECONDS),
+                    "inject must be in flight holding the submission lock before close");
+            releaseSignal.countDown();
+            runtime.close();
+            inject.get(5, TimeUnit.SECONDS);
+        }
+        releaser.join(5_000);
+
+        assertEquals(RuntimeStatus.CLOSED, runtime.status());
+        assertEquals(0, runtime.inputs().retainedInputHandlers());
+        assertEquals(0, runtime.inputs().retainedPendingInjections());
+        assertEquals(0, executions.get());
+        assertEquals(CommandState.REJECTED, runtime.commands().orElseThrow()
+                .status("race-input").status().orElseThrow().state());
+        queue.forEach(Runnable::run);
+        assertEquals(0, executions.get());
+    }
+
+    @Test
+    @Timeout(15)
+    void closeBarrierRejectsSubmissionTargetingRegistryAndNeverRepopulates() throws Exception {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        AtomicBoolean armed = new AtomicBoolean();
+        CountDownLatch dispatchEntered = new CountDownLatch(1);
+        CountDownLatch releaseDispatch = new CountDownLatch(1);
+        CountDownLatch disposeEntered = new CountDownLatch(1);
+        CountDownLatch releaseDispose = new CountDownLatch(1);
+        AtomicInteger executions = new AtomicInteger();
+        // One absolute body deadline shared by every await, poll sleep, task get, and
+        // dispatcher/checkpoint/releaser wait; each wait consumes only the time remaining
+        // on the deadline, so runtime.close() can never block beyond the body budget.
+        long bodyDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("input-close-barrier"))
+                .clock(() -> 1)
+                .commandDispatcher(task -> {
+                    queue.addLast(task);
+                    if (armed.get()) {
+                        dispatchEntered.countDown();
+                        try {
+                            long remaining = remainingNanos(bodyDeadline);
+                            if (remaining <= 0
+                                    || !releaseDispatch.await(remaining, TimeUnit.NANOSECONDS)) {
+                                throw new IllegalStateException("dispatch latch timed out");
+                            }
+                        } catch (InterruptedException failure) {
+                            Thread.currentThread().interrupt();
+                            throw new IllegalStateException(failure);
+                        }
+                    }
+                })
+                .checkpointLimits(new CheckpointLimits(1, 8, 642))
+                .build();
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {}).resume(() -> {}).tick(delta -> {}).build());
+        runtime.inputs().register(InputSpec.builder("keyboard")
+                .requiredString("key")
+                .handler(ignored -> executions.incrementAndGet()).build());
+        runtime.checkpoints().register(new CheckpointProvider() {
+            @Override
+            public CheckpointHandle create() {
+                return new CloseHandle(1);
+            }
+
+            @Override
+            public void restore(CheckpointHandle handle) {}
+
+            @Override
+            public void dispose(CheckpointHandle handle) {
+                disposeEntered.countDown();
+                try {
+                    long remaining = remainingNanos(bodyDeadline);
+                    if (remaining <= 0
+                            || !releaseDispose.await(remaining, TimeUnit.NANOSECONDS)) {
+                        throw new IllegalStateException("dispose latch timed out");
+                    }
+                } catch (InterruptedException failure) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(failure);
+                }
+            }
+        });
+        runtime.start();
+        runtime.controls().control(true, "pause-1", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        runtime.checkpoints().create("one", null, "create-one", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        armed.set(true);
+        RuntimeValue.ObjectValue parameters = RuntimeValues.object(
+                RuntimeValues.field("key", RuntimeValues.string("X")));
+
+        FutureTask<InputInjection> admittedTask = new FutureTask<>(() -> runtime.inputs().inject(
+                "keyboard", "race-a", parameters, OptionalLong.empty(),
+                Duration.ofSeconds(1)));
+        FutureTask<InputInjection> queuedTask = new FutureTask<>(() -> runtime.inputs().inject(
+                "keyboard", "race-b", parameters, OptionalLong.empty(),
+                Duration.ofSeconds(1)));
+        Thread releaser = null;
+        Thread admittedThread = null;
+        Thread queuedThread = null;
+        Throwable primaryFailure = null;
+        try {
+            releaser = new Thread(() -> {
+                try {
+                    long remaining = remainingNanos(bodyDeadline);
+                    if (remaining <= 0
+                            || !disposeEntered.await(remaining, TimeUnit.NANOSECONDS)) {
+                        return;
+                    }
+                } catch (InterruptedException failure) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                releaseDispatch.countDown();
+                releaseDispose.countDown();
+            }, "input-close-releaser");
+            admittedThread = Thread.ofVirtual().name("race-a").unstarted(admittedTask);
+            queuedThread = Thread.ofVirtual().name("race-b").unstarted(queuedTask);
+            releaser.start();
+            admittedThread.start();
+            assertTrue(awaitLatch(dispatchEntered, bodyDeadline),
+                    "admitted inject must hold the submission lock before close");
+            queuedThread.start();
+            boolean blockedOnSubmissionLock = false;
+            while (remainingNanos(bodyDeadline) > 0) {
+                if (queuedThread.getState() == Thread.State.BLOCKED
+                        && Arrays.stream(queuedThread.getStackTrace()).anyMatch(frame ->
+                                frame.getClassName().equals(InputRegistry.class.getName())
+                                        && frame.getMethodName().equals("inject"))) {
+                    blockedOnSubmissionLock = true;
+                    break;
+                }
+                long sleepNanos = Math.min(remainingNanos(bodyDeadline),
+                        TimeUnit.MILLISECONDS.toNanos(10));
+                if (sleepNanos > 0) {
+                    Thread.sleep(Math.max(1, TimeUnit.NANOSECONDS.toMillis(sleepNanos)));
+                }
+            }
+            assertTrue(blockedOnSubmissionLock,
+                    "race-b must be provably BLOCKED on InputRegistry.submissionLock before close");
+
+            runtime.close();
+            getBefore(bodyDeadline, admittedTask);
+            try {
+                getBefore(bodyDeadline, queuedTask);
+                throw new AssertionError("queued submission must reject the closing runtime");
+            } catch (java.util.concurrent.ExecutionException failure) {
+                assertInstanceOf(AgentRuntimeException.class, failure.getCause());
+                AgentRuntimeException rejected = (AgentRuntimeException) failure.getCause();
+                assertEquals(RuntimeErrorCode.RUNTIME_CLOSED, rejected.code(),
+                        "race-b passed the outer check, so rejection must come from the inner recheck");
+            }
+
+            assertEquals(RuntimeStatus.CLOSED, runtime.status());
+            assertEquals(0, runtime.inputs().retainedInputHandlers());
+            assertEquals(0, runtime.inputs().retainedPendingInjections());
+            assertEquals(0, executions.get());
+            assertEquals(CommandState.REJECTED, runtime.commands().orElseThrow()
+                    .status("race-a").status().orElseThrow().state());
+            assertEquals(0, runtime.commands().orElseThrow().retainedLiveCommands());
+            queue.forEach(Runnable::run);
+            assertEquals(0, executions.get());
+        } catch (Throwable failure) {
+            primaryFailure = failure;
+            throw failure;
+        } finally {
+            Throwable cleanupFailure = terminateCloseRaceThreads(
+                    releaseDispatch, releaseDispose, releaser, admittedThread, queuedThread);
+            if (cleanupFailure != null) {
+                if (primaryFailure != null) {
+                    primaryFailure.addSuppressed(cleanupFailure);
+                } else {
+                    throw new AssertionError("close race cleanup failed", cleanupFailure);
+                }
+            }
+        }
+    }
+
+    private static boolean awaitLatch(CountDownLatch latch, long deadline)
+            throws InterruptedException {
+        long remaining = remainingNanos(deadline);
+        return remaining > 0 && latch.await(remaining, TimeUnit.NANOSECONDS);
+    }
+
+    private static <T> T getBefore(long deadline, FutureTask<T> task) throws Exception {
+        long remaining = remainingNanos(deadline);
+        if (remaining <= 0) {
+            throw new java.util.concurrent.TimeoutException(
+                    "close barrier body deadline exceeded");
+        }
+        return task.get(remaining, TimeUnit.NANOSECONDS);
+    }
+
+    private static long remainingNanos(long deadline) {
+        return Math.max(0L, deadline - System.nanoTime());
+    }
+
+    /**
+     * Releases every latch, interrupts every created thread, then polls all liveness states
+     * against one shared absolute deadline. Never joins per thread, so an already-interrupted
+     * test thread cannot abort cleanup; failures are accumulated into a single Throwable.
+     */
+    private static Throwable terminateCloseRaceThreads(CountDownLatch releaseDispatch,
+            CountDownLatch releaseDispose, Thread releaser, Thread admittedThread,
+            Thread queuedThread) {
+        Throwable cleanupFailure = null;
+        long cleanupDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        try {
+            releaseDispatch.countDown();
+        } catch (Throwable failure) {
+            cleanupFailure = appendCleanupFailure(cleanupFailure, failure);
+        }
+        try {
+            releaseDispose.countDown();
+        } catch (Throwable failure) {
+            cleanupFailure = appendCleanupFailure(cleanupFailure, failure);
+        }
+        Thread[] threads = {releaser, admittedThread, queuedThread};
+        for (Thread thread : threads) {
+            if (thread == null) {
+                continue;
+            }
+            try {
+                thread.interrupt();
+            } catch (Throwable failure) {
+                cleanupFailure = appendCleanupFailure(cleanupFailure, failure);
+            }
+        }
+        while (remainingNanos(cleanupDeadline) > 0) {
+            boolean anyAlive = false;
+            for (Thread thread : threads) {
+                if (thread != null && thread.isAlive()) {
+                    anyAlive = true;
+                    break;
+                }
+            }
+            if (!anyAlive) {
+                return cleanupFailure;
+            }
+            try {
+                Thread.sleep(10);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        for (Thread thread : threads) {
+            if (thread != null && thread.isAlive()) {
+                cleanupFailure = appendCleanupFailure(cleanupFailure,
+                        new AssertionError("close race thread did not terminate: "
+                                + thread.getName()));
+            }
+        }
+        return cleanupFailure;
+    }
+
+    private static Throwable appendCleanupFailure(Throwable failure, Throwable next) {
+        if (failure == null) {
+            return next;
+        }
+        failure.addSuppressed(next);
+        return failure;
+    }
+
+    private static void assertClosedSubmission(org.junit.jupiter.api.function.Executable submission) {
+        AgentRuntimeException failure = assertThrows(AgentRuntimeException.class, submission);
+        assertEquals(RuntimeErrorCode.RUNTIME_CLOSED, failure.code());
+    }
+
+    private record CloseHandle(int value) implements CheckpointHandle {}
 
     private static AgentRuntime runtime(RuntimeLimits limits) {
         AtomicLong time = new AtomicLong();

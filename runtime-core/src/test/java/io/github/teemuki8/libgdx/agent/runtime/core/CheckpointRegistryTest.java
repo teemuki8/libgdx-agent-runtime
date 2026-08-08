@@ -9,6 +9,7 @@ import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 final class CheckpointRegistryTest {
@@ -226,6 +227,102 @@ final class CheckpointRegistryTest {
         assertTrue(runtime.checkpoints().list().isEmpty());
         assertThrows(IllegalArgumentException.class, () -> runtime.checkpoints().restore(
                 "first", "restore-first", Duration.ofSeconds(1)));
+    }
+
+    @Test
+    void closeDisposesEveryRetainedHandleAndRejectsNewMutations() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        List<Integer> disposed = new ArrayList<>();
+        AtomicInteger created = new AtomicInteger();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("checkpoint-close"))
+                .clock(() -> 1)
+                .commandDispatcher(dispatch::addLast)
+                .checkpointLimits(new CheckpointLimits(2, 8, 642))
+                .build();
+        runtime.checkpoints().register(new CheckpointProvider() {
+            @Override
+            public CheckpointHandle create() {
+                return new StateHandle(created.incrementAndGet());
+            }
+
+            @Override
+            public void restore(CheckpointHandle handle) {}
+
+            @Override
+            public void dispose(CheckpointHandle handle) {
+                disposed.add(((StateHandle) handle).value());
+            }
+        });
+        runtime.start();
+        runtime.checkpoints().create("one", null, "create-one", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        runtime.checkpoints().create("two", null, "create-two", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        assertEquals(List.of("one", "two"), runtime.checkpoints().list().stream()
+                .map(CheckpointDescriptor::id).toList());
+
+        runtime.close();
+
+        assertEquals(List.of(1, 2), disposed);
+        assertEquals(0, runtime.checkpoints().retainedCheckpoints());
+        assertEquals(0, runtime.checkpoints().retainedOperations());
+        AgentRuntimeException closed = assertThrows(AgentRuntimeException.class,
+                () -> runtime.checkpoints().create(
+                        "three", null, "create-three", Duration.ofSeconds(1)));
+        assertEquals(RuntimeErrorCode.RUNTIME_CLOSED, closed.code());
+    }
+
+    @Test
+    void closeRetainsCompletedDescriptorsAndReleasesPendingCheckpointWork() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        List<Integer> disposed = new ArrayList<>();
+        AtomicInteger created = new AtomicInteger();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("checkpoint-close-evidence"))
+                .clock(() -> 1)
+                .commandDispatcher(dispatch::addLast)
+                .checkpointLimits(new CheckpointLimits(4, 8, 642))
+                .build();
+        runtime.checkpoints().register(new CheckpointProvider() {
+            @Override
+            public CheckpointHandle create() {
+                return new StateHandle(created.incrementAndGet());
+            }
+
+            @Override
+            public void restore(CheckpointHandle handle) {}
+
+            @Override
+            public void dispose(CheckpointHandle handle) {
+                disposed.add(((StateHandle) handle).value());
+            }
+        });
+        runtime.start();
+        runtime.checkpoints().create("done", null, "create-done", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        runtime.checkpoints().create("pending", null, "create-pending", Duration.ofSeconds(1));
+        assertEquals(2, runtime.checkpoints().retainedOperations());
+        assertEquals(List.of("done"), runtime.checkpoints().list().stream()
+                .map(CheckpointDescriptor::id).toList());
+
+        runtime.close();
+
+        // Completed immutable descriptor evidence remains queryable.
+        assertEquals(List.of("done"), runtime.checkpoints().list().stream()
+                .map(CheckpointDescriptor::id).toList());
+        // Pending work, provider, and closures are released; only the completed handle was disposed.
+        assertEquals(List.of(1), disposed);
+        assertEquals(0, runtime.checkpoints().retainedCheckpoints());
+        assertEquals(0, runtime.checkpoints().retainedOperations());
+        dispatch.forEach(Runnable::run);
+        assertEquals(List.of(1), disposed,
+                "the pending create must not execute after close");
+        assertEquals(1, created.get());
+        AgentRuntimeException closed = assertThrows(AgentRuntimeException.class,
+                () -> runtime.checkpoints().create(
+                        "after", null, "create-after", Duration.ofSeconds(1)));
+        assertEquals(RuntimeErrorCode.RUNTIME_CLOSED, closed.code());
     }
 
     private record StateHandle(int value) implements CheckpointHandle {}

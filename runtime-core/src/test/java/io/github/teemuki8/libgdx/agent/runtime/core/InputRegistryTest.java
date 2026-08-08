@@ -10,9 +10,49 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.OptionalLong;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 final class InputRegistryTest {
+    @Test
+    void closeReleasesHandlersAndScheduledInjectionsButRetainsTheCatalog() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        AtomicInteger executions = new AtomicInteger();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("input-close"))
+                .clock(() -> 1)
+                .commandDispatcher(dispatch::addLast)
+                .build();
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {}).resume(() -> {}).tick(deltaNanos -> {}).build());
+        runtime.inputs().register(InputSpec.builder("keyboard")
+                .description("Registered keyboard fact")
+                .requiredString("key")
+                .handler(parameters -> executions.incrementAndGet())
+                .build());
+        runtime.start();
+        runtime.controls().control(true, "pause", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        RuntimeValue.ObjectValue parameters = RuntimeValues.object(
+                RuntimeValues.field("key", RuntimeValues.string("X")));
+        runtime.inputs().inject("keyboard", "input-close-1", parameters,
+                OptionalLong.empty(), Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        assertEquals(1, runtime.inputs().retainedPendingInjections());
+
+        runtime.close();
+
+        assertEquals(List.of("keyboard"),
+                runtime.inputs().list().stream().map(InputDescriptor::id).toList());
+        assertEquals(0, runtime.inputs().retainedInputHandlers());
+        assertEquals(0, runtime.inputs().retainedPendingInjections());
+        AgentRuntimeException closed = assertThrows(AgentRuntimeException.class,
+                () -> runtime.inputs().inject("keyboard", "input-close-2", parameters,
+                        OptionalLong.empty(), Duration.ofSeconds(1)));
+        assertEquals(RuntimeErrorCode.RUNTIME_CLOSED, closed.code());
+        assertEquals(0, executions.get());
+    }
+
     @Test
     void registeredInputsExecuteOnceInAcceptanceOrderAtTheTargetControlledTick() {
         ArrayDeque<Runnable> dispatch = new ArrayDeque<>();

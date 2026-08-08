@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
+import io.github.teemuki8.libgdx.agent.runtime.core.ApplicationFailureEvidence;
 import io.github.teemuki8.libgdx.agent.runtime.core.CommandState;
 import io.github.teemuki8.libgdx.agent.runtime.core.CommandDispatchLimits;
 import io.github.teemuki8.libgdx.agent.runtime.core.BaselineKind;
@@ -564,7 +565,8 @@ final class FixtureProtocolAndMcpTest {
         ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
         DeterministicSimulation simulation = new DeterministicSimulation();
         CommandDispatchLimits limits = new CommandDispatchLimits(
-                8, 1, 4, Duration.ofSeconds(1).toNanos(), 128);
+                8, 1, 4, Duration.ofSeconds(1).toNanos(),
+                ApplicationFailureEvidence.LEGACY_ENVELOPE_CAPACITY);
         AgentRuntime runtime = simulation.startRuntime(applicationQueue::addLast, limits);
         RuntimeRegistry registry = new RuntimeRegistry();
         try (PublishedRuntime publication = registry.publish(runtime);
@@ -584,7 +586,12 @@ final class FixtureProtocolAndMcpTest {
                     .block(Duration.ofSeconds(5));
             assertFalse(failed.isError());
             assertTrue(failed.structuredContent().toString().contains("FAILED"));
-            assertTrue(failed.structuredContent().toString().contains("command failed"));
+            assertTrue(failed.structuredContent().toString().contains(
+                    "deterministic-fixture|failure-1|command.failed"
+                            + "|java.lang.IllegalStateException"),
+                    () -> failed.structuredContent().toString());
+            assertFalse(failed.structuredContent().toString().contains(
+                    "fixture callback rejected"));
 
             runtime.commands().orElseThrow().submit("fixture-timeout", 0, () -> {});
             McpSchema.CallToolResult timedOut = handler.handle(call(

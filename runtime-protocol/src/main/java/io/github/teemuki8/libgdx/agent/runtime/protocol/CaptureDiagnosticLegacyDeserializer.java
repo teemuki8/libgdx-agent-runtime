@@ -49,6 +49,7 @@ public final class CaptureDiagnosticLegacyDeserializer
         Optional<String> property = Optional.empty();
         String exceptionClass = null;
         String message = null;
+        ApplicationFailureEvidence structuredFailure = null;
         if (parser.currentToken() == null) {
             parser.nextToken();
         }
@@ -66,12 +67,22 @@ public final class CaptureDiagnosticLegacyDeserializer
                 case "exceptionClass" -> exceptionClass =
                         requireString(parser, context, "exceptionClass");
                 case "message" -> message = requireString(parser, context, "message");
+                case "failure" -> structuredFailure = readStructuredFailure(parser, context);
                 default -> context.reportInputMismatch(CaptureDiagnostic.class,
-                        "unknown legacy diagnostic field '" + name + "'");
+                        "unknown diagnostic field '" + name + "'");
             }
         }
         if (provider == null) {
-            context.reportInputMismatch(CaptureDiagnostic.class, "legacy provider is required");
+            context.reportInputMismatch(CaptureDiagnostic.class, "provider is required");
+        }
+        if (structuredFailure != null) {
+            if (exceptionClass != null || message != null) {
+                context.reportInputMismatch(CaptureDiagnostic.class,
+                        "diagnostic cannot mix legacy and structured failure fields");
+                throw new IllegalArgumentException(
+                        "diagnostic cannot mix legacy and structured failure fields");
+            }
+            return new CaptureDiagnostic(provider, entityId, property, structuredFailure);
         }
         if (exceptionClass == null) {
             context.reportInputMismatch(
@@ -87,6 +98,75 @@ public final class CaptureDiagnosticLegacyDeserializer
         } catch (IllegalArgumentException failure) {
             context.reportInputMismatch(
                     CaptureDiagnostic.class, "legacy diagnostic value is invalid");
+            throw failure;
+        }
+    }
+
+    private static ApplicationFailureEvidence readStructuredFailure(
+            JsonParser parser, DeserializationContext context) throws IOException {
+        if (parser.currentToken() != JsonToken.START_OBJECT) {
+            context.reportInputMismatch(CaptureDiagnostic.class,
+                    "structured failure must be an object");
+        }
+        String category = null;
+        String exceptionClass = null;
+        String correlationId = null;
+        String sanitizedDetail = null;
+        boolean sanitizedPresent = false;
+        while (parser.nextToken() != JsonToken.END_OBJECT) {
+            String name = parser.currentName();
+            parser.nextToken();
+            switch (name) {
+                case "category" -> category = requireString(parser, context, "failure.category");
+                case "exceptionClass" -> exceptionClass =
+                        requireString(parser, context, "failure.exceptionClass");
+                case "correlationId" -> correlationId =
+                        requireString(parser, context, "failure.correlationId");
+                case "sanitizedDetail" -> {
+                    sanitizedPresent = true;
+                    if (parser.currentToken() != JsonToken.VALUE_NULL) {
+                        sanitizedDetail =
+                                requireString(parser, context, "failure.sanitizedDetail");
+                    }
+                }
+                default -> context.reportInputMismatch(CaptureDiagnostic.class,
+                        "unknown structured failure member '" + name + "'");
+            }
+        }
+        if (category == null || exceptionClass == null || correlationId == null) {
+            context.reportInputMismatch(CaptureDiagnostic.class,
+                    "structured failure category, exceptionClass, and correlationId are required");
+        }
+        requireValidExceptionClass(exceptionClass, context);
+        if (category.isBlank()
+                || category.length() > ApplicationFailureEvidence.MAX_CATEGORY_LENGTH) {
+            context.reportInputMismatch(CaptureDiagnostic.class,
+                    "structured failure category is outside the public bound");
+            throw new IllegalArgumentException(
+                    "structured failure category is outside the public bound");
+        }
+        if (correlationId.isBlank()
+                || correlationId.length() > ApplicationFailureEvidence.MAX_CORRELATION_ID_LENGTH) {
+            context.reportInputMismatch(CaptureDiagnostic.class,
+                    "structured failure correlationId is outside the public bound");
+            throw new IllegalArgumentException(
+                    "structured failure correlationId is outside the public bound");
+        }
+        if (sanitizedPresent && sanitizedDetail != null
+                && sanitizedDetail.length() > ApplicationFailureEvidence
+                        .MAX_SANITIZED_DETAIL_LENGTH) {
+            context.reportInputMismatch(CaptureDiagnostic.class,
+                    "structured failure sanitizedDetail is outside the public bound");
+            throw new IllegalArgumentException(
+                    "structured failure sanitizedDetail is outside the public bound");
+        }
+        try {
+            return new ApplicationFailureEvidence(category, exceptionClass, correlationId,
+                    sanitizedPresent && sanitizedDetail != null
+                            ? Optional.of(sanitizedDetail) : Optional.empty());
+        } catch (IllegalArgumentException failure) {
+            context.reportInputMismatch(
+                    CaptureDiagnostic.class, "structured failure value is invalid");
             throw failure;
         }
     }

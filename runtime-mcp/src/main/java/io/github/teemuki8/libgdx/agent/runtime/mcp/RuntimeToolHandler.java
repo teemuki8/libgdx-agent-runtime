@@ -89,8 +89,8 @@ public final class RuntimeToolHandler implements AutoCloseable {
             }
             RuntimeResponse.Success success = (RuntimeResponse.Success) response;
             ProtocolJson.encode(success);
-            LinkedHashMap<String, Object> content =
-                    MAPPER.convertValue(success.result(), MAP_TYPE);
+            LinkedHashMap<String, Object> content = ProtocolJson.mapper(success.version())
+                    .convertValue(success.result(), MAP_TYPE);
             return McpSchema.CallToolResult.builder()
                     .structuredContent(Map.copyOf(content))
                     .addTextContent(MAPPER.writeValueAsString(content))
@@ -237,23 +237,7 @@ public final class RuntimeToolHandler implements AutoCloseable {
         ProtocolVersion version = switch (toolName) {
             case "runtime_capabilities" -> new ProtocolVersion(
                     1, Math.toIntExact(number(arguments, "protocolMinor", 0)));
-            case "runtime_command_status", "runtime_command_cancel" -> ProtocolVersion.V1_2;
-            case "runtime_epoch_frames" -> ProtocolVersion.V1_3;
-            case "runtime_scenarios", "runtime_reset" -> ProtocolVersion.V1_4;
-            case "runtime_attributed_changes", "runtime_attributed_events",
-                    "runtime_attributed_decisions" -> ProtocolVersion.V1_5;
-            case "runtime_actions", "runtime_action" -> ProtocolVersion.V1_6;
-            case "runtime_assert" -> ProtocolVersion.V1_7;
-            case "runtime_control", "runtime_advance", "runtime_wait" -> ProtocolVersion.V1_8;
-            case "runtime_inputs", "runtime_input" -> ProtocolVersion.V1_9;
-            case "runtime_checkpoints", "runtime_checkpoint_create",
-                    "runtime_checkpoint_restore" -> ProtocolVersion.V1_10;
-            case "runtime_ui_bindings", "runtime_ui_frames" -> ProtocolVersion.V1_11;
-            case "runtime_recording_start", "runtime_recording_stop",
-                    "runtime_recording_get" -> ProtocolVersion.V1_12;
-            case "runtime_determinism_check" -> ProtocolVersion.V1_13;
-            case "runtime_entity_history" -> ProtocolVersion.V2;
-            default -> ProtocolVersion.V1;
+            default -> ProtocolVersion.V2;
         };
         return new RuntimeRequest(version,
                 "mcp-" + Long.toUnsignedString(sequence.incrementAndGet()), sessionId, command);

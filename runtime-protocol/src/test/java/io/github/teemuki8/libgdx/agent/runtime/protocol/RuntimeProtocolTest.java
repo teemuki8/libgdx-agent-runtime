@@ -1786,6 +1786,179 @@ final class RuntimeProtocolTest {
                         .getBytes(StandardCharsets.UTF_8)));
     }
 
+    @Test
+    void protocolTwoZeroCarriesStructuredEvidenceAcrossCallbackFamilies() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("evidence-families"))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .build();
+        runtime.scenarios().register(new io.github.teemuki8.libgdx.agent.runtime.core
+                .ScenarioDescriptor("boom", Optional.of("Boom scenario")),
+                context -> {
+                    throw new IllegalStateException(
+                            "token=secret-123 /home/private/save.dat");
+                });
+        runtime.actions().register(ActionSpec.builder("boom-action")
+                .description("Throwing action")
+                .handler(parameters -> {
+                    throw new IllegalStateException(
+                            "token=secret-123 /home/private/save.dat");
+                }).build());
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {
+                    throw new IllegalStateException(
+                            "token=secret-123 /home/private/save.dat");
+                })
+                .resume(() -> {})
+                .tick(deltaNanos -> {})
+                .build());
+        runtime.start();
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime)) {
+            RuntimeProtocolService service = new RuntimeProtocolService(registry);
+            String secret = "token=secret-123";
+
+            // Reset family.
+            RuntimeCommand.Reset reset = new RuntimeCommand.Reset("boom", "reset-1", 1_000);
+            service.execute(new RuntimeRequest(
+                    ProtocolVersion.V1_4, "reset", "evidence-families", reset));
+            queue.removeFirst().run();
+            assertEvidence(service, ProtocolVersion.V2, reset,
+                    RuntimeResponse.Result.Reset.class, secret, "reset-1");
+            assertLegacyOnly(service, ProtocolVersion.V1_4, reset, "reset-1");
+
+            // Action family.
+            RuntimeCommand.Action action = new RuntimeCommand.Action(
+                    "boom-action", "action-1", RuntimeValues.object(), null, 1_000);
+            service.execute(new RuntimeRequest(
+                    ProtocolVersion.V1_6, "action", "evidence-families", action));
+            queue.removeFirst().run();
+            assertEvidence(service, ProtocolVersion.V2, action,
+                    RuntimeResponse.Result.Action.class, secret, "action-1");
+            assertLegacyOnly(service, ProtocolVersion.V1_6, action, "action-1");
+
+            // Control family.
+            RuntimeCommand.Control pause = new RuntimeCommand.Control(
+                    RuntimeCommand.ControlAction.PAUSE, "pause-1", 1_000);
+            service.execute(new RuntimeRequest(
+                    ProtocolVersion.V1_8, "pause", "evidence-families", pause));
+            queue.removeFirst().run();
+            assertEvidence(service, ProtocolVersion.V2, pause,
+                    RuntimeResponse.Result.Control.class, secret, "pause-1");
+            assertLegacyOnly(service, ProtocolVersion.V1_8, pause, "pause-1");
+
+            // Recording family: the internal start callback fails on a second concurrent
+            // recording with a bounded structured failure.
+            RuntimeCommand.RecordingStart first = new RuntimeCommand.RecordingStart(
+                    "run-1", "record-1", "boom", null, 1L,
+                    RuntimeValues.object(), false, 1_000_000_000);
+            service.execute(new RuntimeRequest(
+                    ProtocolVersion.V1_12, "record-1", "evidence-families", first));
+            queue.removeFirst().run();
+            RuntimeCommand.RecordingStart second = new RuntimeCommand.RecordingStart(
+                    "run-2", "record-2", "boom", null, 2L,
+                    RuntimeValues.object(), false, 1_000_000_000);
+            service.execute(new RuntimeRequest(
+                    ProtocolVersion.V1_12, "record-2", "evidence-families", second));
+            queue.removeFirst().run();
+            assertEvidence(service, ProtocolVersion.V2, second,
+                    RuntimeResponse.Result.RecordingOperationResult.class, null, "record-2");
+            assertLegacyOnly(service, ProtocolVersion.V1_12, second, "record-2");
+        }
+    }
+
+    private static void assertEvidence(RuntimeProtocolService service, ProtocolVersion version,
+            RuntimeCommand command, Class<? extends RuntimeResponse.Result> resultType,
+            String absentSecret, String requestId) {
+        RuntimeResponse.Result result = assertInstanceOf(resultType,
+                assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                        new RuntimeRequest(version, "v2-" + requestId, "evidence-families",
+                                command))).result());
+        ApplicationFailureEvidence evidence = switch (result) {
+            case RuntimeResponse.Result.Reset value -> value.applicationFailure().orElseThrow();
+            case RuntimeResponse.Result.Action value -> value.applicationFailure().orElseThrow();
+            case RuntimeResponse.Result.Control value -> value.applicationFailure().orElseThrow();
+            case RuntimeResponse.Result.RecordingOperationResult value ->
+                    value.applicationFailure().orElseThrow();
+            default -> throw new AssertionError("unexpected result " + result);
+        };
+        assertFalse(evidence.category().isBlank());
+        assertFalse(evidence.exceptionClass().isBlank());
+        assertEquals("evidence-families|failure-", evidence.correlationId().substring(0,
+                "evidence-families|failure-".length()));
+        String json = new String(ProtocolJson.encode(service.execute(
+                new RuntimeRequest(version, "v2-" + requestId, "evidence-families", command))),
+                StandardCharsets.UTF_8);
+        assertTrue(json.contains("\"applicationFailure\""), json);
+        if (absentSecret != null) {
+            assertFalse(json.contains(absentSecret), json);
+        }
+        assertFalse(json.contains("sanitizedDetail"), json);
+    }
+
+    private static void assertLegacyOnly(RuntimeProtocolService service, ProtocolVersion version,
+            RuntimeCommand command, String requestId) {
+        RuntimeResponse.Success success = assertInstanceOf(RuntimeResponse.Success.class,
+                service.execute(new RuntimeRequest(version, "legacy-" + requestId,
+                        "evidence-families", command)));
+        String json = new String(ProtocolJson.encode(success), StandardCharsets.UTF_8);
+        assertFalse(json.contains("\"applicationFailure\""), json);
+        assertFalse(json.contains("token=secret-123"), json);
+    }
+
+    @Test
+    void protocolProjectsCaptureDiagnosticsLegacyUnderV1AndStructuredUnderV2() throws Exception {
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("diag-v2"))
+                .clock(() -> 1)
+                .build();
+        runtime.entities().register(EntityId.of("bad"), EntityType.of("enemy"),
+                () -> "Bad", inspector -> inspector.property("health",
+                        (java.util.function.Supplier<
+                                io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue>) () -> {
+                            throw new IllegalStateException(
+                                    "token=secret-123 /home/private/save.dat");
+                        }));
+        runtime.start();
+        runtime.frame(1, () -> {});
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime)) {
+            RuntimeProtocolService service = new RuntimeProtocolService(registry);
+            RuntimeCommand.Snapshot query =
+                    new RuntimeCommand.Snapshot(null, null, false, null, false, 10);
+
+            String v1 = new String(ProtocolJson.encode(service.execute(
+                    new RuntimeRequest(ProtocolVersion.V1, "diag-v1", "diag-v2", query))),
+                    StandardCharsets.UTF_8);
+            assertTrue(v1.contains("\"exceptionClass\"") && v1.contains("\"message\""), v1);
+            assertFalse(v1.contains("\"failure\""), v1);
+            assertFalse(v1.contains("token=secret-123"), v1);
+
+            String v2 = new String(ProtocolJson.encode(service.execute(
+                    new RuntimeRequest(ProtocolVersion.V2, "diag-v2", "diag-v2", query))),
+                    StandardCharsets.UTF_8);
+            assertTrue(v2.contains("\"failure\""), v2);
+            assertTrue(v2.contains("\"category\""), v2);
+            assertTrue(v2.contains("\"correlationId\""), v2);
+            assertTrue(v2.contains("\"exceptionClass\""), v2);
+            assertTrue(v2.contains("provider.property"), v2);
+            assertFalse(v2.contains("\"message\""), v2);
+            assertFalse(v2.contains("token=secret-123"), v2);
+
+            // Both closed wire shapes decode back into structured evidence.
+            RuntimeResponse v1Decoded = ProtocolJson.decodeResponse(
+                    ProtocolJson.encode(service.execute(new RuntimeRequest(
+                            ProtocolVersion.V1, "diag-v1", "diag-v2", query))));
+            RuntimeResponse v2Decoded = ProtocolJson.decodeResponse(
+                    ProtocolJson.encode(service.execute(new RuntimeRequest(
+                            ProtocolVersion.V2, "diag-v2", "diag-v2", query))));
+            assertInstanceOf(RuntimeResponse.Success.class, v1Decoded);
+            assertInstanceOf(RuntimeResponse.Success.class, v2Decoded);
+        }
+    }
+
     private static AgentRuntime verticalRuntime() {
         long[] health = {100};
         AgentRuntime runtime = AgentRuntime.builder()

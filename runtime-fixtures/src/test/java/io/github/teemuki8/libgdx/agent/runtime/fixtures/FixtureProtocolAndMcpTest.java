@@ -532,6 +532,71 @@ final class FixtureProtocolAndMcpTest {
         fixture.runtime.close();
     }
 
+    @Test
+    void fixtureMcpCarriesStructuredFailureEvidenceForCommandAndControlFamilies() {
+        ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(DeterministicSimulation.SESSION_ID)
+                .clock(() -> 1)
+                .commandDispatcher(applicationQueue::addLast)
+                .build();
+        runtime.controls().register(
+                io.github.teemuki8.libgdx.agent.runtime.core.SimulationControllerSpec.builder()
+                        .pause(() -> {
+                            throw new IllegalStateException(
+                                    "token=secret-123 /home/private/save.dat");
+                        })
+                        .resume(() -> {})
+                        .tick(deltaNanos -> {})
+                        .build());
+        runtime.start();
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime);
+                RuntimeToolHandler handler =
+                        new RuntimeToolHandler(new RuntimeProtocolService(registry))) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            runtime.commands().orElseThrow().submit(
+                    "fixture-fail", 1_000, () -> {
+                        throw new IllegalStateException(
+                                "token=secret-123 /home/private/save.dat");
+                    });
+            applicationQueue.removeFirst().run();
+            McpSchema.CallToolResult status = handler.handle(call(
+                    "runtime_command_status", Map.of(
+                            "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                            "commandRequestId", "fixture-fail")))
+                    .block(Duration.ofSeconds(5));
+            assertNotNull(status);
+            assertFalse(status.isError());
+            Map<?, ?> statusContent = assertInstanceOf(Map.class, status.structuredContent());
+            Map<?, ?> statusEvidence = assertInstanceOf(Map.class,
+                    statusContent.get("applicationFailure"));
+            assertEquals("command.failed", statusEvidence.get("category"));
+            assertEquals("java.lang.IllegalStateException",
+                    statusEvidence.get("exceptionClass"));
+            assertFalse(statusContent.toString().contains("token=secret-123"));
+            assertFalse(statusContent.containsKey("sanitizedDetail"));
+
+            Map<String, Object> pause = Map.of(
+                    "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                    "action", "PAUSE", "controlRequestId", "fixture-pause",
+                    "timeoutNanos", 1_000_000_000);
+            assertFalse(handler.handle(call("runtime_control", pause))
+                    .block(Duration.ofSeconds(5)).isError());
+            applicationQueue.removeFirst().run();
+            McpSchema.CallToolResult control = handler.handle(call("runtime_control", pause))
+                    .block(Duration.ofSeconds(5));
+            assertNotNull(control);
+            assertFalse(control.isError());
+            Map<?, ?> controlContent = assertInstanceOf(Map.class, control.structuredContent());
+            Map<?, ?> controlEvidence = assertInstanceOf(Map.class,
+                    controlContent.get("applicationFailure"));
+            assertEquals("command.failed", controlEvidence.get("category"));
+            assertFalse(controlContent.toString().contains("token=secret-123"));
+        }
+        runtime.close();
+    }
+
     private static McpSchema.CallToolRequest call(
             String name, Map<String, Object> arguments) {
         return McpSchema.CallToolRequest.builder(name).arguments(arguments).build();

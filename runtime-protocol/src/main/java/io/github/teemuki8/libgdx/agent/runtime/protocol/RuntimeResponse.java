@@ -226,9 +226,18 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         }
 
         /** Correlated reset status and optional completed baseline evidence. */
-        record Reset(ScenarioReset reset) implements Result {
+        record Reset(ScenarioReset reset,
+                @JsonInclude(JsonInclude.Include.NON_ABSENT)
+                Optional<ApplicationFailureEvidence> applicationFailure) implements Result {
+            /** Creates a protocol-1.x reset result without structured evidence. */
+            public Reset(ScenarioReset reset) {
+                this(reset, Optional.empty());
+            }
+
             public Reset {
                 Objects.requireNonNull(reset, "reset");
+                applicationFailure = Objects.requireNonNull(
+                        applicationFailure, "applicationFailure");
             }
         }
 
@@ -243,9 +252,18 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         }
 
         /** Correlated semantic-action outcome and frame evidence. */
-        record Action(ActionInvocation invocation) implements Result {
+        record Action(ActionInvocation invocation,
+                @JsonInclude(JsonInclude.Include.NON_ABSENT)
+                Optional<ApplicationFailureEvidence> applicationFailure) implements Result {
+            /** Creates a protocol-1.x action result without structured evidence. */
+            public Action(ActionInvocation invocation) {
+                this(invocation, Optional.empty());
+            }
+
             public Action {
                 Objects.requireNonNull(invocation, "invocation");
+                applicationFailure = Objects.requireNonNull(
+                        applicationFailure, "applicationFailure");
             }
         }
 
@@ -258,10 +276,20 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
 
         /** Discoverable control state and optional correlated mutation outcome. */
         record Control(SimulationControlDescriptor descriptor,
-                Optional<ControlOperation> operation) implements Result {
+                Optional<ControlOperation> operation,
+                @JsonInclude(JsonInclude.Include.NON_ABSENT)
+                Optional<ApplicationFailureEvidence> applicationFailure) implements Result {
+            /** Creates a protocol-1.x control result without structured evidence. */
+            public Control(SimulationControlDescriptor descriptor,
+                    Optional<ControlOperation> operation) {
+                this(descriptor, operation, Optional.empty());
+            }
+
             public Control {
                 Objects.requireNonNull(descriptor, "descriptor");
                 operation = Objects.requireNonNull(operation, "operation");
+                applicationFailure = Objects.requireNonNull(
+                        applicationFailure, "applicationFailure");
             }
         }
 
@@ -332,9 +360,18 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         }
 
         /** Recording lifecycle command evidence. */
-        record RecordingOperationResult(RecordingOperation operation) implements Result {
+        record RecordingOperationResult(RecordingOperation operation,
+                @JsonInclude(JsonInclude.Include.NON_ABSENT)
+                Optional<ApplicationFailureEvidence> applicationFailure) implements Result {
+            /** Creates a protocol-1.x recording result without structured evidence. */
+            public RecordingOperationResult(RecordingOperation operation) {
+                this(operation, Optional.empty());
+            }
+
             public RecordingOperationResult {
                 Objects.requireNonNull(operation, "operation");
+                applicationFailure = Objects.requireNonNull(
+                        applicationFailure, "applicationFailure");
             }
         }
 

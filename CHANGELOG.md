@@ -4,6 +4,8 @@ All notable changes follow Keep a Changelog structure.
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-08-08
+
 ### Added
 
 - Removed entities remain queryable while retained history exists: the additive

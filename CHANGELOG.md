@@ -24,6 +24,12 @@ All notable changes follow Keep a Changelog structure.
 
 ### Fixed
 
+- Dynamic entity sources are now enumerated sequentially on the capture thread through
+  `stream.sequential().iterator()` with a hard global bound of `entitiesPerSnapshot` retained
+  non-null observations plus one sentinel, so parallel application streams cannot escape the
+  capture thread and infinite or very large sources cannot hang capture. Discarded observations
+  are never materialized and truncation reports the sentinel-based observed count
+  deterministically (#40).
 - Runtime lifecycle `status()` is now backed by a `volatile` field and reads safely from any
   thread without a monitor; capture-thread-only monotonic transitions are unchanged (#42).
 - Closing the runtime now releases every callback-bearing registry: scenario reset handlers,

@@ -7,6 +7,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -624,12 +625,24 @@ public final class AgentRuntime implements AutoCloseable {
         List<CaptureDiagnostic> diagnostics = new ArrayList<>();
         List<NamedEntity> observed = new ArrayList<>();
         staticEntities.values().forEach(entity -> observed.add(new NamedEntity("static", entity)));
+        long sentinel = (long) limits.entitiesPerSnapshot() + 1L;
+        long dynamicObserved = 0L;
         for (Map.Entry<String, Supplier<? extends Stream<InspectableEntity>>> source
                 : sources.entrySet()) {
+            if (dynamicObserved >= sentinel) {
+                break;
+            }
             try (Stream<InspectableEntity> stream =
                     Objects.requireNonNull(source.getValue().get(), "source stream")) {
-                stream.forEach(entity -> observed.add(
-                        new NamedEntity(source.getKey(), Objects.requireNonNull(entity, "entity"))));
+                // Sequential iterator keeps parallel application streams on the capture
+                // thread and stops globally after limit + 1 non-null observations, the
+                // sentinel proving truncation without exhausting the source.
+                Iterator<InspectableEntity> iterator = stream.sequential().iterator();
+                while (dynamicObserved < sentinel && iterator.hasNext()) {
+                    InspectableEntity entity = Objects.requireNonNull(iterator.next(), "entity");
+                    observed.add(new NamedEntity(source.getKey(), entity));
+                    dynamicObserved++;
+                }
             } catch (RuntimeException failure) {
                 diagnostics.add(diagnostic(
                         "provider.source", source.getKey(), null, null, failure));
@@ -660,6 +673,9 @@ public final class AgentRuntime implements AutoCloseable {
         long uniqueEntities = observed.stream().map(value -> value.entity().id()).distinct().count();
         if (uniqueEntities > limits.entitiesPerSnapshot()) {
             truncations.add(new Truncation("snapshot.entities", uniqueEntities, snapshots.size(),
+                    limits.entitiesPerSnapshot()));
+        } else if (dynamicObserved > limits.entitiesPerSnapshot()) {
+            truncations.add(new Truncation("snapshot.entities", dynamicObserved, snapshots.size(),
                     limits.entitiesPerSnapshot()));
         }
         return new CaptureResult(List.copyOf(snapshots), observed.size(),

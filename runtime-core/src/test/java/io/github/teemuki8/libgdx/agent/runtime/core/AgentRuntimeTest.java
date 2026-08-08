@@ -16,6 +16,7 @@ import java.time.ZoneOffset;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -105,6 +106,62 @@ final class AgentRuntimeTest {
         runtime.frame(1, () -> {});
         assertEquals(ChangeKind.ENTITY_REMOVED,
                 runtime.latestFrame().orElseThrow().changes().getFirst().kind());
+    }
+
+    @Timeout(10)
+    @Test
+    void parallelDynamicSourcesStayOnCaptureThread() {
+        RuntimeLimits limits = new RuntimeLimits(240, 2_000, 64, 128, 256, 256, 64,
+                4_096, 256, 16, 1_000);
+        AgentRuntime runtime = runtime(limits);
+        List<Thread> mapperThreads = Collections.synchronizedList(new ArrayList<>());
+        runtime.entities().registerSource("parallel", () -> IntStream.range(0, 64).parallel()
+                .mapToObj(index -> {
+                    mapperThreads.add(Thread.currentThread());
+                    return InspectableEntity.of(EntityId.of("parallel-" + index),
+                            EntityType.of("enemy"), () -> "Enemy " + index,
+                            inspector -> inspector.property("index", () -> (long) index));
+                }));
+        runtime.start();
+        mapperThreads.clear();
+
+        Thread captureThread = Thread.currentThread();
+        runtime.frame(1, () -> {});
+
+        assertEquals(64, mapperThreads.size());
+        assertTrue(mapperThreads.stream().allMatch(thread -> thread == captureThread),
+                "every parallel stream callback must run on the capture thread");
+    }
+
+    @Timeout(10)
+    @Test
+    void infiniteDynamicSourcesStopAtLimitSentinel() {
+        RuntimeLimits limits = new RuntimeLimits(240, 2_000, 3, 128, 256, 256, 64,
+                4_096, 256, 16, 1_000);
+        AgentRuntime runtime = runtime(limits);
+        AtomicInteger invocations = new AtomicInteger();
+        runtime.entities().registerSource("infinite", () -> Stream.generate(() -> {
+            int index = invocations.incrementAndGet();
+            return InspectableEntity.of(EntityId.of("gen-" + index), EntityType.of("enemy"),
+                    () -> "Entity " + index,
+                    inspector -> inspector.property("index", () -> (long) index));
+        }));
+        runtime.start();
+        invocations.set(0);
+
+        runtime.frame(1, () -> {});
+
+        assertTrue(invocations.get() <= 4,
+                "stream must stop after the configured limit plus one sentinel");
+        FrameSnapshot frame = runtime.latestFrame().orElseThrow();
+        assertEquals(List.of("gen-1", "gen-2", "gen-3"),
+                frame.entities().stream().map(entity -> entity.id().value()).toList());
+        Truncation truncation = frame.stats().truncations().stream()
+                .filter(value -> value.dimension().equals("snapshot.entities"))
+                .findFirst().orElseThrow();
+        assertEquals(4, truncation.observed());
+        assertEquals(3, truncation.retained());
+        assertEquals(3, truncation.limit());
     }
 
     @Test

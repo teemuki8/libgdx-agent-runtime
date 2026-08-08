@@ -1059,6 +1059,10 @@ final class AgentRuntimeTest {
         CountDownLatch disposeEntered = new CountDownLatch(1);
         CountDownLatch releaseDispose = new CountDownLatch(1);
         AtomicInteger executions = new AtomicInteger();
+        // One absolute body deadline shared by every await, poll sleep, task get, and
+        // dispatcher/checkpoint/releaser wait; each wait consumes only the time remaining
+        // on the deadline, so runtime.close() can never block beyond the body budget.
+        long bodyDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
         AgentRuntime runtime = AgentRuntime.builder()
                 .sessionId(SessionId.of("input-close-barrier"))
                 .clock(() -> 1)
@@ -1067,7 +1071,9 @@ final class AgentRuntimeTest {
                     if (armed.get()) {
                         dispatchEntered.countDown();
                         try {
-                            if (!releaseDispatch.await(5, TimeUnit.SECONDS)) {
+                            long remaining = remainingNanos(bodyDeadline);
+                            if (remaining <= 0
+                                    || !releaseDispatch.await(remaining, TimeUnit.NANOSECONDS)) {
                                 throw new IllegalStateException("dispatch latch timed out");
                             }
                         } catch (InterruptedException failure) {
@@ -1096,7 +1102,9 @@ final class AgentRuntimeTest {
             public void dispose(CheckpointHandle handle) {
                 disposeEntered.countDown();
                 try {
-                    if (!releaseDispose.await(5, TimeUnit.SECONDS)) {
+                    long remaining = remainingNanos(bodyDeadline);
+                    if (remaining <= 0
+                            || !releaseDispose.await(remaining, TimeUnit.NANOSECONDS)) {
                         throw new IllegalStateException("dispose latch timed out");
                     }
                 } catch (InterruptedException failure) {
@@ -1114,8 +1122,6 @@ final class AgentRuntimeTest {
         RuntimeValue.ObjectValue parameters = RuntimeValues.object(
                 RuntimeValues.field("key", RuntimeValues.string("X")));
 
-        // One absolute body deadline shared by every await, poll sleep, and task get.
-        long bodyDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
         FutureTask<InputInjection> admittedTask = new FutureTask<>(() -> runtime.inputs().inject(
                 "keyboard", "race-a", parameters, OptionalLong.empty(),
                 Duration.ofSeconds(1)));
@@ -1129,7 +1135,9 @@ final class AgentRuntimeTest {
         try {
             releaser = new Thread(() -> {
                 try {
-                    if (!disposeEntered.await(5, TimeUnit.SECONDS)) {
+                    long remaining = remainingNanos(bodyDeadline);
+                    if (remaining <= 0
+                            || !disposeEntered.await(remaining, TimeUnit.NANOSECONDS)) {
                         return;
                     }
                 } catch (InterruptedException failure) {

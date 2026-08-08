@@ -202,6 +202,64 @@ final class CheckpointRegistryTest {
     }
 
     @Test
+    void stagingFaultBeforePublicationDisposesOnlyTheNewHandleAndKeepsTheOriginalRegistry() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        List<Integer> disposed = new ArrayList<>();
+        AtomicInteger created = new AtomicInteger();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("atomic-staging-fault"))
+                .clock(() -> 1)
+                .commandDispatcher(dispatch::addLast)
+                .checkpointLimits(new CheckpointLimits(1, 8, 642))
+                .build();
+        runtime.checkpoints().register(new CheckpointProvider() {
+            @Override
+            public CheckpointHandle create() {
+                return new StateHandle(created.incrementAndGet());
+            }
+
+            @Override
+            public void restore(CheckpointHandle handle) {}
+
+            @Override
+            public void dispose(CheckpointHandle handle) {
+                disposed.add(((StateHandle) handle).value());
+            }
+        });
+        runtime.start();
+        runtime.checkpoints().create("first", null, "create-first", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+
+        runtime.checkpoints().injectStagingFault(() -> {
+            throw new AssertionError("staging fault sentinel");
+        });
+        runtime.checkpoints().create("second", null, "create-second", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        CheckpointOperation failed = runtime.checkpoints().create(
+                "second", null, "create-second", Duration.ofSeconds(1));
+
+        assertEquals(CommandState.FAILED, failed.command().status().orElseThrow().state());
+        ApplicationFailureEvidence failure = failed.applicationFailure().orElseThrow();
+        assertEquals("checkpoint.create", failure.category());
+        assertEquals(List.of("first"), runtime.checkpoints().list().stream()
+                .map(CheckpointDescriptor::id).toList(),
+                "the original descriptor catalog must be unchanged");
+        assertEquals(1, runtime.checkpoints().retainedCheckpoints(),
+                "the original registry keeps exactly one retained checkpoint");
+        assertEquals(List.of(2), disposed,
+                "only the new handle is disposed exactly once, with no old-handle disposal");
+        assertTrue(failed.diagnostic().orElseThrow().endsWith(
+                "|checkpoint.create|java.lang.AssertionError"),
+                "the primary staging fault is retained as the command failure");
+        runtime.checkpoints().restore("first", "restore-first", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        CheckpointOperation restored = runtime.checkpoints().restore(
+                "first", "restore-first", Duration.ofSeconds(1));
+        assertEquals(CommandState.SUCCEEDED, restored.command().status().orElseThrow().state());
+        assertEquals(List.of(2), disposed, "the failed replacement must not double-dispose");
+    }
+
+    @Test
     void failedEvictionDisposalDoesNotFailTheCommittedReplacement() {
         ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
         AgentRuntime runtime = AgentRuntime.builder()

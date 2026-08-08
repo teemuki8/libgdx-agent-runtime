@@ -10,11 +10,12 @@ import java.util.Optional;
 public final class CheckpointRegistry {
     private final AgentRuntime runtime;
     private final CheckpointLimits limits;
-    private final LinkedHashMap<String, Retained> checkpoints = new LinkedHashMap<>();
-    private final LinkedHashMap<String, CheckpointDescriptor> catalog = new LinkedHashMap<>();
+    private LinkedHashMap<String, Retained> checkpoints = new LinkedHashMap<>();
+    private LinkedHashMap<String, CheckpointDescriptor> catalog = new LinkedHashMap<>();
     private final LinkedHashMap<String, Request> requests = new LinkedHashMap<>();
     private final LinkedHashMap<String, Evidence> operations = new LinkedHashMap<>();
     private CheckpointProvider provider;
+    private Runnable stagingFault;
 
     CheckpointRegistry(AgentRuntime runtime, CheckpointLimits limits) {
         this.runtime = runtime;
@@ -157,12 +158,24 @@ public final class CheckpointRegistry {
                     throw new IllegalStateException(
                             "checkpoint id was created concurrently");
                 }
-                checkpoints.put(descriptor.id(), new Retained(descriptor, handle));
-                catalog.put(descriptor.id(), descriptor);
+                // Stage complete replacement snapshots (handles and descriptor catalog, with
+                // the insert and eviction applied) before touching live state, so a staging
+                // fault cannot leave the live maps partially published.
+                LinkedHashMap<String, Retained> stagedCheckpoints =
+                        new LinkedHashMap<>(checkpoints);
+                LinkedHashMap<String, CheckpointDescriptor> stagedCatalog =
+                        new LinkedHashMap<>(catalog);
+                stagedCheckpoints.put(descriptor.id(), new Retained(descriptor, handle));
+                stagedCatalog.put(descriptor.id(), descriptor);
                 if (evicted != null) {
-                    checkpoints.remove(evicted.descriptor().id());
-                    catalog.remove(evicted.descriptor().id());
+                    stagedCheckpoints.remove(evicted.descriptor().id());
+                    stagedCatalog.remove(evicted.descriptor().id());
                 }
+                runStagingFault();
+                // Publish both maps with non-throwing reference assignments; the staged
+                // LinkedHashMaps preserve creation order and retention bounds.
+                checkpoints = stagedCheckpoints;
+                catalog = stagedCatalog;
                 evidence.descriptor = descriptor;
                 installed = true;
             }
@@ -265,6 +278,22 @@ public final class CheckpointRegistry {
         }
         if (firstFailure instanceof Error failure) {
             throw failure;
+        }
+    }
+
+    /**
+     * Package-private fault-injection seam for failure-atomicity tests: arranges for one
+     * fault to run after the replacement snapshots are staged and before they are published.
+     */
+    synchronized void injectStagingFault(Runnable fault) {
+        stagingFault = Objects.requireNonNull(fault, "fault");
+    }
+
+    private void runStagingFault() {
+        Runnable fault = stagingFault;
+        stagingFault = null;
+        if (fault != null) {
+            fault.run();
         }
     }
 

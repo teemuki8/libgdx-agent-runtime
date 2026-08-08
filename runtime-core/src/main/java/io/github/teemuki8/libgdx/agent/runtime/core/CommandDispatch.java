@@ -19,6 +19,7 @@ public final class CommandDispatch {
     private final CommandDispatchLimits limits;
     private final MonotonicClock clock;
     private final Thread captureThread;
+    private final ApplicationDiagnostics diagnostics;
     private final Map<String, Entry> retained = new LinkedHashMap<>();
     private final ArrayDeque<Entry> pendingDispatch = new ArrayDeque<>();
     private final ArrayDeque<String> terminalOrder = new ArrayDeque<>();
@@ -29,11 +30,12 @@ public final class CommandDispatch {
     private boolean closed;
 
     CommandDispatch(ApplicationCommandDispatcher dispatcher, CommandDispatchLimits limits,
-            MonotonicClock clock, Thread captureThread) {
+            MonotonicClock clock, Thread captureThread, ApplicationDiagnostics diagnostics) {
         this.dispatcher = Objects.requireNonNull(dispatcher, "dispatcher");
         this.limits = Objects.requireNonNull(limits, "limits");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.captureThread = Objects.requireNonNull(captureThread, "captureThread");
+        this.diagnostics = Objects.requireNonNull(diagnostics, "diagnostics");
     }
 
     /** Returns the configured hard bounds. */
@@ -101,6 +103,7 @@ public final class CommandDispatch {
                 return CommandLookup.found(snapshot(entry, now));
             }
             entry = new Entry(requestId, now, deadlineNanos, command);
+            entry.dispatchCorrelationId = diagnostics.nextCorrelationId();
             retained.put(requestId, entry);
             pendingDispatch.addLast(entry);
             outstandingDispatches++;
@@ -113,6 +116,18 @@ public final class CommandDispatch {
     public synchronized CommandLookup status(String requestId) {
         IdentifierSupport.validate(requestId, "requestId");
         return lookupWithoutExpiry(requestId, now());
+    }
+
+    /**
+     * Returns the admission-reserved failure correlation for one retained request, if any.
+     *
+     * <p>Feature registries use this to reuse the command's correlation for the same thrown
+     * callback failure instead of allocating a second identifier.
+     */
+    synchronized Optional<String> correlationId(String requestId) {
+        Entry entry = retained.get(requestId);
+        return entry == null ? Optional.empty()
+                : Optional.ofNullable(entry.dispatchCorrelationId);
     }
 
     /** Cancels only a command that has not begun application-thread execution. */
@@ -175,9 +190,11 @@ public final class CommandDispatch {
                 finish(entry, CommandState.SUCCEEDED, now(), true, null);
             }
         } catch (Throwable failure) {
+            ApplicationFailureEvidence evidence = diagnostics.describe(
+                    "command.failed", failure, entry.dispatchCorrelationId);
             synchronized (this) {
                 finish(entry, CommandState.FAILED, now(), true,
-                        diagnostic("command failed", failure));
+                        evidence.legacyEnvelope(), Optional.of(evidence));
             }
         }
     }
@@ -205,19 +222,23 @@ public final class CommandDispatch {
             try {
                 dispatcher.dispatch(() -> execute(entry));
             } catch (RuntimeException failure) {
+                ApplicationFailureEvidence evidence = diagnostics.describe(
+                        "command.dispatch.rejected", failure, entry.dispatchCorrelationId);
                 synchronized (this) {
                     consumeDispatch(entry);
                     if (entry.state == CommandState.QUEUED) {
                         finish(entry, CommandState.REJECTED, now(), true,
-                                diagnostic("dispatcher rejected command", failure));
+                                evidence.legacyEnvelope(), Optional.of(evidence));
                     }
                 }
             } catch (Error failure) {
+                ApplicationFailureEvidence evidence = diagnostics.describe(
+                        "command.dispatch.failed", failure, entry.dispatchCorrelationId);
                 synchronized (this) {
                     consumeDispatch(entry);
                     if (entry.state == CommandState.QUEUED) {
                         finish(entry, CommandState.FAILED, now(), true,
-                                diagnostic("dispatcher failed", failure));
+                                evidence.legacyEnvelope(), Optional.of(evidence));
                     }
                     Entry pending;
                     while ((pending = pendingDispatch.pollFirst()) != null) {
@@ -259,12 +280,13 @@ public final class CommandDispatch {
             return new CommandStatus(entry.requestId, CommandState.TIMED_OUT,
                     entry.submittedAtNanos, entry.deadlineNanos,
                     Optional.of(entry.startedAtNanos), Optional.empty(), false,
-                    Optional.of("deadline elapsed after dispatch; outcome is not yet known"));
+                    Optional.of("deadline elapsed after dispatch; outcome is not yet known"),
+                    Optional.empty());
         }
         return new CommandStatus(entry.requestId, entry.state, entry.submittedAtNanos,
                 entry.deadlineNanos, Optional.ofNullable(entry.startedAtNanos),
                 Optional.ofNullable(entry.completedAtNanos), entry.outcomeKnown,
-                Optional.ofNullable(entry.diagnostic));
+                Optional.ofNullable(entry.diagnostic), entry.applicationFailure);
     }
 
     private Entry terminal(String id, CommandState state, long now, long deadline,
@@ -277,10 +299,16 @@ public final class CommandDispatch {
 
     private void finish(Entry entry, CommandState state, long now,
             boolean outcomeKnown, String diagnostic) {
+        finish(entry, state, now, outcomeKnown, diagnostic, Optional.empty());
+    }
+
+    private void finish(Entry entry, CommandState state, long now, boolean outcomeKnown,
+            String diagnostic, Optional<ApplicationFailureEvidence> applicationFailure) {
         entry.state = state;
         entry.completedAtNanos = now;
         entry.outcomeKnown = outcomeKnown;
         entry.diagnostic = limit(diagnostic);
+        entry.applicationFailure = applicationFailure;
         entry.command = null;
         terminalOrder.addLast(entry.requestId);
         while (terminalOrder.size() > limits.retainedResults()) {
@@ -299,13 +327,6 @@ public final class CommandDispatch {
         while (expiredOrder.size() > limits.retainedRequestIds()) {
             expired.remove(expiredOrder.removeFirst());
         }
-    }
-
-    private String diagnostic(String prefix, Throwable failure) {
-        String message = failure.getMessage();
-        String detail = message == null || message.isBlank()
-                ? failure.getClass().getSimpleName() : message.replace('\n', ' ').replace('\r', ' ');
-        return limit(prefix + ": " + detail);
     }
 
     private String limit(String value) {
@@ -348,7 +369,9 @@ public final class CommandDispatch {
         private Long completedAtNanos;
         private boolean outcomeKnown;
         private boolean dispatchConsumed;
+        private String dispatchCorrelationId;
         private String diagnostic;
+        private Optional<ApplicationFailureEvidence> applicationFailure = Optional.empty();
 
         Entry(String requestId, long submittedAtNanos, long deadlineNanos, Runnable command) {
             this.requestId = requestId;

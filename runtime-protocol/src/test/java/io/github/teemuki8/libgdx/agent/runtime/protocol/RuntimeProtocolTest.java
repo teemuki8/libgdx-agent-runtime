@@ -9,11 +9,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
 import io.github.teemuki8.libgdx.agent.runtime.core.ActionSpec;
+import io.github.teemuki8.libgdx.agent.runtime.core.ApplicationFailureEvidence;
 import io.github.teemuki8.libgdx.agent.runtime.core.BaselineKind;
 import io.github.teemuki8.libgdx.agent.runtime.core.CommandState;
 import io.github.teemuki8.libgdx.agent.runtime.core.CheckpointHandle;
 import io.github.teemuki8.libgdx.agent.runtime.core.CheckpointOperation;
 import io.github.teemuki8.libgdx.agent.runtime.core.CheckpointProvider;
+import io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic;
 import io.github.teemuki8.libgdx.agent.runtime.core.AssertionStatus;
 import io.github.teemuki8.libgdx.agent.runtime.core.ControlStopReason;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
@@ -33,6 +35,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.stream.IntStream;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
 import org.junit.jupiter.api.Test;
 
 final class RuntimeProtocolTest {
@@ -968,6 +972,298 @@ final class RuntimeProtocolTest {
     }
 
     private record TestCheckpoint(int value) implements CheckpointHandle {}
+
+    @Test
+    void legacyProtocolSnapshotRetainsDiagnosticFieldsAndEnvelopeOnly() throws Exception {
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("legacy-diag"))
+                .clock(() -> 1)
+                .build();
+        runtime.entities().register(EntityId.of("bad"), EntityType.of("enemy"),
+                () -> "Bad", inspector -> inspector.property("health",
+                        (java.util.function.Supplier<io.github.teemuki8.libgdx.agent.runtime.core
+                                .RuntimeValue>) () -> {
+                    throw new IllegalStateException("token=secret-123 /home/private/save.dat");
+                }));
+        runtime.start();
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime)) {
+            RuntimeProtocolService service = new RuntimeProtocolService(registry);
+            RuntimeResponse response = service.execute(new RuntimeRequest(
+                    ProtocolVersion.V1, "diag-snapshot", "legacy-diag",
+                    new RuntimeCommand.Snapshot(null, null, false, null, false, 10)));
+            byte[] encoded = ProtocolJson.encode(response);
+            String json = new String(encoded, StandardCharsets.UTF_8);
+            assertFalse(json.contains("token=secret-123"));
+            assertFalse(json.contains("/home/private/save.dat"));
+            assertFalse(json.contains("sanitizedDetail"));
+            assertFalse(json.contains("applicationFailure"));
+            com.fasterxml.jackson.databind.JsonNode diagnostic = ProtocolJson.mapper()
+                    .readTree(encoded).path("result").path("snapshot").path("stats")
+                    .path("diagnostics").get(0);
+            assertFalse(diagnostic.isMissingNode());
+            assertEquals("java.lang.IllegalStateException",
+                    diagnostic.get("exceptionClass").asText());
+            assertEquals("legacy-diag|failure-1|provider.property"
+                    + "|java.lang.IllegalStateException",
+                    diagnostic.get("message").asText());
+            assertFalse(diagnostic.has("failure"));
+
+            RuntimeResponse.Success success = assertInstanceOf(RuntimeResponse.Success.class,
+                    ProtocolJson.decodeResponse(encoded));
+            RuntimeResponse.Result.Snapshot snapshot = assertInstanceOf(
+                    RuntimeResponse.Result.Snapshot.class, success.result());
+            io.github.teemuki8.libgdx.agent.runtime.core.ApplicationFailureEvidence failure =
+                    snapshot.snapshot().stats().diagnostics().getFirst().failure();
+            assertEquals("provider.property", failure.category());
+            assertEquals("java.lang.IllegalStateException", failure.exceptionClass());
+            assertEquals("legacy-diag|failure-1", failure.correlationId());
+            assertEquals("legacy-diag|failure-1|provider.property"
+                    + "|java.lang.IllegalStateException", failure.legacyEnvelope());
+            assertTrue(failure.sanitizedDetail().isEmpty());
+        }
+    }
+
+    @Test
+    void legacyProtocolDecodesHistoricRawDiagnosticWithoutRetainingSecrets() throws Exception {
+        String historic = """
+                {"provider":"enemies","entityId":{"value":"bad"},"property":"health",
+                 "exceptionClass":"java.lang.IllegalStateException",
+                 "message":"token=secret-123 /home/private/save.dat"}""";
+        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic decoded =
+                ProtocolJson.mapper().readValue(historic,
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class);
+        io.github.teemuki8.libgdx.agent.runtime.core.ApplicationFailureEvidence failure =
+                decoded.failure();
+        assertEquals("legacy.capture", failure.category());
+        assertEquals("java.lang.IllegalStateException", failure.exceptionClass());
+        assertTrue(failure.sanitizedDetail().isEmpty());
+        assertFalse(failure.correlationId().contains("token=secret-123"));
+        assertFalse(failure.correlationId().contains("/home/private/save.dat"));
+        assertFalse(failure.legacyEnvelope().contains("token=secret-123"));
+        assertFalse(failure.legacyEnvelope().contains("/home/private/save.dat"));
+        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic again =
+                ProtocolJson.mapper().readValue(historic,
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class);
+        assertEquals(failure.correlationId(), again.failure().correlationId(),
+                "legacy synthesis must be deterministic");
+    }
+
+    @Test
+    void legacyProtocolDecodeRejectsUnknownAndCoercedFields() throws Exception {
+        assertThrows(com.fasterxml.jackson.core.JsonProcessingException.class,
+                () -> ProtocolJson.mapper().readValue("""
+                        {"provider":"enemies","entityId":{"value":"bad"},"property":"health",
+                         "exceptionClass":"java.lang.IllegalStateException","message":"legacy|1|a|b",
+                         "unknownField":"x"}""",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class));
+        assertThrows(com.fasterxml.jackson.core.JsonProcessingException.class,
+                () -> ProtocolJson.mapper().readValue("""
+                        {"provider":"enemies","entityId":{"value":"bad","extra":1},
+                         "property":"health","exceptionClass":"java.lang.IllegalStateException",
+                         "message":"legacy|1|a|b"}""",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class));
+        assertThrows(com.fasterxml.jackson.core.JsonProcessingException.class,
+                () -> ProtocolJson.mapper().readValue("""
+                        {"provider":123,"entityId":{"value":"bad"},"property":"health",
+                         "exceptionClass":"java.lang.IllegalStateException","message":"legacy|1|a|b"}""",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class));
+        assertThrows(com.fasterxml.jackson.core.JsonProcessingException.class,
+                () -> ProtocolJson.mapper().readValue("""
+                        {"provider":"enemies","entityId":{"value":"bad"},"property":true,
+                         "exceptionClass":"java.lang.IllegalStateException","message":"legacy|1|a|b"}""",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class));
+        assertThrows(com.fasterxml.jackson.core.JsonProcessingException.class,
+                () -> ProtocolJson.mapper().readValue("""
+                        {"provider":"enemies","entityId":{"value":"bad"},"property":"health",
+                         "exceptionClass":false,"message":"legacy|1|a|b"}""",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class));
+        assertThrows(com.fasterxml.jackson.core.JsonProcessingException.class,
+                () -> ProtocolJson.mapper().readValue("""
+                        {"provider":"enemies","entityId":{"value":"bad"},"property":"health",
+                         "exceptionClass":"java.lang.IllegalStateException","message":[1,2]}""",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class));
+    }
+
+    @Test
+    void legacyProtocolDecodeRejectsMalformedEntityId() throws Exception {
+        assertThrows(com.fasterxml.jackson.core.JsonProcessingException.class,
+                () -> ProtocolJson.mapper().readValue("""
+                        {"provider":"enemies","entityId":"bad","property":"health",
+                         "exceptionClass":"java.lang.IllegalStateException","message":"legacy|1|a|b"}""",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class));
+        assertThrows(com.fasterxml.jackson.core.JsonProcessingException.class,
+                () -> ProtocolJson.mapper().readValue("""
+                        {"provider":"enemies","entityId":{},"property":"health",
+                         "exceptionClass":"java.lang.IllegalStateException","message":"legacy|1|a|b"}""",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class));
+        assertThrows(com.fasterxml.jackson.core.JsonProcessingException.class,
+                () -> ProtocolJson.mapper().readValue("""
+                        {"provider":"enemies","entityId":{"value":7},"property":"health",
+                         "exceptionClass":"java.lang.IllegalStateException","message":"legacy|1|a|b"}""",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class));
+    }
+
+    @Test
+    void legacyProtocolDecodeRejectsBlankOrOversizedExceptionClass() throws Exception {
+        assertThrows(com.fasterxml.jackson.core.JsonProcessingException.class,
+                () -> ProtocolJson.mapper().readValue("""
+                        {"provider":"enemies","entityId":{"value":"bad"},"property":"health",
+                         "exceptionClass":"","message":"legacy|1|a|java.lang.IllegalStateException"}""",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class));
+        assertThrows(com.fasterxml.jackson.core.JsonProcessingException.class,
+                () -> ProtocolJson.mapper().readValue("""
+                        {"provider":"enemies","entityId":{"value":"bad"},"property":"health",
+                         "exceptionClass":"   ","message":"legacy|1|a|java.lang.IllegalStateException"}""",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class));
+        assertThrows(com.fasterxml.jackson.core.JsonProcessingException.class,
+                () -> ProtocolJson.mapper().readValue("""
+                        {"provider":"enemies","entityId":{"value":"bad"},"property":"health",
+                         "exceptionClass":"","message":"token=secret-123"}""",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class));
+        String over = "c".repeat(257);
+        assertThrows(com.fasterxml.jackson.core.JsonProcessingException.class,
+                () -> ProtocolJson.mapper().readValue(
+                        "{\"provider\":\"enemies\",\"entityId\":{\"value\":\"bad\"},"
+                                + "\"property\":\"health\",\"exceptionClass\":\"" + over
+                                + "\",\"message\":\"legacy|1|a|" + over + "\"}",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class));
+    }
+
+    @Test
+    void legacyProtocolDecodeRejectsEnvelopeExceptionClassMismatch() throws Exception {
+        JsonProcessingException mismatch = assertThrows(JsonProcessingException.class,
+                () -> ProtocolJson.mapper().readValue("""
+                        {"provider":"enemies","entityId":{"value":"bad"},"property":"health",
+                         "exceptionClass":"com.example.Other",
+                         "message":"legacy|1|a|com.example.Expected"}""",
+                        CaptureDiagnostic.class));
+        assertNoWireValuesInError(mismatch, "com.example.Expected", "com.example.Other");
+        assertThrows(JsonProcessingException.class,
+                () -> ProtocolJson.mapper().readValue("""
+                        {"provider":"enemies","entityId":{"value":"bad"},"property":"health",
+                         "exceptionClass":"java.lang.IllegalStateException",
+                         "message":"legacy|1|a|java.lang.RuntimeException"}""",
+                        CaptureDiagnostic.class));
+    }
+
+    @Test
+    void legacyProtocolDecodeSanitizesEnvelopeWithOversizedCategory() throws Exception {
+        String category = "c".repeat(ApplicationFailureEvidence.MAX_CATEGORY_LENGTH + 1);
+        assertDecodesToLegacyCapture("raw|" + category + "|secret-tail", "secret-tail", category);
+    }
+
+    @Test
+    void legacyProtocolDecodeSanitizesOtherOutOfBoundsEnvelopes() throws Exception {
+        String longCorrelation = "r".repeat(ApplicationFailureEvidence.MAX_CORRELATION_ID_LENGTH + 1);
+        assertDecodesToLegacyCapture(longCorrelation + "|a|b", longCorrelation);
+        String longClass = "f".repeat(ApplicationFailureEvidence.MAX_EXCEPTION_CLASS_LENGTH + 1);
+        assertDecodesToLegacyCapture("legacy|1|a|" + longClass, longClass);
+        assertDecodesToLegacyCapture("legacy|1|   |java.lang.IllegalStateException");
+    }
+
+    private static void assertDecodesToLegacyCapture(String message, String... absent) throws Exception {
+        String payload = "{\"provider\":\"enemies\",\"entityId\":{\"value\":\"bad\"},"
+                + "\"property\":\"health\",\"exceptionClass\":\"java.lang.IllegalStateException\","
+                + "\"message\":\"" + message + "\"}";
+        ApplicationFailureEvidence failure = ProtocolJson.mapper().readValue(payload,
+                CaptureDiagnostic.class).failure();
+        assertEquals("legacy.capture", failure.category());
+        assertEquals("java.lang.IllegalStateException", failure.exceptionClass());
+        assertTrue(failure.sanitizedDetail().isEmpty());
+        for (String value : absent) {
+            assertFalse(failure.correlationId().contains(value),
+                    "correlation must not retain wire content '" + value + "'");
+            assertFalse(failure.legacyEnvelope().contains(value),
+                    "envelope must not retain wire content '" + value + "'");
+        }
+        ApplicationFailureEvidence again = ProtocolJson.mapper().readValue(payload,
+                CaptureDiagnostic.class).failure();
+        assertEquals(failure.correlationId(), again.correlationId(),
+                "legacy synthesis must be deterministic");
+    }
+
+    private static void assertNoWireValuesInError(JsonProcessingException failure,
+            String... values) {
+        for (Throwable current = failure; current != null; current = current.getCause()) {
+            String message = current.getMessage();
+            if (message != null) {
+                for (String value : values) {
+                    assertFalse(message.contains(value),
+                            "decode error must not echo wire content '" + value + "'");
+                }
+            }
+        }
+    }
+
+    @Test
+    void legacyProtocolDecodeAcceptsBoundaryLengthExceptionClass() throws Exception {
+        String klass = "e".repeat(256);
+        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic decoded =
+                ProtocolJson.mapper().readValue(
+                        "{\"provider\":\"enemies\",\"entityId\":{\"value\":\"bad\"},"
+                                + "\"property\":\"health\",\"exceptionClass\":\"" + klass
+                                + "\",\"message\":\"legacy|1|a|" + klass + "\"}",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class);
+        assertEquals(klass, decoded.failure().exceptionClass());
+        assertEquals("legacy|1|a|" + klass, decoded.failure().legacyEnvelope());
+        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic raw =
+                ProtocolJson.mapper().readValue(
+                        "{\"provider\":\"enemies\",\"entityId\":{\"value\":\"bad\"},"
+                                + "\"property\":\"health\",\"exceptionClass\":\"" + klass
+                                + "\",\"message\":\"token=secret-123\"}",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class);
+        assertEquals(klass, raw.failure().exceptionClass());
+        assertEquals("legacy.capture", raw.failure().category());
+        assertFalse(raw.failure().legacyEnvelope().contains("secret-123"));
+    }
+
+    @Test
+    void legacyProtocolDecodeAcceptsNullOptionals() throws Exception {
+        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic decoded =
+                ProtocolJson.mapper().readValue("""
+                        {"provider":"enemies","entityId":null,"property":null,
+                         "exceptionClass":"java.lang.IllegalStateException",
+                         "message":"legacy|1|a|java.lang.IllegalStateException"}""",
+                        io.github.teemuki8.libgdx.agent.runtime.core.CaptureDiagnostic.class);
+        assertTrue(decoded.entityId().isEmpty());
+        assertTrue(decoded.property().isEmpty());
+        assertEquals("legacy|1|a|java.lang.IllegalStateException",
+                decoded.failure().legacyEnvelope());
+    }
+
+    @Test
+    void legacyProtocolCommandStatusDiagnosticIsEnvelopeOnly() throws Exception {
+        ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("legacy-command"))
+                .captureThread(Thread.currentThread())
+                .clock(() -> 1)
+                .commandDispatcher(applicationQueue::addLast)
+                .build();
+        runtime.start();
+        runtime.commands().orElseThrow().submit("fail-1", 100, () -> {
+            throw new IllegalStateException("token=secret-123 /home/private/save.dat");
+        });
+        applicationQueue.removeFirst().run();
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime)) {
+            RuntimeProtocolService service = new RuntimeProtocolService(registry);
+            RuntimeResponse response = service.execute(new RuntimeRequest(
+                    ProtocolVersion.V1_2, "diag-status", "legacy-command",
+                    new RuntimeCommand.CommandStatus("fail-1")));
+            byte[] encoded = ProtocolJson.encode(response);
+            String json = new String(encoded, StandardCharsets.UTF_8);
+            assertFalse(json.contains("token=secret-123"));
+            assertFalse(json.contains("sanitizedDetail"));
+            assertFalse(json.contains("applicationFailure"));
+            com.fasterxml.jackson.databind.JsonNode status = ProtocolJson.mapper()
+                    .readTree(encoded).path("result").path("command").path("status");
+            assertEquals("legacy-command|failure-1|command.failed"
+                    + "|java.lang.IllegalStateException",
+                    status.get("diagnostic").asText());
+        }
+    }
 
     private static AgentRuntime verticalRuntime() {
         long[] health = {100};

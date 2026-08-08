@@ -93,7 +93,7 @@ final class CommandDispatchTest {
         ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
         AtomicLong clock = new AtomicLong(1);
         CommandDispatch commands = runtime(applicationQueue, clock,
-                new CommandDispatchLimits(1, 1, 1, 1_000, 12)).commands().orElseThrow();
+                new CommandDispatchLimits(1, 1, 1, 1_000, 642)).commands().orElseThrow();
         commands.submit("one", 100, () -> {
             throw new IllegalStateException("sensitive diagnostic detail");
         });
@@ -105,12 +105,117 @@ final class CommandDispatchTest {
 
         CommandStatus failed = commands.status("one").status().orElseThrow();
         assertEquals(CommandState.FAILED, failed.state());
-        assertTrue(failed.diagnostic().orElseThrow().length() <= 12);
+        assertTrue(failed.diagnostic().orElseThrow().length()
+                <= ApplicationFailureEvidence.LEGACY_ENVELOPE_CAPACITY);
+        assertTrue(failed.applicationFailure().isPresent());
+        assertFalse(failed.diagnostic().orElseThrow().contains("sensitive diagnostic detail"));
         assertEquals(CommandLookup.Kind.EXPIRED, commands.status("two").kind());
         commands.submit("three", 100, () -> {});
         applicationQueue.removeFirst().run();
         assertEquals(CommandLookup.Kind.EXPIRED, commands.status("one").kind());
         assertEquals(CommandLookup.Kind.UNKNOWN, commands.status("two").kind());
+    }
+
+    @Test
+    void commandFailureDiagnosticsOmitRawApplicationMessages() {
+        ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
+        CommandDispatch commands = runtime(applicationQueue, new AtomicLong(1),
+                CommandDispatchLimits.developmentDefaults()).commands().orElseThrow();
+        commands.submit("secret-failure", 100, () -> {
+            throw new IllegalStateException("token=secret-123 /home/private/save.dat");
+        });
+
+        applicationQueue.removeFirst().run();
+
+        CommandStatus failed = commands.status("secret-failure").status().orElseThrow();
+        assertEquals(CommandState.FAILED, failed.state());
+        ApplicationFailureEvidence failure = failed.applicationFailure().orElseThrow();
+        assertEquals("command.failed", failure.category());
+        String diagnostic = failed.diagnostic().orElseThrow();
+        assertEquals("game|failure-1|command.failed|java.lang.IllegalStateException", diagnostic);
+        assertFalse(diagnostic.contains("token=secret-123"));
+        assertFalse(diagnostic.contains("/home/private/save.dat"));
+        assertTrue(failure.sanitizedDetail().isEmpty());
+    }
+
+    @Test
+    void commandRunFailuresCorrelateInAcceptanceOrder() {
+        ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
+        CommandDispatch commands = runtime(applicationQueue, new AtomicLong(1),
+                CommandDispatchLimits.developmentDefaults()).commands().orElseThrow();
+        commands.submit("one", 100, () -> {
+            throw new IllegalStateException("first failure");
+        });
+        commands.submit("two", 100, () -> {
+            throw new IllegalStateException("second failure");
+        });
+        commands.submit("three", 100, () -> {
+            throw new IllegalStateException("third failure");
+        });
+        applicationQueue.removeFirst().run();
+        applicationQueue.removeFirst().run();
+        applicationQueue.removeFirst().run();
+
+        assertEquals("game|failure-1|command.failed|java.lang.IllegalStateException",
+                commands.status("one").status().orElseThrow().diagnostic().orElseThrow());
+        assertEquals("game|failure-2|command.failed|java.lang.IllegalStateException",
+                commands.status("two").status().orElseThrow().diagnostic().orElseThrow());
+        assertEquals("game|failure-3|command.failed|java.lang.IllegalStateException",
+                commands.status("three").status().orElseThrow().diagnostic().orElseThrow());
+    }
+
+    @Test
+    void sanitizerDetailAppearsInCommandFailureDiagnostics() {
+        ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("command-sanitized"))
+                .captureThread(Thread.currentThread())
+                .clock(() -> 1)
+                .commandDispatcher(applicationQueue::addLast)
+                .applicationFailureSanitizer((context, failure) ->
+                        Optional.of("safe-detail"))
+                .build();
+        CommandDispatch commands = runtime.commands().orElseThrow();
+        commands.submit("safe-failure", 100, () -> {
+            throw new IllegalStateException("token=secret-123");
+        });
+
+        applicationQueue.removeFirst().run();
+
+        CommandStatus failed = commands.status("safe-failure").status().orElseThrow();
+        assertEquals(Optional.of("safe-detail"),
+                failed.applicationFailure().orElseThrow().sanitizedDetail());
+        String diagnostic = failed.diagnostic().orElseThrow();
+        assertTrue(diagnostic.contains("command-sanitized|failure-1|command.failed"));
+        assertFalse(diagnostic.contains("safe-detail"));
+        assertFalse(diagnostic.contains("token=secret-123"));
+    }
+
+    @Test
+    void dispatchRejectionCorrelationsFollowDeterministicAcceptanceOrder() {
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("dispatch-correlation-order"))
+                .captureThread(Thread.currentThread())
+                .clock(() -> 1)
+                .commandDispatcher(task -> {
+                    throw new IllegalStateException("dispatcher token=secret-123");
+                })
+                .build();
+        CommandDispatch commands = runtime.commands().orElseThrow();
+        commands.submit("one", 100, () -> {});
+        commands.submit("two", 100, () -> {});
+        commands.submit("three", 100, () -> {});
+
+        String first = commands.status("one").status().orElseThrow().diagnostic().orElseThrow();
+        String second = commands.status("two").status().orElseThrow().diagnostic().orElseThrow();
+        String third = commands.status("three").status().orElseThrow().diagnostic().orElseThrow();
+        assertEquals("dispatch-correlation-order|failure-1|command.dispatch.rejected"
+                + "|java.lang.IllegalStateException", first);
+        assertEquals("dispatch-correlation-order|failure-2|command.dispatch.rejected"
+                + "|java.lang.IllegalStateException", second);
+        assertEquals("dispatch-correlation-order|failure-3|command.dispatch.rejected"
+                + "|java.lang.IllegalStateException", third);
+        assertFalse(first.contains("dispatcher token=secret-123"));
     }
 
     @Test
@@ -126,7 +231,7 @@ final class CommandDispatchTest {
     void cancelledApplicationQueueEntryRetainsItsBoundedSlotUntilDrained() {
         ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
         CommandDispatch commands = runtime(applicationQueue, new AtomicLong(1),
-                new CommandDispatchLimits(1, 2, 2, 1_000, 100)).commands().orElseThrow();
+                new CommandDispatchLimits(1, 2, 2, 1_000, 642)).commands().orElseThrow();
         commands.submit("one", 100, () -> {});
         assertTrue(commands.cancel("one").accepted());
 
@@ -184,7 +289,7 @@ final class CommandDispatchTest {
     void rejectsDeadlinesBeyondConfiguredMaximum() {
         ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
         CommandDispatch commands = runtime(applicationQueue, new AtomicLong(10),
-                new CommandDispatchLimits(1, 2, 2, 100, 100)).commands().orElseThrow();
+                new CommandDispatchLimits(1, 2, 2, 100, 642)).commands().orElseThrow();
 
         assertThrows(IllegalArgumentException.class,
                 () -> commands.submit("relative", Duration.ofDays(1), () -> {}));
@@ -197,15 +302,15 @@ final class CommandDispatchTest {
     void publicCommandResultsRejectInconsistentLifecycleEvidence() {
         CommandStatus succeeded = new CommandStatus(
                 "done", CommandState.SUCCEEDED, 1, 10,
-                Optional.of(2L), Optional.of(3L), true, Optional.empty());
+                Optional.of(2L), Optional.of(3L), true, Optional.empty(), Optional.empty());
         assertThrows(IllegalArgumentException.class, () -> new CommandCancellation(
                 true, new CommandLookup(CommandLookup.Kind.FOUND, Optional.of(succeeded))));
         assertThrows(IllegalArgumentException.class, () -> new CommandStatus(
                 "queued", CommandState.QUEUED, 1, 10,
-                Optional.of(2L), Optional.empty(), false, Optional.empty()));
+                Optional.of(2L), Optional.empty(), false, Optional.empty(), Optional.empty()));
         assertThrows(IllegalArgumentException.class, () -> new CommandStatus(
                 "unknown-timeout", CommandState.TIMED_OUT, 1, 10,
-                Optional.empty(), Optional.empty(), false, Optional.empty()));
+                Optional.empty(), Optional.empty(), false, Optional.empty(), Optional.empty()));
     }
 
     @Test

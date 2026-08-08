@@ -21,7 +21,7 @@ final class CheckpointRegistryTest {
                 .sessionId(SessionId.of("checkpoints"))
                 .clock(() -> 1)
                 .commandDispatcher(dispatch::addLast)
-                .checkpointLimits(new CheckpointLimits(1, 8, 64))
+                .checkpointLimits(new CheckpointLimits(1, 8, 642))
                 .build();
         runtime.entities().register(EntityId.of("state"), EntityType.of("fixture"),
                 () -> "State", inspector -> inspector.property("value", () -> state[0]));
@@ -111,7 +111,89 @@ final class CheckpointRegistryTest {
         assertTrue(failed.applicationStateMayBePartiallyChanged());
         assertTrue(failed.baselineFrameId().isEmpty());
         assertEquals(new ExecutionEpochId(0), runtime.currentEpoch());
-        assertTrue(failed.diagnostic().orElseThrow().contains("restore failed"));
+        ApplicationFailureEvidence failure = failed.applicationFailure().orElseThrow();
+        assertEquals("checkpoint.restore", failure.category());
+        String diagnostic = failed.diagnostic().orElseThrow();
+        assertEquals(failure.legacyEnvelope(), diagnostic);
+        assertTrue(diagnostic.startsWith("failed-checkpoint|failure-"));
+        assertTrue(diagnostic.endsWith("|checkpoint.restore|java.lang.IllegalStateException"));
+        assertFalse(diagnostic.contains("restore failed"));
+    }
+
+    @Test
+    void failedCheckpointEvidenceOmitsRawApplicationMessages() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("checkpoint-leak"))
+                .clock(() -> 1)
+                .commandDispatcher(dispatch::addLast)
+                .build();
+        runtime.checkpoints().register(new CheckpointProvider() {
+            @Override
+            public CheckpointHandle create() {
+                throw new IllegalStateException("token=secret-123 /home/private/save.dat");
+            }
+
+            @Override
+            public void restore(CheckpointHandle handle) {}
+
+            @Override
+            public void dispose(CheckpointHandle handle) {}
+        });
+        runtime.start();
+        runtime.checkpoints().create("save", null, "create", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+
+        CheckpointOperation failed = runtime.checkpoints().create(
+                "save", null, "create", Duration.ofSeconds(1));
+        assertEquals(CommandState.FAILED, failed.command().status().orElseThrow().state());
+        ApplicationFailureEvidence failure = failed.applicationFailure().orElseThrow();
+        assertEquals("checkpoint.create", failure.category());
+        String diagnostic = failed.diagnostic().orElseThrow();
+        assertEquals(failure.legacyEnvelope(), diagnostic);
+        assertTrue(diagnostic.startsWith("checkpoint-leak|failure-"));
+        assertTrue(diagnostic.endsWith("|checkpoint.create|java.lang.IllegalStateException"));
+        assertFalse(diagnostic.contains("token=secret-123"));
+        assertFalse(diagnostic.contains("/home/private/save.dat"));
+        assertTrue(failure.sanitizedDetail().isEmpty());
+        assertEquals(failure.correlationId(), failed.command().status().orElseThrow()
+                .applicationFailure().orElseThrow().correlationId(),
+                "feature failure must reuse the admitted command correlation");
+    }
+
+    @Test
+    void checkpointDiagnosticRespectsDescriptionLength() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("checkpoint-bound"))
+                .clock(() -> 1)
+                .commandDispatcher(dispatch::addLast)
+                .checkpointLimits(new CheckpointLimits(1, 8, 642))
+                .build();
+        runtime.checkpoints().register(new CheckpointProvider() {
+            @Override
+            public CheckpointHandle create() {
+                throw new IllegalStateException("token=secret-123 /home/private/save.dat");
+            }
+
+            @Override
+            public void restore(CheckpointHandle handle) {}
+
+            @Override
+            public void dispose(CheckpointHandle handle) {}
+        });
+        runtime.start();
+        runtime.checkpoints().create("save", null, "create", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+
+        CheckpointOperation failed = runtime.checkpoints().create(
+                "save", null, "create", Duration.ofSeconds(1));
+        String diagnostic = failed.diagnostic().orElseThrow();
+        assertTrue(diagnostic.length() <= 642);
+        assertTrue(diagnostic.startsWith("checkpoint-bound|failure-"));
+        assertTrue(diagnostic.endsWith("|checkpoint.create|java.lang.IllegalStateException"));
+        assertFalse(diagnostic.contains("token=secret-123"));
+        assertFalse(diagnostic.contains("/home/private/save.dat"));
     }
 
     @Test
@@ -121,7 +203,7 @@ final class CheckpointRegistryTest {
                 .sessionId(SessionId.of("failed-disposal"))
                 .clock(() -> 1)
                 .commandDispatcher(dispatch::addLast)
-                .checkpointLimits(new CheckpointLimits(1, 8, 64))
+                .checkpointLimits(new CheckpointLimits(1, 8, 642))
                 .build();
         runtime.checkpoints().register(new CheckpointProvider() {
             @Override public CheckpointHandle create() {

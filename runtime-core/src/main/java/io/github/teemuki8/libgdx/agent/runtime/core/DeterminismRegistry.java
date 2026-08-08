@@ -67,7 +67,8 @@ public final class DeterminismRegistry {
         long executionNanos = Math.min(timeoutNanos, limits.maximumExecutionNanos());
         long deadline = deadline(executionNanos);
         CommandLookup lookup = dispatch.submit(requestId, timeout, () ->
-                retained.result = Optional.of(execute(spec, deadline, executionNanos)));
+                retained.result = Optional.of(
+                        execute(spec, deadline, executionNanos, requestId)));
         return snapshot(requestId, retained, lookup);
     }
 
@@ -77,7 +78,7 @@ public final class DeterminismRegistry {
     }
 
     private DeterminismResult execute(
-            DeterminismSpec spec, long deadline, long executionNanos) {
+            DeterminismSpec spec, long deadline, long executionNanos, String requestId) {
         ArrayList<RunEvidence> runs = new ArrayList<>();
         Counters counters = new Counters();
         boolean previouslyPaused;
@@ -85,7 +86,7 @@ public final class DeterminismRegistry {
             previouslyPaused = runtime.controls().pauseForDeterminism();
         } catch (RuntimeException | Error failure) {
             return inconclusive(spec, counters, executionNanos,
-                    "simulation pause failed: " + diagnostic(failure));
+                    failureEvidence(requestId, "determinism.pause", failure));
         }
         long uiEvictions = runtime.uiCorrelations().evictedFrameCount();
         try {
@@ -123,7 +124,7 @@ public final class DeterminismRegistry {
             return compare(spec, runs, counters, executionNanos);
         } catch (RuntimeException | Error failure) {
             return inconclusive(spec, counters, executionNanos,
-                    "scenario reset or tick failed: " + diagnostic(failure));
+                    failureEvidence(requestId, "determinism.execute", failure));
         } finally {
             runtime.controls().restorePauseAfterDeterminism(previouslyPaused);
         }
@@ -185,14 +186,14 @@ public final class DeterminismRegistry {
                             spec.profile(), OptionalInt.of(tick), Optional.of(reference.epoch),
                             Optional.of(candidate.epoch), Optional.of(left.frameId),
                             Optional.of(right.frameId), difference,
-                            bounds(spec, counters, executionNanos));
+                            bounds(spec, counters, executionNanos), Optional.empty());
                 }
             }
         }
         return new DeterminismResult(
                 DeterminismStatus.EQUAL, EQUAL_MESSAGE, spec.profile(), OptionalInt.empty(),
                 Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(),
-                Optional.empty(), bounds(spec, counters, executionNanos));
+                Optional.empty(), bounds(spec, counters, executionNanos), Optional.empty());
     }
 
     private Optional<DeterminismDifference> difference(FrameEvidence left, FrameEvidence right) {
@@ -300,18 +301,31 @@ public final class DeterminismRegistry {
 
     private DeterminismResult inconclusive(DeterminismSpec spec, Counters counters,
             long executionNanos, String message) {
+        return inconclusive(spec, counters, executionNanos, message, Optional.empty());
+    }
+
+    private DeterminismResult inconclusive(DeterminismSpec spec, Counters counters,
+            long executionNanos, ApplicationFailureEvidence failure) {
+        return inconclusive(spec, counters, executionNanos,
+                failure.legacyEnvelope(), Optional.of(failure));
+    }
+
+    private DeterminismResult inconclusive(DeterminismSpec spec, Counters counters,
+            long executionNanos, String message,
+            Optional<ApplicationFailureEvidence> applicationFailure) {
         return new DeterminismResult(
                 DeterminismStatus.INCONCLUSIVE, message, spec.profile(), OptionalInt.empty(),
                 Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(),
-                Optional.empty(), bounds(spec, counters, executionNanos));
+                Optional.empty(), bounds(spec, counters, executionNanos), applicationFailure);
     }
 
-    private static String diagnostic(Throwable failure) {
-        String message = failure.getMessage();
-        if (message == null || message.isBlank()) {
-            return failure.getClass().getSimpleName();
-        }
-        return message.length() <= 384 ? message : message.substring(0, 384);
+    private ApplicationFailureEvidence failureEvidence(
+            String requestId, String category, Throwable failure) {
+        Optional<String> correlationId =
+                runtime.commands().orElseThrow().correlationId(requestId);
+        return correlationId.isPresent()
+                ? runtime.diagnostics().describe(category, failure, correlationId.orElseThrow())
+                : runtime.diagnostics().describe(category, failure);
     }
 
     private DeterminismBounds bounds(
@@ -352,7 +366,8 @@ public final class DeterminismRegistry {
                 spec.profile(), OptionalInt.empty(), Optional.empty(), Optional.empty(),
                 Optional.empty(), Optional.empty(), Optional.empty(),
                 new DeterminismBounds(
-                        0, spec.ticksPerRepeat(), 0, 0, 0, limits.maximumExecutionNanos()));
+                        0, spec.ticksPerRepeat(), 0, 0, 0, limits.maximumExecutionNanos()),
+                Optional.empty());
         return new DeterminismOperation(spec, requestId, lookup, Optional.of(result));
     }
 

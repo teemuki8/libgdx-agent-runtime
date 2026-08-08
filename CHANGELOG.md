@@ -12,6 +12,32 @@ All notable changes follow Keep a Changelog structure.
   one-correlation-per-frame recording, token pairing, and the `ui_runtime_compare` loop-order
   requirement; document the token contract on the `UiFrameCorrelation` Javadoc (#38).
 
+### Security
+
+- Application callback failures expose structured `ApplicationFailureEvidence` (stable category,
+  exception class, session-prefixed correlation identifier such as
+  `sessionId|failure-N`, optional sanitized detail) instead of raw exception messages or stack
+  traces. Protocol 1.0-1.13 responses keep their exact legacy wire fields and render only the
+  642-character envelope (`correlationId|category|exceptionClass`); sanitized detail is bounded at
+  1_024 code units, appears only in the structured field, and a throwing sanitizer fails closed
+  with raw throwables routed to non-stdout local logging only (#50).
+
+### Compatibility notes (2.0)
+
+- Breaking: `CaptureDiagnostic` replaces its `exceptionClass` and `message` components with one
+  `ApplicationFailureEvidence failure` component (`exceptionClass()` becomes
+  `failure().exceptionClass()`, `message()` becomes `failure().legacyEnvelope()`).
+- Breaking: `CommandStatus`, `CheckpointOperation`, `InputInjection`, and `DeterminismResult` gain
+  an `Optional<ApplicationFailureEvidence> applicationFailure` final component while retaining
+  their `diagnostic`/`message` fields, which hold the 642-character legacy envelope for callback
+  failures and their previous text for safe runtime-owned reasons.
+- Breaking: the four diagnostic-text limits (`RuntimeLimits.stringLength`,
+  `CommandDispatchLimits.diagnosticLength`, `CheckpointLimits.descriptionLength`,
+  `InputLimits.stringLength`) now require a 642-character minimum;
+  `CommandDispatchLimits.developmentDefaults()` and `CheckpointLimits.developmentDefaults()`
+  raise their diagnostic bounds from 512 to 1_024.
+- Breaking: determinism callback-failure messages are the bare legacy envelope with no prefix.
+
 ## [1.0.0] - 2026-08-04
 
 First production-supported release and stable 1.x compatibility baseline.

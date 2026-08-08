@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
+import io.github.teemuki8.libgdx.agent.runtime.core.ApplicationFailureEvidence;
 import io.github.teemuki8.libgdx.agent.runtime.core.CommandState;
 import io.github.teemuki8.libgdx.agent.runtime.core.CommandDispatchLimits;
 import io.github.teemuki8.libgdx.agent.runtime.core.BaselineKind;
@@ -564,7 +565,8 @@ final class FixtureProtocolAndMcpTest {
         ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
         DeterministicSimulation simulation = new DeterministicSimulation();
         CommandDispatchLimits limits = new CommandDispatchLimits(
-                8, 1, 4, Duration.ofSeconds(1).toNanos(), 128);
+                8, 1, 4, Duration.ofSeconds(1).toNanos(),
+                ApplicationFailureEvidence.LEGACY_ENVELOPE_CAPACITY);
         AgentRuntime runtime = simulation.startRuntime(applicationQueue::addLast, limits);
         RuntimeRegistry registry = new RuntimeRegistry();
         try (PublishedRuntime publication = registry.publish(runtime);
@@ -583,8 +585,19 @@ final class FixtureProtocolAndMcpTest {
                             "commandRequestId", "fixture-failure")))
                     .block(Duration.ofSeconds(5));
             assertFalse(failed.isError());
-            assertTrue(failed.structuredContent().toString().contains("FAILED"));
-            assertTrue(failed.structuredContent().toString().contains("command failed"));
+            Map<?, ?> failedContent = assertInstanceOf(Map.class, failed.structuredContent());
+            Map<?, ?> failedCommand = assertInstanceOf(Map.class, failedContent.get("command"));
+            Map<?, ?> failedStatus = assertInstanceOf(Map.class, failedCommand.get("status"));
+            assertEquals(CommandState.FAILED.name(), failedStatus.get("state"));
+            assertEquals("deterministic-fixture|failure-1|command.failed"
+                    + "|java.lang.IllegalStateException", failedStatus.get("diagnostic"));
+            String failedJson;
+            try {
+                failedJson = ProtocolJson.mapper().writeValueAsString(failed.structuredContent());
+            } catch (com.fasterxml.jackson.core.JsonProcessingException serializationFailure) {
+                throw new AssertionError("structured content must serialize", serializationFailure);
+            }
+            assertFalse(failedJson.contains("fixture callback rejected"), failedJson);
 
             runtime.commands().orElseThrow().submit("fixture-timeout", 0, () -> {});
             McpSchema.CallToolResult timedOut = handler.handle(call(

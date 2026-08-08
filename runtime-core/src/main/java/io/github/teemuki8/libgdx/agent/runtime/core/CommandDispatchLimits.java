@@ -25,12 +25,16 @@ public record CommandDispatchLimits(
                     + MAXIMUM_TIMEOUT_NANOS);
         }
         requireBound(diagnosticLength, MAX_DIAGNOSTIC_LENGTH, "diagnosticLength");
+        if (diagnosticLength < ApplicationFailureEvidence.LEGACY_ENVELOPE_CAPACITY) {
+            throw new IllegalArgumentException("diagnosticLength must be at least "
+                    + ApplicationFailureEvidence.LEGACY_ENVELOPE_CAPACITY);
+        }
     }
 
     /** Conservative development defaults. */
     public static CommandDispatchLimits developmentDefaults() {
         return new CommandDispatchLimits(
-                256, 1_000, 1_000, Duration.ofSeconds(30).toNanos(), 512);
+                256, 1_000, 1_000, Duration.ofSeconds(30).toNanos(), 1_024);
     }
 
     private static void requireBound(int value, int maximum, String name) {

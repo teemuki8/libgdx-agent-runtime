@@ -13,6 +13,10 @@ public record InputLimits(int registeredInputs, int parametersPerInput, int queu
                 || stringLength <= 0 || stringLength > 16_384) {
             throw new IllegalArgumentException("input limit is outside the supported range");
         }
+        if (stringLength < ApplicationFailureEvidence.LEGACY_ENVELOPE_CAPACITY) {
+            throw new IllegalArgumentException("stringLength must be at least "
+                    + ApplicationFailureEvidence.LEGACY_ENVELOPE_CAPACITY);
+        }
     }
 
     /** Returns conservative development defaults. */

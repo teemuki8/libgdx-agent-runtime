@@ -127,7 +127,7 @@ public final class CheckpointRegistry {
         if (evidence.request.kind() == CheckpointOperation.Kind.CREATE) {
             executeCreate(requestId, evidence, callbacks);
         } else {
-            executeRestore(evidence, callbacks);
+            executeRestore(requestId, evidence, callbacks);
         }
     }
 
@@ -153,14 +153,18 @@ public final class CheckpointRegistry {
                 evidence.descriptor = descriptor;
             }
         } catch (RuntimeException | Error failure) {
+            ApplicationFailureEvidence failureEvidence = describeFailure(
+                    requestId, "checkpoint.create", failure);
             synchronized (this) {
-                evidence.diagnostic = diagnostic(failure);
+                evidence.diagnostic = failureEvidence.legacyEnvelope();
+                evidence.applicationFailure = Optional.of(failureEvidence);
             }
             throw failure;
         }
     }
 
-    private void executeRestore(Evidence evidence, CheckpointProvider callbacks) {
+    private void executeRestore(
+            String requestId, Evidence evidence, CheckpointProvider callbacks) {
         Retained retained;
         synchronized (this) {
             retained = checkpoints.get(evidence.request.checkpointId());
@@ -180,8 +184,11 @@ public final class CheckpointRegistry {
                 evidence.partial = false;
             }
         } catch (RuntimeException | Error failure) {
+            ApplicationFailureEvidence failureEvidence = describeFailure(
+                    requestId, "checkpoint.restore", failure);
             synchronized (this) {
-                evidence.diagnostic = diagnostic(failure);
+                evidence.diagnostic = failureEvidence.legacyEnvelope();
+                evidence.applicationFailure = Optional.of(failureEvidence);
             }
             throw failure;
         }
@@ -198,7 +205,7 @@ public final class CheckpointRegistry {
                     Optional.ofNullable(evidence.descriptor),
                     Optional.ofNullable(evidence.baselineEpoch),
                     Optional.ofNullable(evidence.baselineFrame), evidence.partial,
-                    Optional.ofNullable(evidence.diagnostic));
+                    Optional.ofNullable(evidence.diagnostic), evidence.applicationFailure);
         }
     }
 
@@ -255,12 +262,13 @@ public final class CheckpointRegistry {
         };
     }
 
-    private String diagnostic(Throwable failure) {
-        String message = failure.getMessage();
-        String value = failure.getClass().getSimpleName()
-                + (message == null || message.isBlank() ? "" : ": " + message);
-        return value.length() <= limits.descriptionLength()
-                ? value : value.substring(0, limits.descriptionLength());
+    private ApplicationFailureEvidence describeFailure(
+            String requestId, String category, Throwable failure) {
+        Optional<String> correlationId =
+                runtime.commands().orElseThrow().correlationId(requestId);
+        return correlationId.isPresent()
+                ? runtime.diagnostics().describe(category, failure, correlationId.orElseThrow())
+                : runtime.diagnostics().describe(category, failure);
     }
 
     private static void requireValidTimeout(Duration timeout, long maximumNanos) {
@@ -287,6 +295,7 @@ public final class CheckpointRegistry {
         private FrameId baselineFrame;
         private boolean partial;
         private String diagnostic;
+        private Optional<ApplicationFailureEvidence> applicationFailure = Optional.empty();
 
         private Evidence(Request request) {
             this.request = request;

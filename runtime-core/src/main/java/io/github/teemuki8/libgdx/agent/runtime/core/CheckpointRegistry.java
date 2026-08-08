@@ -15,7 +15,7 @@ public final class CheckpointRegistry {
     private final LinkedHashMap<String, Request> requests = new LinkedHashMap<>();
     private final LinkedHashMap<String, Evidence> operations = new LinkedHashMap<>();
     private CheckpointProvider provider;
-    private Runnable stagingFault;
+    private Throwable stagingFailure;
 
     CheckpointRegistry(AgentRuntime runtime, CheckpointLimits limits) {
         this.runtime = runtime;
@@ -171,7 +171,9 @@ public final class CheckpointRegistry {
                 }
                 stagedCheckpoints.put(descriptor.id(), new Retained(descriptor, handle));
                 stagedCatalog.put(descriptor.id(), descriptor);
-                runStagingFault();
+                // Only inert work remains before publication: throw the one-shot injected
+                // failure unchanged, then assign both staged references.
+                throwStagingFailure();
                 // Publish both maps with non-throwing reference assignments; the staged
                 // LinkedHashMaps preserve creation order and retention bounds.
                 checkpoints = stagedCheckpoints;
@@ -272,7 +274,7 @@ public final class CheckpointRegistry {
         checkpoints.clear();
         requests.clear();
         operations.clear();
-        stagingFault = null;
+        stagingFailure = null;
         provider = null;
         if (firstFailure instanceof RuntimeException failure) {
             throw failure;
@@ -283,23 +285,32 @@ public final class CheckpointRegistry {
     }
 
     /**
-     * Package-private fault-injection seam for failure-atomicity tests: arranges for one
-     * fault to run after the replacement snapshots are staged and before they are published.
+     * Package-private fault-injection seam for failure-atomicity tests: the exact failure is
+     * thrown, unmodified, after the replacement snapshots are staged and before they are
+     * published. The failure is inert — no user code ever runs at publication.
      */
-    synchronized void injectStagingFault(Runnable fault) {
-        stagingFault = Objects.requireNonNull(fault, "fault");
+    synchronized void injectStagingFault(Error fault) {
+        stagingFailure = Objects.requireNonNull(fault, "fault");
     }
 
-    /** Package-private close observation: whether a staging fault is currently injected. */
-    synchronized boolean hasStagingFault() {
-        return stagingFault != null;
+    /** Package-private fault-injection seam for failure-atomicity tests; see the Error overload. */
+    synchronized void injectStagingFault(RuntimeException fault) {
+        stagingFailure = Objects.requireNonNull(fault, "fault");
     }
 
-    private void runStagingFault() {
-        Runnable fault = stagingFault;
-        stagingFault = null;
-        if (fault != null) {
-            fault.run();
+    /** Package-private close observation: whether a staging failure is currently injected. */
+    synchronized boolean hasStagingFailure() {
+        return stagingFailure != null;
+    }
+
+    private void throwStagingFailure() {
+        Throwable failure = stagingFailure;
+        stagingFailure = null;
+        if (failure instanceof RuntimeException runtimeFailure) {
+            throw runtimeFailure;
+        }
+        if (failure != null) {
+            throw (Error) failure;
         }
     }
 

@@ -230,9 +230,7 @@ final class CheckpointRegistryTest {
         runtime.checkpoints().create("first", null, "create-first", Duration.ofSeconds(1));
         dispatch.removeFirst().run();
 
-        runtime.checkpoints().injectStagingFault(() -> {
-            throw new AssertionError("staging fault sentinel");
-        });
+        runtime.checkpoints().injectStagingFault(new AssertionError("staging fault sentinel"));
         runtime.checkpoints().create("second", null, "create-second", Duration.ofSeconds(1));
         dispatch.removeFirst().run();
         CheckpointOperation failed = runtime.checkpoints().create(
@@ -338,11 +336,10 @@ final class CheckpointRegistryTest {
             public CheckpointHandle create() {
                 if (++calls == 2) {
                     dispatch.removeFirst().run();
-                    // Arm the publication fault only after the nested create committed, so the
-                    // outer publication is the one that fails.
-                    runtime.checkpoints().injectStagingFault(() -> {
-                        throw new AssertionError("staging fault sentinel");
-                    });
+                    // Arm the publication failure only after the nested create committed, so the
+                    // outer publication is the one that throws it.
+                    runtime.checkpoints().injectStagingFault(
+                            new AssertionError("staging fault sentinel"));
                 }
                 return new StateHandle(created.incrementAndGet());
             }
@@ -406,14 +403,12 @@ final class CheckpointRegistryTest {
             public void dispose(CheckpointHandle handle) {}
         });
         runtime.start();
-        assertFalse(runtime.checkpoints().hasStagingFault());
-        runtime.checkpoints().injectStagingFault(() -> {
-            throw new AssertionError("sentinel");
-        });
-        assertTrue(runtime.checkpoints().hasStagingFault());
+        assertFalse(runtime.checkpoints().hasStagingFailure());
+        runtime.checkpoints().injectStagingFault(new AssertionError("sentinel"));
+        assertTrue(runtime.checkpoints().hasStagingFailure());
         runtime.close();
-        assertFalse(runtime.checkpoints().hasStagingFault(),
-                "close must drop the injected staging fault callback");
+        assertFalse(runtime.checkpoints().hasStagingFailure(),
+                "close must drop the injected staging failure");
     }
 
     @Test

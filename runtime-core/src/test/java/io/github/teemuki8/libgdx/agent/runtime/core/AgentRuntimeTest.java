@@ -16,6 +16,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
@@ -526,27 +527,41 @@ final class AgentRuntimeTest {
         CountDownLatch go = new CountDownLatch(1);
         CountDownLatch polling = new CountDownLatch(1);
         CountDownLatch observed = new CountDownLatch(1);
-        Thread.ofVirtual().start(() -> {
+        AtomicReference<RuntimeStatus> observedStatus = new AtomicReference<>();
+        AtomicReference<Throwable> readerFailure = new AtomicReference<>();
+        Thread reader = Thread.ofVirtual().start(() -> {
             try {
                 go.await();
-                while (runtime.status() == prior) {
+                while (runtime.status() == prior && !Thread.currentThread().isInterrupted()) {
                     polling.countDown();
                     Thread.onSpinWait();
                 }
+                observedStatus.set(runtime.status());
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                throw new AssertionError("visibility reader interrupted", e);
+            } catch (Throwable failure) {
+                readerFailure.set(failure);
             } finally {
                 observed.countDown();
             }
         });
-        go.countDown();
-        assertTrue(polling.await(10, TimeUnit.SECONDS),
-                "reader must poll before the transition runs");
-        transition.run();
-        assertTrue(observed.await(10, TimeUnit.SECONDS),
-                "reader must observe " + expected + " (stale lifecycle status race)");
-        assertEquals(expected, runtime.status());
+        try {
+            go.countDown();
+            assertTrue(polling.await(5, TimeUnit.SECONDS),
+                    "reader must poll before the transition runs");
+            transition.run();
+            assertTrue(observed.await(5, TimeUnit.SECONDS),
+                    "reader must observe " + expected + " (stale lifecycle status race)");
+            assertEquals(expected, observedStatus.get());
+            assertEquals(expected, runtime.status());
+        } finally {
+            reader.interrupt();
+            reader.join();
+            Throwable failure = readerFailure.get();
+            if (failure != null) {
+                throw new AssertionError("visibility reader failed", failure);
+            }
+        }
     }
 
     @Test

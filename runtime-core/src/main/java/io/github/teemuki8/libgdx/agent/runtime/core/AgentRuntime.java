@@ -401,8 +401,9 @@ public final class AgentRuntime implements AutoCloseable {
      * <p>Once the frame has staged {@link FrameStagingLimits#causesPerFrame()} causes, further
      * causes are dropped at insertion: the entity and property keys are still validated and the
      * saturating observed count advances, but the cause value is never retained or copied and
-     * cannot attribute a difference. The frame snapshot reports {@code frame.causes} truncation
-     * evidence when the observed count exceeds the retained map.
+     * cannot attribute a difference. A duplicate key for a retained cause still throws without
+     * advancing the observed count, and invalid keys never count. The frame snapshot reports
+     * {@code frame.causes} truncation evidence when the observed count exceeds the retained map.
      */
     public void causeNextChange(EntityId entityId, String property, ChangeCause cause) {
         if (!configuration.enabled()) {
@@ -412,13 +413,14 @@ public final class AgentRuntime implements AutoCloseable {
         requireOpenFrame("change causes may only be supplied inside a frame");
         ChangeKey key = new ChangeKey(Objects.requireNonNull(entityId, "entityId"),
                 IdentifierSupport.validate(property, "property"));
-        observedCauses = saturatedAdd(observedCauses, 1);
         if (pendingCauses.size() >= frameStagingLimits.causesPerFrame()) {
+            observedCauses = saturatedAdd(observedCauses, 1);
             return;
         }
         if (pendingCauses.putIfAbsent(key, Objects.requireNonNull(cause, "cause")) != null) {
             throw lifecycle("a cause is already registered for " + entityId.value() + "." + property);
         }
+        observedCauses = saturatedAdd(observedCauses, 1);
     }
 
     /** Returns the latest completed frame. */

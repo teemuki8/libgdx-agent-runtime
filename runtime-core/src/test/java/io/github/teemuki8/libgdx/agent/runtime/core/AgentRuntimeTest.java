@@ -958,6 +958,26 @@ final class AgentRuntimeTest {
     }
 
     @Test
+    void duplicateCausesDoNotAdvanceObservedCount() {
+        RuntimeLimits limits = new RuntimeLimits(10, 10, 10, 10, 10, 10, 10, 642, 10, 5, 100);
+        AgentRuntime runtime = runtime(limits, new FrameStagingLimits(2));
+        runtime.start();
+        runtime.frame(1, () -> {
+            runtime.causeNextChange(EntityId.of("enemy"), "p0", ChangeCause.semantic("first"));
+            assertThrows(AgentRuntimeException.class,
+                    () -> runtime.causeNextChange(EntityId.of("enemy"), "p0",
+                            ChangeCause.semantic("second")));
+            runtime.causeNextChange(EntityId.of("enemy"), "p1", ChangeCause.semantic("third"));
+            assertEquals(2, runtime.stagedCauseCount());
+            runtime.causeNextChange(EntityId.of("enemy"), "p2", ChangeCause.semantic("overflow"));
+            assertEquals(2, runtime.stagedCauseCount());
+        });
+
+        FrameSnapshot frame = runtime.latestFrame().orElseThrow();
+        assertTruncation(truncation(frame, "frame.causes"), 3, 2, 2);
+    }
+
+    @Test
     void frameStagingLimitsRejectNonPositiveCausesPerFrame() {
         assertThrows(IllegalArgumentException.class, () -> new FrameStagingLimits(0));
         assertThrows(IllegalArgumentException.class, () -> new FrameStagingLimits(-1));

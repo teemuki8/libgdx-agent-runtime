@@ -16,6 +16,7 @@ import com.badlogic.gdx.physics.box2d.PolygonShape;
 import com.badlogic.gdx.physics.box2d.World;
 import com.badlogic.gdx.utils.GdxNativesLoader;
 import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dAdapterLimits;
+import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dAssertions;
 import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dContactLimits;
 import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dContactPolicy;
 import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dContacts;
@@ -23,12 +24,17 @@ import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dInspection;
 import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dUnitTransform;
 import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dWorldSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
+import io.github.teemuki8.libgdx.agent.runtime.core.AssertionStatus;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntitySnapshot;
 import io.github.teemuki8.libgdx.agent.runtime.core.FrameId;
+import io.github.teemuki8.libgdx.agent.runtime.core.ExecutionEpochId;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import io.github.teemuki8.libgdx.agent.runtime.core.SessionId;
+import io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertionResult;
+import io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertionScope;
+import io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertionSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationTimelineSpec;
 import io.github.teemuki8.libgdx.agent.runtime.mcp.RuntimeToolHandler;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.ProtocolVersion;
@@ -113,6 +119,29 @@ final class Box2dInspectionFixtureTest {
                         .flatMap(frame -> frame.events().stream())
                         .anyMatch(event -> event.type().value().equals("box2d.contact.begin")));
 
+                Box2dAssertions.ContactEndpoint ballEndpoint =
+                        new Box2dAssertions.ContactEndpoint("ball", "ball-shape", 0);
+                Box2dAssertions.ContactEndpoint groundEndpoint =
+                        new Box2dAssertions.ContactEndpoint("ground", "ground-shape", 0);
+                SimulationAssertionSpec contactOccurred = Box2dAssertions.contactOccurred(
+                        "main", ballEndpoint, groundEndpoint);
+                SimulationAssertionScope contactScope = new SimulationAssertionScope(
+                        new ExecutionEpochId(0), 1, 3, 8);
+                SimulationAssertionResult directAssertion = runtime.assertions()
+                        .evaluateSimulation(contactOccurred, contactScope);
+                assertEquals(AssertionStatus.PASS, directAssertion.status());
+
+                SimulationAssertionSpec absentContact = Box2dAssertions.contactDidNotOccur(
+                        "main", new Box2dAssertions.ContactEndpoint(
+                                "ball", "ball-shape", 0),
+                        new Box2dAssertions.ContactEndpoint(
+                                "wall", "unobserved-wall-shape", 0));
+                SimulationAssertionResult incompleteNegative = runtime.assertions()
+                        .evaluateSimulation(absentContact, new SimulationAssertionScope(
+                                new ExecutionEpochId(0), 1, 4, 8));
+                assertEquals(AssertionStatus.INCONCLUSIVE, incompleteNegative.status());
+                assertTrue(incompleteNegative.evidenceIncomplete());
+
                 RuntimeRegistry registry = new RuntimeRegistry();
                 try (PublishedRuntime publication = registry.publish(runtime);
                         RuntimeToolHandler handler = new RuntimeToolHandler(
@@ -162,6 +191,23 @@ final class Box2dInspectionFixtureTest {
                                     .result());
                     assertEquals(1, contactEvents.page().items().size());
 
+                    RuntimeResponse.Result.SimulationAssertion protocolAssertion =
+                            assertInstanceOf(RuntimeResponse.Result.SimulationAssertion.class,
+                                    assertInstanceOf(RuntimeResponse.Success.class,
+                                            new RuntimeProtocolService(registry).execute(
+                                                    new RuntimeRequest(
+                                                            ProtocolVersion.V2_2,
+                                                            "box2d-contact-assertion",
+                                                            runtime.sessionId().value(),
+                                                            new RuntimeCommand.SimulationAssert(
+                                                                    contactOccurred.assertion(),
+                                                                    contactOccurred
+                                                                            .evidenceRequirements(),
+                                                                    0, 1, 3, 8))))
+                                            .result());
+                    assertEquals(AssertionStatus.PASS,
+                            protocolAssertion.result().status());
+
                     McpSchema.CallToolResult mcp = handler.handle(
                             McpSchema.CallToolRequest.builder("runtime_entity")
                                     .arguments(Map.of(
@@ -195,6 +241,38 @@ final class Box2dInspectionFixtureTest {
                     assertFalse(contactEventsMcp.isError());
                     assertTrue(contactEventsMcp.structuredContent().toString()
                             .contains("box2d.contact.begin"));
+
+                    McpSchema.CallToolResult assertionMcp = handler.handle(
+                            McpSchema.CallToolRequest.builder("runtime_simulation_assert")
+                                    .arguments(Map.of(
+                                            "sessionId", runtime.sessionId().value(),
+                                            "executionEpochId", 0,
+                                            "fromEpochTick", 1,
+                                            "toEpochTick", 3,
+                                            "evidenceLimit", 8,
+                                            "evidenceRequirements", java.util.List.of(Map.of(
+                                                    "entityId", "box2d.contacts.main",
+                                                    "property", "complete")),
+                                            "assertion", Map.of(
+                                                    "assertionType", "eventCount",
+                                                    "eventType", "box2d.contact.begin",
+                                                    "subject", "box2d.body.ball",
+                                                    "source", "box2d.body.ground",
+                                                    "attributes", Map.of(
+                                                            "worldId", "main",
+                                                            "key", Map.of(
+                                                                    "fixtureAId", "ball-shape",
+                                                                    "childIndexA", 0,
+                                                                    "fixtureBId", "ground-shape",
+                                                                    "childIndexB", 0)),
+                                                    "expectation", "AT_LEAST_ONE",
+                                                    "exactCount", 0)))
+                                    .build()).block(Duration.ofSeconds(5));
+                    assertNotNull(assertionMcp);
+                    assertFalse(assertionMcp.isError(),
+                            () -> String.valueOf(assertionMcp.structuredContent()));
+                    assertEquals("PASS", ((Map<?, ?>) ((Map<?, ?>)
+                            assertionMcp.structuredContent()).get("result")).get("status"));
                 }
             } finally {
                 runtime.close();

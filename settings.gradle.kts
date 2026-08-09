@@ -23,4 +23,5 @@ include(
     "runtime-protocol",
     "runtime-mcp",
     "runtime-fixtures",
+    "runtime-examples",
 )

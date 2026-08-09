@@ -57,21 +57,21 @@ final class SimulationDeterminismProtocolTest {
         RuntimeProtocolService service = new RuntimeProtocolService(registry);
         RuntimeResponse.Result.Capabilities capabilities = assertInstanceOf(
                 RuntimeResponse.Result.Capabilities.class,
-                success(service.execute(new RuntimeRequest(ProtocolVersion.V2_3, "capabilities",
+                success(service.execute(new RuntimeRequest(ProtocolVersion.V2_4, "capabilities",
                         "simulation-determinism-protocol",
                         new RuntimeCommand.Capabilities()))).result());
         RuntimeCapability capability = capabilities.capabilityReport().orElseThrow()
                 .capabilities().stream()
                 .filter(value -> value.id().equals("simulation-determinism"))
                 .findFirst().orElseThrow();
-        assertEquals(ProtocolVersion.V2_3, capability.capabilityVersion());
+        assertEquals(ProtocolVersion.V2_4, capability.capabilityVersion());
         assertTrue(capabilities.supportedTools()
                 .contains("runtime_simulation_determinism_check"));
         RuntimeCommand.SimulationDeterminismCheck command =
                 new RuntimeCommand.SimulationDeterminismCheck(
                         "physics-determinism", spec(), Duration.ofSeconds(1).toNanos());
 
-        RuntimeRequest request = new RuntimeRequest(ProtocolVersion.V2_3, "submit",
+        RuntimeRequest request = new RuntimeRequest(ProtocolVersion.V2_4, "submit",
                 "simulation-determinism-protocol", command);
         RuntimeRequest decoded = ProtocolJson.decodeRequest(ProtocolJson.encode(request));
         assertEquals(request, decoded);
@@ -82,13 +82,13 @@ final class SimulationDeterminismProtocolTest {
         queue.removeFirst().run();
         RuntimeResponse.Result.SimulationDeterminism completed = assertInstanceOf(
                 RuntimeResponse.Result.SimulationDeterminism.class,
-                success(service.execute(new RuntimeRequest(ProtocolVersion.V2_3, "poll",
+                success(service.execute(new RuntimeRequest(ProtocolVersion.V2_4, "poll",
                         "simulation-determinism-protocol", command))).result());
 
         assertEquals(DeterminismStatus.EQUAL,
                 completed.operation().result().orElseThrow().status());
         RuntimeResponse roundTrip = ProtocolJson.decodeResponse(ProtocolJson.encode(
-                success(service.execute(new RuntimeRequest(ProtocolVersion.V2_3, "encoded",
+                success(service.execute(new RuntimeRequest(ProtocolVersion.V2_4, "encoded",
                         "simulation-determinism-protocol", command)))));
         assertInstanceOf(RuntimeResponse.Result.SimulationDeterminism.class,
                 assertInstanceOf(RuntimeResponse.Success.class, roundTrip).result());
@@ -103,15 +103,15 @@ final class SimulationDeterminismProtocolTest {
         registry.publish(runtime);
         RuntimeProtocolService service = new RuntimeProtocolService(registry);
         RuntimeResponse.Failure old = assertInstanceOf(RuntimeResponse.Failure.class,
-                service.execute(new RuntimeRequest(ProtocolVersion.V2_2, "old",
+                service.execute(new RuntimeRequest(ProtocolVersion.V2_3, "old",
                         "simulation-determinism-version",
                         new RuntimeCommand.SimulationDeterminismCheck(
                                 "request", spec(), 1))));
         assertEquals(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED, old.error().code());
-        assertEquals("command requires protocol version 2.3", old.error().message());
+        assertEquals("command requires protocol version 2.4", old.error().message());
 
         String encoded = new String(ProtocolJson.encode(new RuntimeRequest(
-                ProtocolVersion.V2_3, "closed", "simulation-determinism-version",
+                ProtocolVersion.V2_4, "closed", "simulation-determinism-version",
                 new RuntimeCommand.SimulationDeterminismCheck("request", spec(), 1))),
                 StandardCharsets.UTF_8);
         String unknown = encoded.replace("\"epochTick\":1",

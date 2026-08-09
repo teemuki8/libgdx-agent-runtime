@@ -146,13 +146,13 @@ simulation specifications.
 
 ## Protocol and MCP
 
-Protocol 2.3 adds a distinct `simulationDeterminismCheck` command and
+Protocol 2.4 adds a distinct `simulationDeterminismCheck` command and
 `simulationDeterminism` result. It serializes the generic closed specification and tick-aware
 evidence. Protocol 1.13 through 2.2 determinism shapes remain unchanged. Every JSON object rejects
 unknown fields and versions before execution.
 
 MCP adds `runtime_simulation_determinism_check` with the same natural-value request contract.
-Capability discovery reports `simulation-determinism`, protocol 2.3, hard input/configuration/
+Capability discovery reports `simulation-determinism`, protocol 2.4, hard input/configuration/
 requirement/event limits, and dependencies on scenario reset, controlled acknowledged ticks, the
 simulation timeline, and completed immutable frames.
 

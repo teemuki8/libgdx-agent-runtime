@@ -150,7 +150,16 @@ Disabled runtimes retain no providers or frames and perform no serialization.
     never claim fixed-step success. Timeline retention and queries are bounded with explicit
     pagination, partial eviction, and not-yet-executed status. Protocol 2.1 adds the closed
     `simulation` and `simulationTicks` commands without changing protocols 1.0-1.13 or 2.0.
-35. Box2D inspection is an optional adapter module directed toward `runtime-core`; core, protocol,
+35. The canonical fixed-step accumulator is application-invoked and uses integer nanoseconds.
+    Render delta clamping, accumulated-time loss, catch-up tick drops, attempted/completed ticks,
+    interpolation remainder, and tick/frame correlation are retained as bounded typed reports.
+    Pause freezes normal accumulation; exact controlled advancement derives its delta only from the
+    registered fixed step and does not consume the render accumulator. Callback failure consumes the
+    attempted quantum and explicitly drops remaining whole time so it is never silently retried.
+    The helper creates no thread, timer, scheduler, sleep, render call, or disposal ownership.
+    Protocol 2.2 adds fixed-step state/report inspection and configured-step advance while leaving
+    protocols 1.0-1.13, 2.0, and 2.1 closed and unchanged.
+36. Box2D inspection is an optional adapter module directed toward `runtime-core`; core, protocol,
     and MCP have no Box2D dependency. Applications explicitly register selected worlds, bodies,
     fixtures, and joints under stable IDs. The adapter publishes closed `box2d.*` entity schemas
     through existing snapshot/entity paths, retains only weak native references, bounds every
@@ -162,7 +171,7 @@ Disabled runtimes retain no providers or frames and perform no serialization.
     `EntityRegistry.requireProviderMutationAllowed()` is the generic no-mutation preflight for an
     adapter that rebinds an existing provider target; it preserves the same capture-thread,
     open-frame, and closed-runtime lifecycle as provider registration.
-36. Box2D contacts are explicit per-world adapter registrations. The application installs the
+37. Box2D contacts are explicit per-world adapter registrations. The application installs the
     direct or evidence-first composed listener and wraps exactly one application-owned `World.step`
     in `captureStep` during an active simulation tick; the runtime never installs a listener or
     owns stepping. Callback facts resolve only explicitly registered fixture/body endpoints and
@@ -178,7 +187,7 @@ Disabled runtimes retain no providers or frames and perform no serialization.
     Close releases adapter evidence and references without disposing native objects; completed core
     frames retain their normal immutable lifetime. Contact adjacency never implies gameplay
     causality, and canonical order is not a cross-platform or whole-program determinism claim.
-37. Contact active-state incompleteness is sticky across quiet ticks for outside, late, unmapped,
+38. Contact active-state incompleteness is sticky across quiet ticks for outside, late, unmapped,
     missing-begin, and failed-step callbacks; only an authoritative epoch/world baseline clears the
     unknown state. Nested record/active truncation participates in `complete`. Typed contact ticks
     become queryable only after the simulation timeline confirms their resulting runtime frame;
@@ -188,7 +197,7 @@ Disabled runtimes retain no providers or frames and perform no serialization.
     remain `NOT_YET_CAPTURED`. Disabled capture executes the application step and forwards its
     listener without evidence. Fixture mutation removes only affected retained contact keys, and
     public evidence values reject oversized or open truncation structures before copying them.
-38. Simulation-scoped assertions name one execution epoch and an exact bounded inclusive
+39. Simulation-scoped assertions name one execution epoch and an exact bounded inclusive
     simulation-tick range; they never reinterpret arbitrary runtime-frame ranges as ticks. The
     closed JDK-only assertion union evaluates completed immutable frames with deterministic decimal
     arithmetic and bounded recursive object selectors without paths or executable predicates.
@@ -197,10 +206,10 @@ Disabled runtimes retain no providers or frames and perform no serialization.
     evidence requirement to be complete. Missing, evicted, failed, unknown, uncorrelated, truncated,
     or adapter-incomplete evidence produces `INCONCLUSIVE` when it could change the answer.
     `runtime-box2d` factories compile only stable IDs and documented captured schemas into this
-    generic model. Protocol 2.2 and `runtime_simulation_assert` expose the same closed bounded
+    generic model. Protocol 2.3 and `runtime_simulation_assert` expose the same closed bounded
     contract without changing earlier schemas. Every public API/schema change updates the agent
     cookbook in the same change.
-39. Simulation determinism is an additive mode of the existing bounded determinism registry. It
+40. Simulation determinism is an additive mode of the existing bounded determinism registry. It
     requires a registered fixed timeline, application-dispatched scenario reset, acknowledged
     controller, exact reset-baseline configuration facts, and optional per-tick boolean
     completeness facts. Selected entities must be present and untruncated, and every selected
@@ -212,6 +221,6 @@ Disabled runtimes retain no providers or frames and perform no serialization.
     both monotonic session tick IDs, epochs, frames, and typed difference. Missing registrations,
     reset/rebind drift, false completeness, tick/delta/correlation failure, diagnostics,
     truncation, eviction, timeout, or limit exhaustion cannot yield equality. `runtime-box2d`
-    supplies only a data-to-spec builder; it never reads native state. Protocol 2.3 and the closed
+    supplies only a data-to-spec builder; it never reads native state. Protocol 2.4 and the closed
     `runtime_simulation_determinism_check` tool expose this additive result without changing older
     determinism or protocol shapes. Equality is not a whole-program or cross-platform claim.

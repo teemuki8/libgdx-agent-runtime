@@ -296,6 +296,29 @@ public final class RuntimeToolCatalog {
                     "Evaluate one bounded closed assertion over exact immutable simulation ticks",
                     simulationAssertionInput()));
         }
+        if (supported.contains("runtime_fixed_step")) {
+            selected.add(tool("runtime_fixed_step",
+                    "Read canonical fixed-step accumulator state and configuration",
+                    sessionInput(Map.of(), List.of())));
+        }
+        if (supported.contains("runtime_fixed_step_updates")) {
+            selected.add(tool("runtime_fixed_step_updates",
+                    "Read bounded fixed-step update reports including clamp and drop evidence",
+                    sessionInput(Map.of(
+                            "fromSequence", integer(1, Long.MAX_VALUE),
+                            "toSequence", integer(1, Long.MAX_VALUE),
+                            "limit", integer(1, MAX_RESULTS)),
+                            List.of("fromSequence", "toSequence", "limit"))));
+        }
+        if (supported.contains("runtime_simulation_advance")) {
+            selected.add(tool("runtime_simulation_advance",
+                    "Advance paused simulation using only its registered fixed step",
+                    sessionInput(Map.of(
+                            "controlRequestId", string(),
+                            "ticks", integer(1, MAX_RESULTS),
+                            "timeoutNanos", integer(1, Long.MAX_VALUE)),
+                            List.of("controlRequestId", "ticks", "timeoutNanos"))));
+        }
         selected.removeIf(tool -> !supported.contains(tool.name()));
         tools = List.copyOf(selected);
         LinkedHashMap<String, McpSchema.Tool> index = new LinkedHashMap<>();

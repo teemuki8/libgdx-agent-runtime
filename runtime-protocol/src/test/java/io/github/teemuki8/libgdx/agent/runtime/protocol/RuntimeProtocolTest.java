@@ -115,9 +115,9 @@ final class RuntimeProtocolTest {
         RuntimeProtocolService service = new RuntimeProtocolService(new RuntimeRegistry());
         RuntimeResponse.Failure version = assertInstanceOf(RuntimeResponse.Failure.class,
                 service.execute(new RuntimeRequest(
-                        new ProtocolVersion(2, 4), "v", null, new RuntimeCommand.Sessions())));
+                        new ProtocolVersion(2, 5), "v", null, new RuntimeCommand.Sessions())));
         assertEquals(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED, version.error().code());
-        assertEquals("1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10,1.11,1.12,1.13,2.0,2.1,2.2,2.3",
+        assertEquals("1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10,1.11,1.12,1.13,2.0,2.1,2.2,2.3,2.4",
                 version.error().details().get("supported"));
 
         RuntimeResponse.Failure future = assertInstanceOf(RuntimeResponse.Failure.class,
@@ -581,7 +581,7 @@ final class RuntimeProtocolTest {
         RuntimeCommand.SimulationAssert decoded = assertInstanceOf(
                 RuntimeCommand.SimulationAssert.class,
                 ProtocolJson.decodeRequest(ProtocolJson.encode(new RuntimeRequest(
-                        ProtocolVersion.V2_2, "simulation-assert-roundtrip",
+                        ProtocolVersion.V2_3, "simulation-assert-roundtrip",
                         "simulation-assertion", command))).command());
         assertEquals(command, decoded);
 
@@ -624,7 +624,7 @@ final class RuntimeProtocolTest {
             RuntimeCommand.SimulationAssert roundTripped = assertInstanceOf(
                     RuntimeCommand.SimulationAssert.class,
                     ProtocolJson.decodeRequest(ProtocolJson.encode(new RuntimeRequest(
-                            ProtocolVersion.V2_2, "variant", "simulation-assertion",
+                            ProtocolVersion.V2_3, "variant", "simulation-assertion",
                             variantCommand))).command());
             assertEquals(variantCommand, roundTripped);
         }
@@ -635,7 +635,7 @@ final class RuntimeProtocolTest {
             RuntimeResponse.Result.SimulationAssertion result = assertInstanceOf(
                     RuntimeResponse.Result.SimulationAssertion.class,
                     assertInstanceOf(RuntimeResponse.Success.class, service.execute(
-                            new RuntimeRequest(ProtocolVersion.V2_2, "simulation-assert",
+                            new RuntimeRequest(ProtocolVersion.V2_3, "simulation-assert",
                                     "simulation-assertion", decoded))).result());
             assertEquals(AssertionStatus.PASS, result.result().status());
 
@@ -644,20 +644,20 @@ final class RuntimeProtocolTest {
                             "simulation-assert-old", "simulation-assertion", command)));
             assertEquals(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                     oldVersion.error().code());
-            assertEquals("command requires protocol version 2.2", oldVersion.error().message());
+            assertEquals("command requires protocol version 2.3", oldVersion.error().message());
 
             RuntimeResponse.Result.Capabilities capabilities = capabilities(
-                    service, ProtocolVersion.V2_2, "simulation-assert-capabilities",
+                    service, ProtocolVersion.V2_3, "simulation-assert-capabilities",
                     "simulation-assertion");
             assertTrue(capabilities.supportedTools().contains("runtime_simulation_assert"));
             assertTrue(capabilities.capabilityReport().orElseThrow().capabilities().stream()
                     .anyMatch(value -> value.id().equals("simulation-assertions")
-                            && value.capabilityVersion().equals(ProtocolVersion.V2_2)));
+                            && value.capabilityVersion().equals(ProtocolVersion.V2_3)));
         }
 
         assertThrows(ProtocolJson.ProtocolJsonException.class, () ->
                 ProtocolJson.decodeRequest(("""
-                        {"version":{"major":2,"minor":2},"requestId":"bad",
+                        {"version":{"major":2,"minor":3},"requestId":"bad",
                          "sessionId":"simulation-assertion","command":{
                          "type":"simulationAssert","executionEpochId":0,
                          "fromEpochTick":1,"toEpochTick":1,"evidenceLimit":8,
@@ -665,7 +665,7 @@ final class RuntimeProtocolTest {
                          "assertionType":"entityExists","entityId":{"value":"ball"},
                          "unknown":true}}}
                         """).getBytes(StandardCharsets.UTF_8)));
-        assertEquals(ProtocolVersion.V2_3, ProtocolVersion.CURRENT);
+        assertEquals(ProtocolVersion.V2_4, ProtocolVersion.CURRENT);
     }
 
     @Test

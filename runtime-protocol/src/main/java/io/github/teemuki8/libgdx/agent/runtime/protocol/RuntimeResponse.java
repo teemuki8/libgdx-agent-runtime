@@ -36,6 +36,8 @@ import io.github.teemuki8.libgdx.agent.runtime.core.DeterminismOperation;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationState;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationTickPage;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertionResult;
+import io.github.teemuki8.libgdx.agent.runtime.core.FixedStepSimulationState;
+import io.github.teemuki8.libgdx.agent.runtime.core.FixedStepUpdatePage;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -111,7 +113,9 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         @JsonSubTypes.Type(value = Result.SimulationAssertion.class,
                 name = "simulationAssertion"),
         @JsonSubTypes.Type(value = Result.SimulationDeterminism.class,
-                name = "simulationDeterminism")
+                name = "simulationDeterminism"),
+        @JsonSubTypes.Type(value = Result.FixedStep.class, name = "fixedStep"),
+        @JsonSubTypes.Type(value = Result.FixedStepUpdates.class, name = "fixedStepUpdates")
     })
     sealed interface Result permits Result.Sessions, Result.Capabilities, Result.Frames,
             Result.Snapshot, Result.Entity, Result.Changes, Result.Events, Result.Decisions,
@@ -121,7 +125,8 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
             Result.UiBindings, Result.UiFrames, Result.RecordingOperationResult,
             Result.RecordingChunkResult, Result.Determinism, Result.EntityHistory,
             Result.Simulation, Result.SimulationTicks, Result.SimulationAssertion,
-            Result.SimulationDeterminism {
+            Result.SimulationDeterminism, Result.FixedStep,
+            Result.FixedStepUpdates {
         /** Published session catalog. */
         record Sessions(List<SessionInfo> sessions) implements Result {
             /** Copies sessions. */
@@ -197,6 +202,22 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         record SimulationTicks(SimulationTickPage page) implements Result {
             /** Validates page evidence. */
             public SimulationTicks {
+                Objects.requireNonNull(page, "page");
+            }
+        }
+
+        /** Current canonical fixed-step accumulator state. */
+        record FixedStep(FixedStepSimulationState state) implements Result {
+            /** Validates state evidence. */
+            public FixedStep {
+                Objects.requireNonNull(state, "state");
+            }
+        }
+
+        /** One bounded page of fixed-step accumulator update reports. */
+        record FixedStepUpdates(FixedStepUpdatePage page) implements Result {
+            /** Validates page evidence. */
+            public FixedStepUpdates {
                 Objects.requireNonNull(page, "page");
             }
         }

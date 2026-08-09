@@ -40,6 +40,7 @@ public final class AgentRuntime implements AutoCloseable {
     private final AssertionEvaluator assertions;
     private final SimulationControlRegistry controls;
     private final SimulationTimelineRegistry simulation;
+    private final FixedStepSimulationRegistry fixedStepSimulation;
     private final InputRegistry inputs;
     private final CheckpointRegistry checkpoints;
     private final UiCorrelationRegistry uiCorrelations;
@@ -90,6 +91,7 @@ public final class AgentRuntime implements AutoCloseable {
         assertions = new AssertionEvaluator(this);
         controls = new SimulationControlRegistry(this, builder.controlLimits);
         simulation = new SimulationTimelineRegistry(this, builder.simulationTimelineLimits);
+        fixedStepSimulation = new FixedStepSimulationRegistry(this);
         inputs = new InputRegistry(this, builder.inputLimits);
         checkpoints = new CheckpointRegistry(this, builder.checkpointLimits);
         uiCorrelations = new UiCorrelationRegistry(this, builder.uiCorrelationLimits);
@@ -175,6 +177,11 @@ public final class AgentRuntime implements AutoCloseable {
     /** Returns the application-owned simulation tick boundary and immutable timeline. */
     public SimulationTimelineRegistry simulation() {
         return simulation;
+    }
+
+    /** Returns the canonical application-owned fixed-step accumulator and update evidence. */
+    public FixedStepSimulationRegistry fixedStepSimulation() {
+        return fixedStepSimulation;
     }
 
     /** Returns the explicit bounded registry for controlled-tick input facts. */
@@ -649,6 +656,7 @@ public final class AgentRuntime implements AutoCloseable {
         firstFailure = attempt(firstFailure, uiCorrelations::close);
         firstFailure = attempt(firstFailure, scenarios::close);
         firstFailure = attempt(firstFailure, actions::close);
+        firstFailure = attempt(firstFailure, fixedStepSimulation::close);
         firstFailure = attempt(firstFailure, controls::close);
         firstFailure = attempt(firstFailure, inputs::close);
         return firstFailure;
@@ -1073,6 +1081,26 @@ public final class AgentRuntime implements AutoCloseable {
         requireMutableRegistration();
         if (status != RuntimeStatus.CREATED) {
             throw lifecycle("simulation timing must be registered before start");
+        }
+    }
+
+    void requireFixedStepRegistration() {
+        requireMutableRegistration();
+        if (status != RuntimeStatus.CREATED) {
+            throw lifecycle("fixed-step simulation must be registered before start");
+        }
+    }
+
+    void requireFixedStepMutation() {
+        requireCaptureThread();
+        if (status == RuntimeStatus.CLOSED) {
+            throw new AgentRuntimeException(RuntimeErrorCode.RUNTIME_CLOSED, "runtime is closed");
+        }
+        if (status != RuntimeStatus.RUNNING && status != RuntimeStatus.DISABLED) {
+            throw lifecycle("runtime must be started");
+        }
+        if (activeFrame != null) {
+            throw lifecycle("fixed-step mutation cannot run while a frame is open");
         }
     }
 

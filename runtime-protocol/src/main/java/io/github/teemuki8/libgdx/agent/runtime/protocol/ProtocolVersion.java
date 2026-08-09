@@ -34,12 +34,14 @@ public record ProtocolVersion(int major, int minor) {
     public static final ProtocolVersion V2 = new ProtocolVersion(2, 0);
     /** Application-reported simulation timeline protocol version. */
     public static final ProtocolVersion V2_1 = new ProtocolVersion(2, 1);
-    /** Simulation-scoped declarative assertion protocol version. */
+    /** Canonical fixed-step accumulator and configured-step control protocol version. */
     public static final ProtocolVersion V2_2 = new ProtocolVersion(2, 2);
-    /** Tick-aware simulation determinism protocol version. */
+    /** Simulation-scoped declarative assertion protocol version. */
     public static final ProtocolVersion V2_3 = new ProtocolVersion(2, 3);
+    /** Tick-aware simulation determinism protocol version. */
+    public static final ProtocolVersion V2_4 = new ProtocolVersion(2, 4);
     /** Latest implemented protocol version. */
-    public static final ProtocolVersion CURRENT = V2_3;
+    public static final ProtocolVersion CURRENT = V2_4;
 
     /** Validates version components. */
     public ProtocolVersion {
@@ -71,9 +73,14 @@ public record ProtocolVersion(int major, int minor) {
     public boolean capability(RuntimeCommand command) {
         if (isV2()) {
             if (command instanceof RuntimeCommand.SimulationDeterminismCheck) {
-                return minor() >= 3;
+                return minor() >= 4;
             }
             if (command instanceof RuntimeCommand.SimulationAssert) {
+                return minor() >= 3;
+            }
+            if (command instanceof RuntimeCommand.FixedStep
+                    || command instanceof RuntimeCommand.FixedStepUpdates
+                    || command instanceof RuntimeCommand.SimulationAdvance) {
                 return minor() >= 2;
             }
             if (command instanceof RuntimeCommand.Simulation
@@ -87,6 +94,9 @@ public record ProtocolVersion(int major, int minor) {
         }
         return switch (command) {
             case RuntimeCommand.SimulationDeterminismCheck _ -> false;
+            case RuntimeCommand.SimulationAssert _ -> false;
+            case RuntimeCommand.FixedStep _, RuntimeCommand.FixedStepUpdates _,
+                    RuntimeCommand.SimulationAdvance _ -> false;
             case RuntimeCommand.Simulation _, RuntimeCommand.SimulationTicks _ -> false;
             case RuntimeCommand.EntityHistory _ -> false;
             case RuntimeCommand.CommandStatus _, RuntimeCommand.CommandCancel _ -> minor() >= 2;
@@ -113,8 +123,11 @@ public record ProtocolVersion(int major, int minor) {
     public String requiredVersionMessage(RuntimeCommand command) {
         return switch (command) {
             case RuntimeCommand.SimulationDeterminismCheck _ ->
-                    "command requires protocol version 2.3";
+                    "command requires protocol version 2.4";
             case RuntimeCommand.SimulationAssert _ ->
+                    "command requires protocol version 2.3";
+            case RuntimeCommand.FixedStep _, RuntimeCommand.FixedStepUpdates _,
+                    RuntimeCommand.SimulationAdvance _ ->
                     "command requires protocol version 2.2";
             case RuntimeCommand.Simulation _, RuntimeCommand.SimulationTicks _ ->
                     "command requires protocol version 2.1";

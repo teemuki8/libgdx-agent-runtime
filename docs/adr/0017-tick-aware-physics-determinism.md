@@ -20,7 +20,7 @@ configuration facts before admission and after every reset, and correlate compar
 completed `SimulationTick` records.
 
 `runtime-box2d` supplies only a data-only builder that compiles stable IDs and explicit world
-settings into the generic core specification. Protocol 2.3 and MCP expose separate closed command
+settings into the generic core specification. Protocol 2.4 and MCP expose separate closed command
 and result schemas. Existing Java and protocol determinism contracts remain unchanged.
 
 ## Consequences

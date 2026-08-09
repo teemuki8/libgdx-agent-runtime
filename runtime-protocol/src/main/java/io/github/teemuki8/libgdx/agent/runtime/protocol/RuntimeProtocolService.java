@@ -58,8 +58,12 @@ public final class RuntimeProtocolService {
     private static final List<String> V2_TOOLS = List.of("runtime_entity_history");
     private static final List<String> V2_1_TOOLS =
             List.of("runtime_simulation", "runtime_simulation_ticks");
-    private static final List<String> V2_2_TOOLS = List.of("runtime_simulation_assert");
-    private static final List<String> V2_3_TOOLS =
+    private static final List<String> V2_2_READ_TOOLS =
+            List.of("runtime_fixed_step", "runtime_fixed_step_updates");
+    private static final List<String> V2_2_ADVANCE_TOOLS =
+            List.of("runtime_simulation_advance");
+    private static final List<String> V2_3_TOOLS = List.of("runtime_simulation_assert");
+    private static final List<String> V2_4_TOOLS =
             List.of("runtime_simulation_determinism_check");
     private static final List<String> FEATURES = List.of(
             "entities", "frames", "changes", "events", "decisions");
@@ -69,7 +73,8 @@ public final class RuntimeProtocolService {
                     ProtocolVersion.V1_6, ProtocolVersion.V1_7, ProtocolVersion.V1_8,
                     ProtocolVersion.V1_9, ProtocolVersion.V1_10, ProtocolVersion.V1_11,
                     ProtocolVersion.V1_12, ProtocolVersion.V1_13, ProtocolVersion.V2,
-                    ProtocolVersion.V2_1, ProtocolVersion.V2_2, ProtocolVersion.V2_3);
+                    ProtocolVersion.V2_1, ProtocolVersion.V2_2, ProtocolVersion.V2_3,
+                    ProtocolVersion.V2_4);
     private final RuntimeRegistry registry;
 
     /** Creates a service over an isolated or global registry. */
@@ -126,13 +131,19 @@ public final class RuntimeProtocolService {
         if (determinism) {
             tools = Stream.concat(tools, DETERMINISM_TOOLS.stream());
         }
-        Stream<String> versioned = Stream.concat(Stream.concat(
-                Stream.concat(tools, V2_TOOLS.stream()), V2_1_TOOLS.stream()),
-                V2_2_TOOLS.stream());
+        tools = Stream.concat(Stream.concat(
+                Stream.concat(Stream.concat(tools, V2_TOOLS.stream()), V2_1_TOOLS.stream()),
+                V2_2_READ_TOOLS.stream()), V2_3_TOOLS.stream());
+        boolean fixedAdvance = registry.sessions().stream().anyMatch(runtime ->
+                runtime.commands().isPresent()
+                        && runtime.fixedStepSimulation().state().configured());
+        if (fixedAdvance) {
+            tools = Stream.concat(tools, V2_2_ADVANCE_TOOLS.stream());
+        }
         boolean simulationDeterminism = registry.sessions().stream()
                 .anyMatch(runtime -> runtime.determinism().simulationAvailable());
         return (simulationDeterminism
-                ? Stream.concat(versioned, V2_3_TOOLS.stream()) : versioned).toList();
+                ? Stream.concat(tools, V2_4_TOOLS.stream()) : tools).toList();
     }
 
     /** Returns registered action schemas in deterministic session and action order. */
@@ -169,7 +180,7 @@ public final class RuntimeProtocolService {
             return failure(request, ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                     "protocol version is unsupported", Map.of(
                             "supported",
-                            "1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10,1.11,1.12,1.13,2.0,2.1,2.2,2.3",
+                            "1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10,1.11,1.12,1.13,2.0,2.1,2.2,2.3,2.4",
                             "requested", request.version().major() + "." + request.version().minor()));
         }
         try {
@@ -272,6 +283,16 @@ public final class RuntimeProtocolService {
                     simulationAssertion(runtime, command);
             case RuntimeCommand.SimulationDeterminismCheck command ->
                     simulationDeterminism(runtime, command, request.version());
+            case RuntimeCommand.FixedStep ignored -> new RuntimeResponse.Result.FixedStep(
+                    runtime.fixedStepSimulation().state());
+            case RuntimeCommand.FixedStepUpdates command ->
+                    new RuntimeResponse.Result.FixedStepUpdates(
+                            runtime.fixedStepSimulation().updates(
+                                    new io.github.teemuki8.libgdx.agent.runtime.core.FixedStepUpdateQuery(
+                                            command.fromSequence(), command.toSequence(),
+                                            command.limit())));
+            case RuntimeCommand.SimulationAdvance command ->
+                    advanceFixed(runtime, command, request.version());
             case RuntimeCommand.Sessions ignored ->
                     throw new AssertionError("sessions handled before runtime lookup");
         };
@@ -636,8 +657,36 @@ public final class RuntimeProtocolService {
                     List.of("execution-epochs", "frames")));
         }
         if (version.isV2() && version.minor() >= 2) {
+            var state = runtime.fixedStepSimulation().state();
+            boolean available = state.configured();
+            var configuration = state.configuration();
             details.add(new RuntimeCapability(
-                    "simulation-assertions", ProtocolVersion.V2_2,
+                    "fixed-step-simulation", ProtocolVersion.V2_2,
+                    available ? RuntimeCapability.Availability.AVAILABLE
+                            : RuntimeCapability.Availability.UNAVAILABLE,
+                    available ? Optional.empty() : Optional.of("fixed-step-not-configured"),
+                    RuntimeCapability.Access.MUTATING,
+                    List.of("AgentRuntime#fixedStepSimulation",
+                            "FixedStepSimulationRegistry#update",
+                            "SimulationControlRegistry#advanceFixed"),
+                    List.of("fixedStep", "fixedStepUpdates", "simulationAdvance"),
+                    Stream.concat(V2_2_READ_TOOLS.stream(), V2_2_ADVANCE_TOOLS.stream()).toList(),
+                    Map.of("fixedStepNanos", configuration
+                                    .map(value -> value.fixedStepNanos()).orElse(0L),
+                            "maximumRenderDeltaNanos", configuration
+                                    .map(value -> value.maximumRenderDeltaNanos()).orElse(0L),
+                            "maximumAccumulatedTimeNanos", configuration
+                                    .map(value -> value.maximumAccumulatedTimeNanos()).orElse(0L),
+                            "maximumCatchUpTicks", configuration
+                                    .map(value -> (long) value.maximumCatchUpTicks()).orElse(0L),
+                            "retainedUpdateReports", configuration
+                                    .map(value -> (long) value.retainedUpdateReports()).orElse(0L)),
+                    List.of("integer-accumulator", "loss-explicit", "application-owned"),
+                    List.of("simulation-timeline", "simulation-control", "command-dispatch")));
+        }
+        if (version.isV2() && version.minor() >= 3) {
+            details.add(new RuntimeCapability(
+                    "simulation-assertions", ProtocolVersion.V2_3,
                     runtime.configuration().enabled()
                             ? RuntimeCapability.Availability.AVAILABLE
                             : RuntimeCapability.Availability.UNAVAILABLE,
@@ -645,7 +694,7 @@ public final class RuntimeProtocolService {
                             : Optional.of("runtime-disabled"),
                     RuntimeCapability.Access.READ_ONLY,
                     List.of("AssertionEvaluator#evaluateSimulation"),
-                    List.of("simulationAssert"), V2_2_TOOLS, Map.of(
+                    List.of("simulationAssert"), V2_3_TOOLS, Map.of(
                             "evaluatedTicks",
                             (long) io.github.teemuki8.libgdx.agent.runtime.core
                                     .SimulationAssertionScope.MAX_TICKS,
@@ -662,18 +711,18 @@ public final class RuntimeProtocolService {
                             "inconclusive-safe"),
                     List.of("completed-frames", "simulation-timeline")));
         }
-        if (version.isV2() && version.minor() >= 3) {
+        if (version.isV2() && version.minor() >= 4) {
             boolean available = runtime.determinism().simulationAvailable();
             var determinismLimits = runtime.determinism().limits();
             details.add(new RuntimeCapability(
-                    "simulation-determinism", ProtocolVersion.V2_3,
+                    "simulation-determinism", ProtocolVersion.V2_4,
                     available ? RuntimeCapability.Availability.AVAILABLE
                             : RuntimeCapability.Availability.UNAVAILABLE,
                     available ? Optional.empty()
                             : Optional.of("acknowledged-simulation-or-scenario-unavailable"),
                     RuntimeCapability.Access.MUTATING,
                     List.of("DeterminismRegistry#checkSimulation"),
-                    List.of("simulationDeterminismCheck"), V2_3_TOOLS, Map.of(
+                    List.of("simulationDeterminismCheck"), V2_4_TOOLS, Map.of(
                             "retainedOperations", (long) determinismLimits.retainedOperations(),
                             "maximumRepeats", (long) determinismLimits.maximumRepeats(),
                             "maximumTicksPerRepeat",
@@ -746,11 +795,18 @@ public final class RuntimeProtocolService {
             tools = Stream.concat(tools, V2_1_TOOLS.stream());
         }
         if (version.isV2() && version.minor() >= 2) {
-            tools = Stream.concat(tools, V2_2_TOOLS.stream());
+            tools = Stream.concat(tools, V2_2_READ_TOOLS.stream());
+            if (runtime.commands().isPresent()
+                    && runtime.fixedStepSimulation().state().configured()) {
+                tools = Stream.concat(tools, V2_2_ADVANCE_TOOLS.stream());
+            }
         }
-        if (version.isV2() && version.minor() >= 3
-                && runtime.determinism().simulationAvailable()) {
+        if (version.isV2() && version.minor() >= 3) {
             tools = Stream.concat(tools, V2_3_TOOLS.stream());
+        }
+        if (version.isV2() && version.minor() >= 4
+                && runtime.determinism().simulationAvailable()) {
+            tools = Stream.concat(tools, V2_4_TOOLS.stream());
         }
         return tools.toList();
     }
@@ -797,6 +853,16 @@ public final class RuntimeProtocolService {
         io.github.teemuki8.libgdx.agent.runtime.core.ControlOperation operation =
                 runtime.controls().advance(command.controlRequestId(), command.ticks(),
                         command.deltaNanos(), Duration.ofNanos(command.timeoutNanos()));
+        return new RuntimeResponse.Result.Control(runtime.controls().descriptor(),
+                Optional.of(operation), commandEvidence(version, operation.command()));
+    }
+
+    private static RuntimeResponse.Result advanceFixed(AgentRuntime runtime,
+            RuntimeCommand.SimulationAdvance command, ProtocolVersion version) {
+        requireControl(runtime, command.timeoutNanos());
+        io.github.teemuki8.libgdx.agent.runtime.core.ControlOperation operation =
+                runtime.controls().advanceFixed(command.controlRequestId(), command.ticks(),
+                        Duration.ofNanos(command.timeoutNanos()));
         return new RuntimeResponse.Result.Control(runtime.controls().descriptor(),
                 Optional.of(operation), commandEvidence(version, operation.command()));
     }

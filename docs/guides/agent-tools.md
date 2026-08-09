@@ -44,8 +44,11 @@ strict closed input schemas (`additionalProperties: false`), and a maximum reque
 | `runtime_determinism_check`********* | `sessionId`, `determinismRequestId`, `scenarioId`, `randomSeed`, `configuration`, `repeatCount`, `ticksPerRepeat`, `deltaNanos`, `profile`, `timeoutNanos` | none |
 | `runtime_simulation`*********** | `sessionId` | none |
 | `runtime_simulation_ticks`*********** | `sessionId`, `executionEpochId`, `fromEpochTick`, `toEpochTick`, `limit` | none |
-| `runtime_simulation_assert`************ | `sessionId`, `executionEpochId`, `fromEpochTick`, `toEpochTick`, `evidenceLimit`, `evidenceRequirements`, `assertion` | assertion-specific closed fields |
-| `runtime_simulation_determinism_check`************* | `sessionId`, `determinismRequestId`, `scenarioId`, `randomSeed`, `configuration`, `repeatCount`, `ticksPerRepeat`, `deltaNanos`, `profile`, `inputs`, `configurationRequirements`, `evidenceRequirements`, `eventTypes`, `timeoutNanos` | none |
+| `runtime_fixed_step`************ | `sessionId` | none |
+| `runtime_fixed_step_updates`************ | `sessionId`, `fromSequence`, `toSequence`, `limit` | none |
+| `runtime_simulation_advance`************ | `sessionId`, `controlRequestId`, `ticks`, `timeoutNanos` | none |
+| `runtime_simulation_assert`************* | `sessionId`, `executionEpochId`, `fromEpochTick`, `toEpochTick`, `evidenceLimit`, `evidenceRequirements`, `assertion` | assertion-specific closed fields |
+| `runtime_simulation_determinism_check`************** | `sessionId`, `determinismRequestId`, `scenarioId`, `randomSeed`, `configuration`, `repeatCount`, `ticksPerRepeat`, `deltaNanos`, `profile`, `inputs`, `configurationRequirements`, `evidenceRequirements`, `eventTypes`, `timeoutNanos` | none |
 
 \* Command tools are included in the server-start catalog only when at least one published runtime
 has explicitly registered application command dispatch. They use protocol 1.2.
@@ -91,16 +94,23 @@ runtime-supplied delta, application-reported executed delta, current epoch/tick/
 state. `runtime_simulation_ticks` returns bounded attempted ticks with explicit outcome,
 tick-to-frame mapping, pagination, partial eviction, and not-yet-executed range evidence.
 
-\*\*\*\*\*\*\*\*\*\*\*\* Simulation assertions use exact protocol 2.2 and are always available in
+\*\*\*\*\*\*\*\*\*\*\*\* Fixed-step inspection uses exact protocol 2.2 and is always present in the
+server-start catalog. `runtime_simulation_advance` is present only when a published runtime has
+fixed-step configuration plus application command dispatch. It accepts a tick count but no delta;
+the runtime derives the registered fixed step. Update reports expose render-time clamp, pause,
+accumulator-limit and catch-up drops, attempted/completed ticks, remainder, interpolation alpha,
+and tick/frame correlation.
+
+\*\*\*\*\*\*\*\*\*\*\*\*\* Simulation assertions use exact protocol 2.3 and are always available in
 the server-start catalog. The tool evaluates one closed assertion over at most 1,000 exact epoch
 ticks, accepts at most eight explicit completeness requirements, and returns at most 100 evidence
-items. Protocol 2.1 rejects the command before evaluation.
+items. Protocol 2.2 rejects the command before evaluation.
 
-\*\*\*\*\*\*\*\*\*\*\*\*\* Simulation determinism uses exact protocol 2.3 and is included only
+\*\*\*\*\*\*\*\*\*\*\*\*\*\* Simulation determinism uses exact protocol 2.4 and is included only
 when at least one published runtime has application dispatch, a fixed simulation timeline, an
 acknowledged controller, and a registered deterministic scenario. It repeats at most 256 scheduled
 registered inputs, checks at most 32 exact configuration facts and eight per-tick completeness
-facts, and compares at most 16 selected event types. Protocol 2.2 rejects the command before
+facts, and compares at most 16 selected event types. Protocol 2.3 rejects the command before
 execution.
 
 Every identifier is a nonblank string of at most 256 UTF-16 code units. Frame fields are
@@ -115,11 +125,12 @@ to use 1.0. Command status and cancellation use protocol 1.2; epoch queries use 
 scenario catalog and reset use protocol 1.4. Protocol 2.0 (the additive major bump carried by
 `runtime_entity_history`) enables every V1.13 command and reports the full capability matrix while
 protocols 1.0-1.13 keep their exact frozen wire shapes and negotiation. Protocol 2.1 additively
-provides application-reported simulation timeline state and tick history; protocol 2.0 rejects
-those two commands before execution. Protocol 2.2 additively provides exact-tick simulation
-assertions; protocol 2.1 rejects that command before execution. Protocol 2.3 additively provides
+provides application-reported simulation timeline state and tick history. Protocol 2.2 adds
+fixed-step accumulator state, update reports, and configured-step advancement. Protocol 2.3
+additively provides exact-tick simulation assertions; protocol 2.2 rejects that command before
+execution. Protocol 2.4 additively provides
 exact-tick simulation determinism with scheduled registered inputs and actual tick correlations;
-protocol 2.2 rejects that command before execution.
+protocol 2.3 rejects that command before execution. Earlier exact versions reject later commands.
 Attributed fact queries use protocol 1.5. Their `sourceSubsystem` is separate from the event `source`
 entity ID. A `sourceLocation` in output is an unverified, bounded application-provided label;
 correlation indicates association, not inferred causality.

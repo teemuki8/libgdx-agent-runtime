@@ -34,27 +34,26 @@ release.
 ## Capture a fixed-step simulation
 
 Create and register state on the render thread, declare the authoritative fixed step, and call
-`start()`. The application still owns its accumulator and render loop:
+`start()`. The application calls the canonical accumulator and still owns the render loop:
 
 ```java
 runtime = LibGdxAgentRuntime.builder()
         .captureThread(Thread.currentThread())
         .configuration(RuntimeConfiguration.developmentDefaults())
         .build();
-runtime.simulation().register(SimulationTimelineSpec.fixedStep(16_666_667L));
+FixedStepSimulationConfiguration fixedStep =
+        FixedStepSimulationConfiguration.developmentDefaults(16_666_667L);
+LibGdxFixedStepSimulation simulation = LibGdxFixedStepSimulation.acknowledged(
+        runtime, fixedStep, tick -> {
+            updateFixedStep(tick.fixedStepSeconds());
+            return tick.fixedStepNanos(); // explicit application testimony
+        });
 registerInspectableState(runtime);
 runtime.start();
 
 // render()
-accumulatorNanos += boundedRenderDeltaNanos();
-while (accumulatorNanos >= 16_666_667L) {
-    runtime.simulation().tick(16_666_667L, suppliedDeltaNanos -> {
-        updateFixedStep(suppliedDeltaNanos);
-        return 16_666_667L; // explicit application testimony
-    });
-    accumulatorNanos -= 16_666_667L;
-}
-renderGame();
+simulation.update(Gdx.graphics.getDeltaTime());
+renderGame(simulation.interpolationAlpha());
 ```
 
 `start()` captures baseline frame 0, which is not a simulation tick. The first tick has session ID
@@ -62,6 +61,15 @@ renderGame();
 application actually executed; a mismatch with the supplied or configured step is typed evidence,
 not a successful fixed-step claim. A callback exception is rethrown after retaining honest attempted
 tick and any completed frame evidence.
+
+The helper clamps render time, bounds accumulated time, limits catch-up ticks, and reports every
+dropped nanosecond and whole tick. It never calls render, sleeps, starts a thread, or changes
+authoritative state when interpolation alpha is read. Call `clearAccumulator()` from an
+application-owned scenario-reset/checkpoint-restore callback, or restore an explicit sub-step
+remainder with `restoreAccumulator(...)`.
+
+`FixedStepFixtureApplication` exercises this exact facade from a real hidden LWJGL3
+`ApplicationAdapter.render()` loop and verifies paused configured-step advancement under Xvfb.
 
 State-driven applications that do not have a simulation timeline may continue to use
 `runtime.frame(deltaNanos, callback)` directly. A runtime frame is capture evidence, not proof of a
@@ -146,7 +154,7 @@ the registered contact entity's `complete` flag. Missing ticks, failed capture, 
 truncation, missing frame correlation, or incomplete contact evidence yields `INCONCLUSIVE` when it
 could otherwise create a misleading PASS.
 
-Protocol 2.2 exposes `simulationAssert`; MCP exposes the equivalent closed
+Protocol 2.3 exposes `simulationAssert`; MCP exposes the equivalent closed
 `runtime_simulation_assert` tool. See
 [Assert physics over exact simulation ticks](agent-cookbook.md#assert-physics-over-exact-simulation-ticks)
 for every factory, exact tags, request examples, bounds, and result semantics.
@@ -173,7 +181,7 @@ runtime.determinism().checkSimulation(
 The application-owned dispatcher executes the operation while paused. Poll with the identical
 specification and request ID. `EQUAL` is limited to the selected evidence; any failed, missing,
 uncorrelated, truncated, evicted, or explicitly incomplete relevant tick yields `INCONCLUSIVE`.
-Protocol 2.3 and `runtime_simulation_determinism_check` expose the same bounded contract. See
+Protocol 2.4 and `runtime_simulation_determinism_check` expose the same bounded contract. See
 [Compare deterministic Box2D runs](agent-cookbook.md#compare-deterministic-box2d-runs) for the
 complete Java, protocol, MCP, schema, and failure recipes.
 

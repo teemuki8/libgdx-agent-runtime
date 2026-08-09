@@ -47,6 +47,8 @@ public record Box2dContactTickPage(List<Box2dContactTick> ticks, boolean hasMore
         /** Every requested retained contact tick is present. */ COMPLETE,
         /** More matching ticks remain after the page. */ PAGINATED,
         /** Earlier matching contact ticks were evicted. */ PARTIALLY_EVICTED,
+        /** Bounded eviction metadata cannot prove whether the requested tick was captured. */
+        EVICTION_UNKNOWN,
         /** The requested tick has not been captured. */ NOT_YET_CAPTURED
     }
 }

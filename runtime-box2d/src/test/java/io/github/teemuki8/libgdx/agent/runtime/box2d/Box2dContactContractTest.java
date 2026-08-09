@@ -140,6 +140,10 @@ final class Box2dContactContractTest {
         assertThrows(IllegalArgumentException.class, () -> new Box2dContactTickPage(
                 List.of(), true, Box2dContactTickPage.RangeStatus.COMPLETE,
                 Optional.empty(), Optional.empty()));
+        assertEquals(Box2dContactTickPage.RangeStatus.EVICTION_UNKNOWN,
+                new Box2dContactTickPage(List.of(), false,
+                        Box2dContactTickPage.RangeStatus.EVICTION_UNKNOWN,
+                        Optional.empty(), Optional.empty()).rangeStatus());
     }
 
     @Test

@@ -182,8 +182,9 @@ Disabled runtimes retain no providers or frames and perform no serialization.
     missing-begin, and failed-step callbacks; only an authoritative epoch/world baseline clears the
     unknown state. Nested record/active truncation participates in `complete`. Typed contact ticks
     become queryable only after the simulation timeline confirms their resulting runtime frame;
-    failed correlation is retained as typed incomplete evidence. Typed history retains an eviction
-    watermark across deque eviction and epoch reset. Disabled capture executes the application step
-    and forwards its listener without evidence. Fixture mutation removes only affected retained
-    contact keys, and public evidence values reject oversized or open truncation structures before
-    copying them.
+    failed correlation is retained as typed incomplete evidence. Typed history retains bounded exact
+    evicted tick IDs across deque eviction and epoch reset: known evictions report
+    `PARTIALLY_EVICTED`, discarded eviction metadata reports `EVICTION_UNKNOWN`, and uncovered gaps
+    remain `NOT_YET_CAPTURED`. Disabled capture executes the application step and forwards its
+    listener without evidence. Fixture mutation removes only affected retained contact keys, and
+    public evidence values reject oversized or open truncation structures before copying them.

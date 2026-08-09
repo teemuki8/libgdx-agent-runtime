@@ -35,6 +35,7 @@ public final class Box2dContacts implements AutoCloseable {
     private final ContactListener listener = new EvidenceListener();
     private final Object historyLock = new Object();
     private final ArrayDeque<Box2dContactTick> history = new ArrayDeque<>();
+    private final ArrayDeque<SimulationTickId> evictedTickIds = new ArrayDeque<>();
     private final TreeMap<Box2dContactRecord.Key, Box2dContactTick.ActiveContact> active =
             new TreeMap<>();
     private final EnumMap<Box2dContactTick.DiagnosticCode, Long> lifecycleDiagnostics =
@@ -46,11 +47,11 @@ public final class Box2dContacts implements AutoCloseable {
     private EntityRegistration entityRegistration;
     private Capture capture;
     private SimulationTickId lastCapturedTick;
-    private Box2dContactTick latestTick;
+    private volatile Box2dContactTick latestTick;
     private Box2dContactTick pendingTick;
     private ExecutionEpochId observedEpoch;
     private long activeObserved;
-    private long evictedThroughTickId;
+    private long discardedEvictionMetadataThrough;
     private boolean closed;
 
     Box2dContacts(AgentRuntime runtime, Box2dInspection inspection, String worldId,
@@ -190,9 +191,12 @@ public final class Box2dContacts implements AutoCloseable {
             long requestedTicks = toTick - fromTick + 1;
             boolean missingTick = matchingCount != requestedTicks;
             Box2dContactTickPage.RangeStatus status;
-            if (fromTick <= evictedThroughTickId
-                    || oldest.isPresent() && fromTick < oldest.orElseThrow().value()) {
+            boolean knownEvicted = evictedTickIds.stream().anyMatch(value ->
+                    value.value() >= fromTick && value.value() <= toTick);
+            if (knownEvicted) {
                 status = Box2dContactTickPage.RangeStatus.PARTIALLY_EVICTED;
+            } else if (fromTick <= discardedEvictionMetadataThrough) {
+                status = Box2dContactTickPage.RangeStatus.EVICTION_UNKNOWN;
             } else if (oldest.isEmpty()) {
                 status = Box2dContactTickPage.RangeStatus.NOT_YET_CAPTURED;
             } else if (missingTick) {
@@ -263,6 +267,7 @@ public final class Box2dContacts implements AutoCloseable {
         synchronized (historyLock) {
             history.clear();
             pendingTick = null;
+            evictedTickIds.clear();
         }
         persistentDiagnostics.clear();
         if (entityRegistration != null
@@ -505,14 +510,10 @@ public final class Box2dContacts implements AutoCloseable {
         lifecycleDiagnostics.put(Box2dContactTick.DiagnosticCode.EPOCH_RESET, 1L);
         synchronized (historyLock) {
             if (pendingTick != null) {
-                evictedThroughTickId = Math.max(
-                        evictedThroughTickId, pendingTick.simulationTickId().value());
+                recordEvicted(pendingTick.simulationTickId());
                 pendingTick = null;
             }
-            if (!history.isEmpty()) {
-                evictedThroughTickId = Math.max(evictedThroughTickId,
-                        history.getLast().simulationTickId().value());
-            }
+            history.forEach(value -> recordEvicted(value.simulationTickId()));
             history.clear();
         }
     }
@@ -544,8 +545,7 @@ public final class Box2dContacts implements AutoCloseable {
         }
         if (history.size() == limits.retainedContactTicks()) {
             Box2dContactTick evicted = history.removeFirst();
-            evictedThroughTickId = Math.max(
-                    evictedThroughTickId, evicted.simulationTickId().value());
+            recordEvicted(evicted.simulationTickId());
         }
         history.addLast(settled);
         if (latestTick != null
@@ -553,6 +553,15 @@ public final class Box2dContacts implements AutoCloseable {
             latestTick = settled;
         }
         pendingTick = null;
+    }
+
+    private void recordEvicted(SimulationTickId tickId) {
+        if (evictedTickIds.size() == limits.retainedContactTicks()) {
+            SimulationTickId discarded = evictedTickIds.removeFirst();
+            discardedEvictionMetadataThrough = Math.max(
+                    discardedEvictionMetadataThrough, discarded.value());
+        }
+        evictedTickIds.addLast(tickId);
     }
 
     private Box2dContactTick missingCorrelation(Box2dContactTick tick) {

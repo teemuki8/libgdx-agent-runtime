@@ -365,13 +365,15 @@ for (Box2dContactTick tick : page.ticks()) {
 The range is inclusive and uses session-monotonic `SimulationTickId` values, not epoch-relative
 ticks or render frames. `limit` must not exceed `queryPageSize`. `Box2dContactTickPage` exposes
 `ticks`, `hasMore`, `rangeStatus`, `oldestRetainedTickId`, and `newestRetainedTickId`. Its closed
-range statuses are `COMPLETE`, `PAGINATED`, `PARTIALLY_EVICTED`, and `NOT_YET_CAPTURED`. A missing
-tick inside the requested retained range is `NOT_YET_CAPTURED`, never an invented complete page.
+range statuses are `COMPLETE`, `PAGINATED`, `PARTIALLY_EVICTED`, `EVICTION_UNKNOWN`, and
+`NOT_YET_CAPTURED`. A missing tick inside the requested retained range is `NOT_YET_CAPTURED`, never
+an invented complete page.
 The adapter confirms the simulation timeline's resulting frame before moving a captured contact
 tick into typed history. A query made while that frame is pending omits it; a failed frame is
 retained with `MISSING_CORRELATION` and `complete=false`. Paging allocates at most the requested
-page, while an eviction watermark distinguishes old evidence from future evidence even when a
-reset leaves the retained deque empty.
+page. Bounded exact evicted-tick metadata survives history eviction and reset, so a known evicted
+tick reports `PARTIALLY_EVICTED`. If that metadata is itself discarded, the affected old range
+reports `EVICTION_UNKNOWN`; it does not silently become a PASS-capable negative result.
 
 Each immutable `Box2dContactTick` exposes:
 
@@ -635,8 +637,9 @@ contact entity:
 
 A scenario reset or checkpoint restore starts a new execution epoch. Its baseline clears the active
 set and typed `Box2dContacts.ticks` history, publishes `latestTick=null`, and reports `EPOCH_RESET`;
-session simulation tick IDs still are not reused, and old typed queries report
-`PARTIALLY_EVICTED`. World rebind clears contact evidence and reports
+session simulation tick IDs still are not reused. Old typed queries report `PARTIALLY_EVICTED`
+while their exact eviction IDs are retained, then `EVICTION_UNKNOWN` if that bounded metadata is
+discarded. World rebind clears contact evidence and reports
 `WORLD_REBOUND`. Install the same explicit listener or composition on the replacement world before
 stepping it. Fixture rebind/unregister clears only affected retained active keys, preserves
 unrelated contacts, and reports `ENDPOINT_CHANGED`.

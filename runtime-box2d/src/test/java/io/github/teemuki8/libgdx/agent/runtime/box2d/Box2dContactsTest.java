@@ -22,6 +22,7 @@ import com.badlogic.gdx.physics.box2d.World;
 import com.badlogic.gdx.physics.box2d.WorldManifold;
 import com.badlogic.gdx.utils.GdxNativesLoader;
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
+import io.github.teemuki8.libgdx.agent.runtime.core.BaselineKind;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeConfiguration;
 import io.github.teemuki8.libgdx.agent.runtime.core.SessionId;
 import io.github.teemuki8.libgdx.agent.runtime.core.Truncation;
@@ -298,9 +299,11 @@ final class Box2dContactsTest {
     }
 
     @Test
-    void missingCapturedTickInsideRetainedRangeIsNeverReportedComplete() {
+    void missingCapturedTickRemainsDistinctFromBoundedEvictionEvidence() {
         try (Scene scene = new Scene("contact-history-gap")) {
-            Box2dContacts contacts = scene.registerContacts(
+            scene.registerExplicit(scene.groundFixture, "ground", scene.ballFixture, "ball");
+            Box2dContacts contacts = scene.inspection.registerContacts("main",
+                    new Box2dContactLimits(32, 8, 2, 2, 2, 8, 1, 1),
                     Box2dContactPolicy.developmentDefaults());
             scene.world.setContactListener(contacts.listener());
             scene.start();
@@ -308,10 +311,18 @@ final class Box2dContactsTest {
             scene.runtime.simulation().tick(STEP_NANOS, supplied -> supplied);
             scene.tick(contacts);
 
-            Box2dContactTickPage missing = contacts.ticks(2, 2, 16);
+            Box2dContactTickPage missing = contacts.ticks(2, 2, 1);
             assertTrue(missing.ticks().isEmpty());
             assertEquals(Box2dContactTickPage.RangeStatus.NOT_YET_CAPTURED,
                     missing.rangeStatus());
+
+            scene.runtime.startEpoch(BaselineKind.SCENARIO_RESET);
+            assertEquals(Box2dContactTickPage.RangeStatus.NOT_YET_CAPTURED,
+                    contacts.ticks(2, 2, 1).rangeStatus());
+            assertEquals(Box2dContactTickPage.RangeStatus.PARTIALLY_EVICTED,
+                    contacts.ticks(3, 3, 1).rangeStatus());
+            assertEquals(Box2dContactTickPage.RangeStatus.EVICTION_UNKNOWN,
+                    contacts.ticks(1, 1, 1).rangeStatus());
         }
     }
 

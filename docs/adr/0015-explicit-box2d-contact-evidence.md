@@ -69,8 +69,11 @@ retention.
 Typed contact ticks are staged inside the simulation callback but enter queryable history only
 after the simulation timeline confirms the resulting runtime frame. A failed frame is retained as
 incomplete `MISSING_CORRELATION` evidence. Bounded history keeps an eviction watermark across deque
-eviction and epoch reset, so old ranges are never reported as not-yet-captured. A disabled runtime
-still executes the application step and composed application listener while retaining no evidence.
+eviction and epoch reset, together with a bounded exact set of evicted tick IDs. Exact matches
+report `PARTIALLY_EVICTED`; once exact eviction metadata is discarded, affected old ranges report
+`EVICTION_UNKNOWN`. A missing tick not covered by either form of evidence remains
+`NOT_YET_CAPTURED`. A disabled runtime still executes the application step and composed application
+listener while retaining no evidence.
 
 ## Consequences
 

@@ -116,7 +116,9 @@ Each finalized `Box2dContactTick` contains the tick/frame/epoch correlation, sor
 active contacts, counters, diagnostics, and truncations. Captured ticks remain pending until the
 simulation timeline confirms their resulting frame; capture failure produces
 `MISSING_CORRELATION` rather than a phantom completed frame. A bounded deque retains typed Java
-history and an eviction watermark across capacity eviction and epoch reset.
+history and a bounded exact set of evicted tick IDs across capacity eviction and epoch reset. If
+that eviction metadata is itself discarded, queries report `EVICTION_UNKNOWN`; they never
+misclassify a never-captured gap as evicted or claim that discarded evidence was not yet captured.
 The registered `box2d.contacts` runtime entity exposes the current completed contact tick and active
 set through a closed `RuntimeValue` schema, so existing immutable frame and entity-history queries
 provide protocol/MCP history as well. Runtime frame eviction remains explicit in those generic

@@ -21,6 +21,8 @@ import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeAssertion;
 import io.github.teemuki8.libgdx.agent.runtime.core.SnapshotComparisonScope;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
+import io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertion;
+import io.github.teemuki8.libgdx.agent.runtime.core.SimulationEvidenceRequirement;
 import io.modelcontextprotocol.json.McpJsonDefaults;
 import io.modelcontextprotocol.spec.McpSchema;
 import java.util.LinkedHashMap;
@@ -234,12 +236,20 @@ public final class RuntimeToolHandler implements AutoCloseable {
                     number(arguments, "executionEpochId", -1),
                     number(arguments, "fromEpochTick", -1),
                     number(arguments, "toEpochTick", -1), limit);
+            case "runtime_simulation_assert" -> new RuntimeCommand.SimulationAssert(
+                    simulationAssertion(arguments.get("assertion")),
+                    simulationEvidenceRequirements(arguments.get("evidenceRequirements")),
+                    number(arguments, "executionEpochId", -1),
+                    number(arguments, "fromEpochTick", -1),
+                    number(arguments, "toEpochTick", -1),
+                    Math.toIntExact(number(arguments, "evidenceLimit", -1)));
             default -> throw new IllegalArgumentException("unknown runtime tool");
         };
         ProtocolVersion version = switch (toolName) {
             case "runtime_capabilities" -> new ProtocolVersion(
                     1, Math.toIntExact(number(arguments, "protocolMinor", 0)));
             case "runtime_simulation", "runtime_simulation_ticks" -> ProtocolVersion.V2_1;
+            case "runtime_simulation_assert" -> ProtocolVersion.V2_2;
             default -> ProtocolVersion.V2;
         };
         return new RuntimeRequest(version,
@@ -389,6 +399,108 @@ public final class RuntimeToolHandler implements AutoCloseable {
                     comparisonScope(values.get("comparisonScope")));
             default -> throw new IllegalArgumentException("unknown assertion type");
         };
+    }
+
+    private static SimulationAssertion simulationAssertion(Object raw) {
+        Map<String, Object> values = stringMap(raw, "simulation assertion");
+        String type = string(values, "assertionType");
+        return switch (type) {
+            case "entityExists" -> new SimulationAssertion.EntityExists(
+                    EntityId.of(string(values, "entityId")));
+            case "propertyEquals" -> new SimulationAssertion.PropertyEquals(
+                    EntityId.of(string(values, "entityId")), string(values, "property"),
+                    runtimeValue(values.get("expected"), 0));
+            case "scalarApproximatelyEquals" ->
+                    new SimulationAssertion.ScalarApproximatelyEquals(
+                            EntityId.of(string(values, "entityId")),
+                            string(values, "property"), decimal(values, "expected"),
+                            decimal(values, "absoluteTolerance"));
+            case "vectorApproximatelyEquals" ->
+                    new SimulationAssertion.VectorApproximatelyEquals(
+                            EntityId.of(string(values, "entityId")),
+                            string(values, "property"), vector(values.get("expected")),
+                            decimal(values, "absoluteTolerance"),
+                            SimulationAssertion.VectorToleranceMode.valueOf(
+                                    string(values, "toleranceMode")));
+            case "vectorInArea" -> new SimulationAssertion.VectorInArea(
+                    EntityId.of(string(values, "entityId")), string(values, "property"),
+                    area(values.get("area")), SimulationAssertion.AreaRelation.valueOf(
+                            string(values, "relation")), SimulationAssertion.Extent.valueOf(
+                            string(values, "extent")));
+            case "vectorMagnitudeAtMost" -> new SimulationAssertion.VectorMagnitudeAtMost(
+                    EntityId.of(string(values, "entityId")), string(values, "property"),
+                    decimal(values, "maximum"), SimulationAssertion.Extent.valueOf(
+                            string(values, "extent")));
+            case "vectorDistanceApproximatelyEquals" ->
+                    new SimulationAssertion.VectorDistanceApproximatelyEquals(
+                            EntityId.of(string(values, "leftEntityId")),
+                            string(values, "leftProperty"),
+                            EntityId.of(string(values, "rightEntityId")),
+                            string(values, "rightProperty"),
+                            decimal(values, "expectedDistance"),
+                            decimal(values, "absoluteTolerance"));
+            case "wrappedAngleApproximatelyEquals" ->
+                    new SimulationAssertion.WrappedAngleApproximatelyEquals(
+                            EntityId.of(string(values, "entityId")),
+                            string(values, "property"), decimal(values, "expected"),
+                            decimal(values, "period"), decimal(values, "absoluteTolerance"));
+            case "eventCount" -> new SimulationAssertion.EventCount(
+                    new SimulationAssertion.EventSelector(
+                            EventType.of(string(values, "eventType")),
+                            Optional.ofNullable(string(values, "subject")).map(EntityId::of),
+                            Optional.ofNullable(string(values, "source")).map(EntityId::of),
+                            objectValue(values.get("attributes"))),
+                    SimulationAssertion.EventExpectation.valueOf(
+                            string(values, "expectation")),
+                    Math.toIntExact(number(values, "exactCount", -1)));
+            case "objectListContains" -> new SimulationAssertion.ObjectListContains(
+                    EntityId.of(string(values, "entityId")), string(values, "property"),
+                    objectValue(values.get("selector")), SimulationAssertion.Extent.valueOf(
+                            string(values, "extent")));
+            case "allOf" -> new SimulationAssertion.AllOf(
+                    simulationAssertions(values.get("terms")));
+            default -> throw new IllegalArgumentException("unknown simulation assertion type");
+        };
+    }
+
+    private static List<SimulationAssertion> simulationAssertions(Object raw) {
+        if (!(raw instanceof List<?> values)) {
+            throw new IllegalArgumentException("simulation assertion terms must be an array");
+        }
+        return values.stream().map(RuntimeToolHandler::simulationAssertion).toList();
+    }
+
+    private static List<SimulationEvidenceRequirement> simulationEvidenceRequirements(Object raw) {
+        if (!(raw instanceof List<?> values)) {
+            throw new IllegalArgumentException("simulation evidence requirements must be an array");
+        }
+        return values.stream().map(value -> {
+            Map<String, Object> fields = stringMap(value, "simulation evidence requirement");
+            return new SimulationEvidenceRequirement(
+                    EntityId.of(string(fields, "entityId")), string(fields, "property"));
+        }).toList();
+    }
+
+    private static SimulationAssertion.Area area(Object raw) {
+        Map<String, Object> values = stringMap(raw, "simulation assertion area");
+        return new SimulationAssertion.Area(
+                decimal(values, "minimumX"), decimal(values, "minimumY"),
+                decimal(values, "maximumX"), decimal(values, "maximumY"));
+    }
+
+    private static RuntimeValue.Vector2Value vector(Object raw) {
+        Map<String, Object> values = stringMap(raw, "simulation assertion vector");
+        return new RuntimeValue.Vector2Value(
+                new RuntimeValue.DecimalValue(decimal(values, "x")),
+                new RuntimeValue.DecimalValue(decimal(values, "y")));
+    }
+
+    private static RuntimeValue.ObjectValue objectValue(Object raw) {
+        RuntimeValue value = runtimeValue(raw, 0);
+        if (value instanceof RuntimeValue.ObjectValue object) {
+            return object;
+        }
+        throw new IllegalArgumentException("simulation assertion selector must be an object");
     }
 
     private static SnapshotComparisonScope comparisonScope(Object raw) {

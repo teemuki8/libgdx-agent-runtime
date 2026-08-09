@@ -300,12 +300,14 @@ final class RuntimeMcpTest {
             assertEquals(runtime.sessionId(), publication.sessionId());
             RuntimeToolCatalog catalog = new RuntimeToolCatalog(
                     new RuntimeProtocolService(registry).toolNames());
-            assertEquals(21, catalog.tools().size());
+            assertEquals(22, catalog.tools().size());
             assertEquals(false,
                     catalog.tool("runtime_command_cancel").inputSchema()
                             .get("additionalProperties"));
             assertEquals(false,
                     catalog.tool("runtime_assert").inputSchema().get("additionalProperties"));
+            assertEquals(false, catalog.tool("runtime_simulation_assert").inputSchema()
+                    .get("additionalProperties"));
             assertTrue(catalog.toolNames().containsAll(List.of(
                     "runtime_recording_start", "runtime_recording_stop",
                     "runtime_recording_get")));

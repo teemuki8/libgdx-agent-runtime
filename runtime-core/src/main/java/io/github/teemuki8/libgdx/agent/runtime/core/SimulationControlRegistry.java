@@ -56,6 +56,10 @@ public final class SimulationControlRegistry {
         return controller != null;
     }
 
+    synchronized boolean acknowledgedTicksAvailable() {
+        return controller != null && controller.acknowledgedTick().isPresent();
+    }
+
     /** Reports the last successfully applied pause state. */
     public synchronized boolean paused() {
         return paused;
@@ -268,7 +272,18 @@ public final class SimulationControlRegistry {
     }
 
     FrameSnapshot tickForDeterminism(long deltaNanos) {
+        return tickForDeterminism(deltaNanos, List.of(), false).frame();
+    }
+
+    DeterminismTickEvidence tickForDeterminism(
+            long deltaNanos, List<SimulationDeterminismInput> inputsForTick) {
+        return tickForDeterminism(deltaNanos, inputsForTick, true);
+    }
+
+    private DeterminismTickEvidence tickForDeterminism(
+            long deltaNanos, List<SimulationDeterminismInput> inputsForTick, boolean scripted) {
         SimulationControllerSpec spec = requireController();
+        Objects.requireNonNull(inputsForTick, "inputsForTick");
         long tick;
         synchronized (this) {
             if (!paused) {
@@ -281,7 +296,9 @@ public final class SimulationControlRegistry {
         SimulationTick simulationTick;
         try {
             simulationTick = runtime.simulation().tickControlled(
-                    deltaNanos, tick, spec.acknowledgedTick(), spec.tick());
+                    deltaNanos, tick, spec.acknowledgedTick(), spec.tick(),
+                    scripted ? () -> runtime.inputs().executeDeterminismInputs(inputsForTick)
+                            : () -> {});
         } catch (RuntimeException | Error failure) {
             throw failure;
         }
@@ -292,7 +309,8 @@ public final class SimulationControlRegistry {
         }
         runtime.recordings().recordTick(
                 tick, deltaNanos, runtime.currentEpoch(), resultingFrame);
-        return runtime.frame(resultingFrame).orElseThrow();
+        return new DeterminismTickEvidence(
+                simulationTick, runtime.frame(resultingFrame).orElseThrow());
     }
 
     private boolean satisfied(Evidence evidence, Signature signature) {
@@ -439,6 +457,13 @@ public final class SimulationControlRegistry {
             this.signature = signature;
             this.paused = paused;
             this.submittedFrameId = submittedFrameId;
+        }
+    }
+
+    record DeterminismTickEvidence(SimulationTick tick, FrameSnapshot frame) {
+        DeterminismTickEvidence {
+            Objects.requireNonNull(tick, "tick");
+            Objects.requireNonNull(frame, "frame");
         }
     }
 }

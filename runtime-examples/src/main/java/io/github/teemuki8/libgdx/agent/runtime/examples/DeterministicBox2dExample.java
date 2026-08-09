@@ -4,8 +4,12 @@ import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.physics.box2d.Body;
 import com.badlogic.gdx.physics.box2d.BodyDef;
 import com.badlogic.gdx.physics.box2d.CircleShape;
+import com.badlogic.gdx.physics.box2d.Contact;
+import com.badlogic.gdx.physics.box2d.ContactImpulse;
+import com.badlogic.gdx.physics.box2d.ContactListener;
 import com.badlogic.gdx.physics.box2d.Fixture;
 import com.badlogic.gdx.physics.box2d.Joint;
+import com.badlogic.gdx.physics.box2d.Manifold;
 import com.badlogic.gdx.physics.box2d.PolygonShape;
 import com.badlogic.gdx.physics.box2d.World;
 import com.badlogic.gdx.physics.box2d.joints.DistanceJointDef;
@@ -65,6 +69,7 @@ public final class DeterministicBox2dExample implements AutoCloseable {
     private final AgentRuntime runtime;
     private final Box2dInspection inspection;
     private final Box2dContacts contacts;
+    private final ContactListener installedContactListener;
     private final Box2dRegistration<World> worldRegistration;
     private final LinkedHashMap<String, Box2dRegistration<Body>> bodyRegistrations =
             new LinkedHashMap<>();
@@ -74,6 +79,7 @@ public final class DeterministicBox2dExample implements AutoCloseable {
             new LinkedHashMap<>();
     private final LibGdxFixedStepSimulation simulation;
     private NativeScene scene;
+    private int applicationBeginContacts;
     private boolean closed;
 
     private DeterministicBox2dExample(ApplicationCommandDispatcher dispatcher) {
@@ -89,7 +95,24 @@ public final class DeterministicBox2dExample implements AutoCloseable {
         contacts = inspection.registerContacts(WORLD_ID,
                 Box2dContactLimits.developmentDefaults(),
                 Box2dContactPolicy.developmentDefaults());
-        scene.world().setContactListener(contacts.listener());
+        installedContactListener = contacts.compose(new ContactListener() {
+            @Override public void beginContact(Contact contact) {
+                applicationBeginContacts++;
+            }
+
+            @Override public void endContact(Contact contact) {
+                // This example's application listener needs only begin callbacks.
+            }
+
+            @Override public void preSolve(Contact contact, Manifold oldManifold) {
+                // This example's application listener needs only begin callbacks.
+            }
+
+            @Override public void postSolve(Contact contact, ContactImpulse impulse) {
+                // This example's application listener needs only begin callbacks.
+            }
+        });
+        scene.world().setContactListener(installedContactListener);
 
         runtime.inputs().register(InputSpec.builder("move-player")
                 .description("Sets horizontal velocity before an exact physics tick")
@@ -162,7 +185,8 @@ public final class DeterministicBox2dExample implements AutoCloseable {
                 .result().orElseThrow();
 
         return new Box2dResult(position, contact, comparison.status(), correlated,
-                comparison.message().contains("whole-program determinism is proven"));
+                comparison.message().contains("whole-program determinism is proven"),
+                applicationBeginContacts);
     }
 
     @Override public void close() {
@@ -185,8 +209,9 @@ public final class DeterministicBox2dExample implements AutoCloseable {
         bodyRegistrations.clear();
         worldRegistration.rebind(replacement.world());
         registerScene(replacement);
-        replacement.world().setContactListener(contacts.listener());
+        replacement.world().setContactListener(installedContactListener);
         scene = replacement;
+        applicationBeginContacts = 0;
         runtime.fixedStepSimulation().clearAccumulator();
         previous.dispose();
     }
@@ -277,7 +302,8 @@ public final class DeterministicBox2dExample implements AutoCloseable {
             AssertionStatus contactStatus,
             DeterminismStatus determinismStatus,
             boolean tickFrameCorrelated,
-            boolean wholeProgramDeterminismClaimed) {}
+            boolean wholeProgramDeterminismClaimed,
+            int applicationBeginContacts) {}
 
     private record NativeScene(
             World world, Map<String, Body> bodies, Map<String, Fixture> fixtures,

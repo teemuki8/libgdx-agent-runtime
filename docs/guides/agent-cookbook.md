@@ -240,8 +240,9 @@ These are failure boundaries, not strings to pattern-match. Inspect the typed re
 
 Use development dependencies `agent-runtime-core`, `agent-runtime-libgdx`, and
 `agent-runtime-box2d` at `2.0.1-SNAPSHOT`. The consumer example explicitly owns a native `World`,
-registers stable world/body/fixture/joint IDs, installs `Box2dContacts.listener()`, and steps only
-inside the acknowledged fixed-step callback:
+registers stable world/body/fixture/joint IDs, installs an evidence-first/application-second
+listener from `Box2dContacts.compose(applicationListener)`, and steps only inside the acknowledged
+fixed-step callback:
 
 ```java
 contacts.captureStep(() -> world.step(
@@ -255,6 +256,8 @@ runs two selected body/contact evidence repeats. The expected summary is positio
 `PASS`, determinism `EQUAL`, and no whole-program determinism claim. Structured entities remain
 available at `box2d.world.main`, `box2d.body.player`, `box2d.fixture.player-shape`,
 `box2d.joint.static-link`, and `box2d.contacts.main`.
+The native regression also requires the composed application listener to observe a begin callback;
+each recreated world reinstalls that same composed listener.
 
 World objects, callbacks, contacts, and native disposal remain capture-thread/application-owned.
 The adapter copies only explicitly registered bounded facts; contact completeness and truncation

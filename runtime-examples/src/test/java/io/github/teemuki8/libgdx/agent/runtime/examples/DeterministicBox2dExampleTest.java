@@ -30,6 +30,7 @@ class DeterministicBox2dExampleTest {
             assertEquals(DeterminismStatus.EQUAL, result.determinismStatus());
             assertTrue(result.tickFrameCorrelated());
             assertFalse(result.wholeProgramDeterminismClaimed());
+            assertTrue(result.applicationBeginContacts() > 0);
 
             assertTrue(example.runtime().entity(EntityId.of("box2d.world.main")).isPresent());
             assertTrue(example.runtime().entity(EntityId.of("box2d.body.player")).isPresent());

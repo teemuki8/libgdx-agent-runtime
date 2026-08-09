@@ -157,6 +157,30 @@ final class DeterminismCanonicalSize {
         };
     }
 
+    /** One scheduled simulation input: tick, input id, and bounded parameters. */
+    static long simulationInput(SimulationDeterminismInput input) {
+        long size = Long.BYTES;
+        size = add(size, string(input.inputId()));
+        return add(size, value(input.parameters()));
+    }
+
+    /** One exact simulation configuration requirement. */
+    static long simulationConfiguration(SimulationConfigurationRequirement requirement) {
+        long size = string(requirement.entityId().value());
+        size = add(size, string(requirement.property()));
+        return add(size, value(requirement.expected()));
+    }
+
+    /** One simulation evidence-completeness requirement. */
+    static long simulationEvidence(SimulationEvidenceRequirement requirement) {
+        return add(string(requirement.entityId().value()), string(requirement.property()));
+    }
+
+    /** One selected simulation event type. */
+    static long simulationEventType(EventType eventType) {
+        return string(eventType.value());
+    }
+
     private static long values(List<RuntimeValue> values) {
         long size = listPrefix();
         for (RuntimeValue value : values) {

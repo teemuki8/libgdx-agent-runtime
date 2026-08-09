@@ -30,7 +30,7 @@ import org.junit.jupiter.api.Test;
 
 final class SimulationDeterminismProtocolTest {
     @Test
-    void protocolTwoThreeRoundTripsAndExecutesClosedTickAwareRequest() {
+    void protocolTwoFourRoundTripsAndExecutesClosedTickAwareRequest() {
         ArrayDeque<Runnable> queue = new ArrayDeque<>();
         long[] position = {0};
         RuntimeRegistry registry = new RuntimeRegistry();
@@ -95,7 +95,7 @@ final class SimulationDeterminismProtocolTest {
     }
 
     @Test
-    void protocolTwoTwoAndUnknownNestedFieldsAreRejected() {
+    void protocolTwoThreeAndUnknownNestedFieldsAreRejected() {
         RuntimeRegistry registry = new RuntimeRegistry();
         AgentRuntime runtime = AgentRuntime.builder()
                 .sessionId(SessionId.of("simulation-determinism-version")).build();

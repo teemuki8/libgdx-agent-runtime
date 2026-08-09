@@ -151,7 +151,8 @@ Protocol 2.4 adds a distinct `simulationDeterminismCheck` command and
 evidence. Protocol 1.13 through 2.2 determinism shapes remain unchanged. Every JSON object rejects
 unknown fields and versions before execution.
 
-MCP adds `runtime_simulation_determinism_check` with the same natural-value request contract.
+MCP adds `runtime_simulation_determinism_check` with bounded natural JSON and reserved closed
+enum/vector tags for exact configuration testimony.
 Capability discovery reports `simulation-determinism`, protocol 2.4, hard input/configuration/
 requirement/event limits, and dependencies on scenario reset, controlled acknowledged ticks, the
 simulation timeline, and completed immutable frames.

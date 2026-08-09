@@ -18,6 +18,7 @@ public final class SimulationControlRegistry {
     private LinkedHashMap<String, BooleanSupplier> conditionPredicates =
             new LinkedHashMap<>();
     private boolean paused;
+    private boolean pauseStateKnown = true;
     private long currentTick;
 
     SimulationControlRegistry(AgentRuntime runtime, ControlLimits limits) {
@@ -65,6 +66,11 @@ public final class SimulationControlRegistry {
         return paused;
     }
 
+    /** Reports whether the application pause state is known after the latest callback. */
+    public synchronized boolean pauseStateKnown() {
+        return pauseStateKnown;
+    }
+
     /** Returns registered semantic conditions in stable registration order. */
     public synchronized List<ControlConditionDescriptor> conditions() {
         return List.copyOf(conditions.values());
@@ -100,6 +106,7 @@ public final class SimulationControlRegistry {
         conditionPredicates.clear();
         operations.clear();
         paused = false;
+        pauseStateKnown = true;
     }
 
     /** Returns the number of successfully completed application-defined controlled ticks. */
@@ -131,11 +138,13 @@ public final class SimulationControlRegistry {
                 (pause ? spec.pause() : spec.resume()).run();
                 synchronized (this) {
                     paused = pause;
+                    pauseStateKnown = true;
                     evidence.paused = pause;
                     evidence.stopReason = ControlStopReason.COMPLETED;
                 }
             } catch (RuntimeException | Error failure) {
                 synchronized (this) {
+                    pauseStateKnown = false;
                     evidence.stopReason = ControlStopReason.CALLBACK_FAILED;
                 }
                 throw failure;
@@ -261,13 +270,22 @@ public final class SimulationControlRegistry {
     boolean pauseForDeterminism() {
         SimulationControllerSpec spec = requireController();
         synchronized (this) {
+            requireKnownPauseState();
             if (paused) {
                 return true;
             }
         }
-        spec.pause().run();
+        try {
+            spec.pause().run();
+        } catch (RuntimeException | Error failure) {
+            synchronized (this) {
+                pauseStateKnown = false;
+            }
+            throw failure;
+        }
         synchronized (this) {
             paused = true;
+            pauseStateKnown = true;
         }
         return false;
     }
@@ -277,9 +295,17 @@ public final class SimulationControlRegistry {
             return;
         }
         SimulationControllerSpec spec = requireController();
-        spec.resume().run();
+        try {
+            spec.resume().run();
+        } catch (RuntimeException | Error failure) {
+            synchronized (this) {
+                pauseStateKnown = false;
+            }
+            throw failure;
+        }
         synchronized (this) {
             paused = false;
+            pauseStateKnown = true;
         }
     }
 
@@ -397,9 +423,17 @@ public final class SimulationControlRegistry {
 
 
     private synchronized void requirePausedDuringExecution(Evidence evidence) {
+        requireKnownPauseState();
         if (!paused) {
             evidence.stopReason = ControlStopReason.INVALID_STATE;
             throw new IllegalStateException("simulation resumed before tick advancement");
+        }
+    }
+
+    private void requireKnownPauseState() {
+        if (!pauseStateKnown) {
+            throw new AgentRuntimeException(RuntimeErrorCode.INVALID_LIFECYCLE,
+                    "simulation pause state is unknown; apply an explicit pause or resume control");
         }
     }
 

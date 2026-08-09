@@ -1,5 +1,6 @@
 package io.github.teemuki8.libgdx.agent.runtime.box2d;
 
+import io.github.teemuki8.libgdx.agent.runtime.core.AssertionScope;
 import io.github.teemuki8.libgdx.agent.runtime.core.DeterminismProfile;
 import io.github.teemuki8.libgdx.agent.runtime.core.DeterminismSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
@@ -75,7 +76,6 @@ public final class Box2dDeterminism {
             this.configuration = Objects.requireNonNull(configuration, "configuration");
             this.repeatCount = repeatCount;
             this.ticksPerRepeat = ticksPerRepeat;
-            entities.add(entity("world", worldId));
         }
 
         /** Selects one registered body and one or more exact top-level properties. */
@@ -95,18 +95,17 @@ public final class Box2dDeterminism {
 
         /** Compares bounded active-contact snapshots and requires complete contact testimony. */
         public Builder activeContacts() {
+            addContactSelection("activeContacts");
             activeContacts = true;
             observableSelected = true;
-            entities.add(entity("contacts", worldId));
-            properties.add("activeContacts");
             return this;
         }
 
         /** Compares the four selected Box2D contact callback event types. */
         public Builder contactEvents() {
+            addContactSelection("complete");
             contactEvents = true;
             observableSelected = true;
-            entities.add(entity("contacts", worldId));
             return this;
         }
 
@@ -116,7 +115,13 @@ public final class Box2dDeterminism {
             if (epochTick > ticksPerRepeat) {
                 throw new IllegalArgumentException("determinism input tick exceeds the run");
             }
-            inputs.add(new SimulationDeterminismInput(epochTick, inputId, parameters));
+            SimulationDeterminismInput input =
+                    new SimulationDeterminismInput(epochTick, inputId, parameters);
+            if (inputs.size() >= SimulationDeterminismSpec.MAX_INPUTS) {
+                throw new IllegalArgumentException(
+                        "determinism input count exceeds the hard bound");
+            }
+            inputs.add(input);
             return this;
         }
 
@@ -146,12 +151,46 @@ public final class Box2dDeterminism {
                 throw new IllegalArgumentException(
                         "at least one Box2D property must be selected");
             }
-            entities.add(entity(kind, stableId));
-            for (String property : selectedProperties) {
-                properties.add(validateProperty(property));
+            if (selectedProperties.length > AssertionScope.MAX_EVIDENCE) {
+                throw new IllegalArgumentException(
+                        "Box2D property selection exceeds the hard bound");
             }
+            ArrayList<String> validated = new ArrayList<>(selectedProperties.length);
+            for (String property : selectedProperties) {
+                validated.add(validateProperty(property));
+            }
+            EntityId selectedEntity = entity(kind, stableId);
+            if (!entities.contains(selectedEntity)
+                    && entities.size() >= AssertionScope.MAX_EVIDENCE) {
+                throw new IllegalArgumentException(
+                        "Box2D entity selection exceeds the hard bound");
+            }
+            long newProperties = validated.stream().distinct()
+                    .filter(property -> !properties.contains(property)).count();
+            if (properties.size() + newProperties > AssertionScope.MAX_EVIDENCE) {
+                throw new IllegalArgumentException(
+                        "Box2D property selection exceeds the hard bound");
+            }
+            entities.add(selectedEntity);
+            properties.addAll(validated);
             observableSelected = true;
             return this;
+        }
+
+        private void addContactSelection(String property) {
+            EntityId contacts = entity("contacts", worldId);
+            if (!entities.contains(contacts)
+                    && entities.size() >= AssertionScope.MAX_EVIDENCE) {
+                throw new IllegalArgumentException(
+                        "Box2D entity selection exceeds the hard bound");
+            }
+            if (!properties.contains(property)
+                    && properties.size() >= AssertionScope.MAX_EVIDENCE) {
+                throw new IllegalArgumentException(
+                        "Box2D property selection exceeds the hard bound");
+            }
+            entities.add(contacts);
+            properties.add(property);
         }
 
         private List<SimulationConfigurationRequirement> configurationRequirements() {

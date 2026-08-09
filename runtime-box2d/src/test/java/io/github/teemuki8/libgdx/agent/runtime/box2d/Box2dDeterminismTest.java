@@ -35,11 +35,10 @@ final class Box2dDeterminismTest {
                 EntityId.of("box2d.body.player"),
                 EntityId.of("box2d.contacts.main"),
                 EntityId.of("box2d.fixture.player-fixture"),
-                EntityId.of("box2d.joint.rope"),
-                EntityId.of("box2d.world.main")),
+                EntityId.of("box2d.joint.rope")),
                 spec.execution().profile().comparisonScope().entityIds());
         assertEquals(List.of("activeContacts", "anchorA", "anchorB", "awake",
-                "jointType", "linearVelocity", "position", "sensor", "shapeType"),
+                "complete", "jointType", "linearVelocity", "position", "sensor", "shapeType"),
                 spec.execution().profile().comparisonScope().properties());
         assertEquals(List.of(
                 EventType.of("box2d.contact.begin"),
@@ -94,6 +93,53 @@ final class Box2dDeterminismTest {
                 .activeContacts().build();
         assertEquals(false, contacts.execution().profile().comparisonScope().includeEvents());
         assertEquals(List.of(), contacts.eventTypes());
+
+        SimulationDeterminismSpec events = Box2dDeterminism.builder(
+                        "main", settings(), "ball-drop", 1,
+                        RuntimeValues.object(), 2, 10)
+                .contactEvents().build();
+        assertEquals(List.of(EntityId.of("box2d.contacts.main")),
+                events.execution().profile().comparisonScope().entityIds());
+        assertEquals(List.of("complete"),
+                events.execution().profile().comparisonScope().properties());
+    }
+
+    @Test
+    void builderRejectsBeforeRetainingPartialOrOversizedSelections() {
+        Box2dDeterminism.Builder atomic = Box2dDeterminism.builder(
+                "main", settings(), "ball-drop", 1, RuntimeValues.object(), 2, 10);
+        assertThrows(NullPointerException.class,
+                () -> atomic.body("ball", "position", null));
+        SimulationDeterminismSpec retained = atomic.body("ball", "awake").build();
+        assertEquals(List.of("awake"),
+                retained.execution().profile().comparisonScope().properties());
+
+        String[] tooManyProperties = new String[101];
+        java.util.Arrays.fill(tooManyProperties, "position");
+        Box2dDeterminism.Builder selections = Box2dDeterminism.builder(
+                "main", settings(), "ball-drop", 1, RuntimeValues.object(), 2, 10);
+        assertThrows(IllegalArgumentException.class,
+                () -> selections.body("ball", tooManyProperties));
+
+        Box2dDeterminism.Builder inputs = Box2dDeterminism.builder(
+                "main", settings(), "ball-drop", 1, RuntimeValues.object(), 2, 10)
+                .body("ball", "position");
+        for (int index = 0; index < SimulationDeterminismSpec.MAX_INPUTS; index++) {
+            inputs.input(1, "move", RuntimeValues.object());
+        }
+        assertThrows(IllegalArgumentException.class,
+                () -> inputs.input(1, "move", RuntimeValues.object()));
+
+        Box2dDeterminism.Builder contactAtomic = Box2dDeterminism.builder(
+                "main", settings(), "ball-drop", 1, RuntimeValues.object(), 2, 10);
+        for (int index = 0; index < 100; index++) {
+            contactAtomic.body("body-" + index, "position");
+        }
+        assertThrows(IllegalArgumentException.class, contactAtomic::contactEvents);
+        SimulationDeterminismSpec withoutPartialContact = contactAtomic.build();
+        assertEquals(false,
+                withoutPartialContact.execution().profile().comparisonScope().includeEvents());
+        assertEquals(List.of(), withoutPartialContact.eventTypes());
     }
 
     private static Box2dDeterminism.WorldSettings settings() {

@@ -178,6 +178,20 @@ public final class DeterminismRegistry {
                     failureEvidence(requestId, "determinism.pause", failure));
         }
         long uiEvictions = runtime.uiCorrelations().evictedFrameCount();
+        DeterminismResult result = executeWhilePaused(
+                spec, deadline, executionNanos, requestId, runs, counters, uiEvictions);
+        try {
+            runtime.controls().restorePauseAfterDeterminism(previouslyPaused);
+        } catch (RuntimeException | Error failure) {
+            result = inconclusive(spec, counters, executionNanos,
+                    failureEvidence(requestId, "determinism.restore", failure));
+        }
+        return result;
+    }
+
+    private DeterminismResult executeWhilePaused(DeterminismSpec spec, long deadline,
+            long executionNanos, String requestId, ArrayList<RunEvidence> runs,
+            Counters counters, long uiEvictions) {
         try {
             for (int repeat = 0; repeat < spec.repeatCount(); repeat++) {
                 if (expired(deadline)) {
@@ -228,8 +242,6 @@ public final class DeterminismRegistry {
         } catch (RuntimeException | Error failure) {
             return inconclusive(spec, counters, executionNanos,
                     failureEvidence(requestId, "determinism.execute", failure));
-        } finally {
-            runtime.controls().restorePauseAfterDeterminism(previouslyPaused);
         }
     }
 
@@ -252,6 +264,23 @@ public final class DeterminismRegistry {
                     failureEvidence(requestId, "simulationDeterminism.pause", failure));
         }
         long uiEvictions = runtime.uiCorrelations().evictedFrameCount();
+        SimulationDeterminismResult result = executeSimulationWhilePaused(
+                spec, deadline, executionNanos, requestId, runs, counters, uiEvictions);
+        try {
+            runtime.controls().restorePauseAfterDeterminism(previouslyPaused);
+        } catch (RuntimeException | Error failure) {
+            result = simulationInconclusive(spec, counters, executionNanos,
+                    failureEvidence(requestId, "simulationDeterminism.restore", failure));
+        } finally {
+            runtime.inputs().endDeterminism();
+        }
+        return result;
+    }
+
+    private SimulationDeterminismResult executeSimulationWhilePaused(
+            SimulationDeterminismSpec spec, long deadline, long executionNanos,
+            String requestId, ArrayList<SimulationRunEvidence> runs,
+            Counters counters, long uiEvictions) {
         try {
             for (int repeat = 0; repeat < spec.execution().repeatCount(); repeat++) {
                 if (expired(deadline)) {
@@ -338,12 +367,6 @@ public final class DeterminismRegistry {
         } catch (RuntimeException | Error failure) {
             return simulationInconclusive(spec, counters, executionNanos,
                     failureEvidence(requestId, "simulationDeterminism.execute", failure));
-        } finally {
-            try {
-                runtime.controls().restorePauseAfterDeterminism(previouslyPaused);
-            } finally {
-                runtime.inputs().endDeterminism();
-            }
         }
     }
 
@@ -821,17 +844,40 @@ public final class DeterminismRegistry {
         long requestFacts = (long) spec.inputs().size()
                 + spec.configurationRequirements().size()
                 + spec.evidenceRequirements().size() + spec.eventTypes().size();
-        long requestBytes = spec.inputs().toString().getBytes(StandardCharsets.UTF_8).length
-                + spec.configurationRequirements().toString()
-                        .getBytes(StandardCharsets.UTF_8).length
-                + spec.evidenceRequirements().toString()
-                        .getBytes(StandardCharsets.UTF_8).length
-                + spec.eventTypes().toString().getBytes(StandardCharsets.UTF_8).length;
-        if (requestFacts > limits.maximumFactsPerFrame()
-                || requestBytes > limits.maximumEncodedEvidenceBytes()) {
+        if (requestFacts > limits.maximumFactsPerFrame()) {
             throw new AgentRuntimeException(RuntimeErrorCode.LIMIT_EXCEEDED,
                     "simulation determinism request evidence limit exceeded");
         }
+        long requestBytes = DeterminismCanonicalSize.listPrefix();
+        for (SimulationDeterminismInput input : spec.inputs()) {
+            requestBytes = addRequestBytes(requestBytes,
+                    DeterminismCanonicalSize.simulationInput(input));
+        }
+        requestBytes = addRequestBytes(requestBytes, DeterminismCanonicalSize.listPrefix());
+        for (SimulationConfigurationRequirement requirement
+                : spec.configurationRequirements()) {
+            requestBytes = addRequestBytes(requestBytes,
+                    DeterminismCanonicalSize.simulationConfiguration(requirement));
+        }
+        requestBytes = addRequestBytes(requestBytes, DeterminismCanonicalSize.listPrefix());
+        for (SimulationEvidenceRequirement requirement : spec.evidenceRequirements()) {
+            requestBytes = addRequestBytes(requestBytes,
+                    DeterminismCanonicalSize.simulationEvidence(requirement));
+        }
+        requestBytes = addRequestBytes(requestBytes, DeterminismCanonicalSize.listPrefix());
+        for (EventType eventType : spec.eventTypes()) {
+            requestBytes = addRequestBytes(requestBytes,
+                    DeterminismCanonicalSize.simulationEventType(eventType));
+        }
+    }
+
+    private long addRequestBytes(long current, long candidate) {
+        long total = DeterminismCanonicalSize.add(current, candidate);
+        if (total > limits.maximumEncodedEvidenceBytes()) {
+            throw new AgentRuntimeException(RuntimeErrorCode.LIMIT_EXCEEDED,
+                    "simulation determinism request evidence limit exceeded");
+        }
+        return total;
     }
 
     private void validateSimulationEnvironment(SimulationDeterminismSpec spec) {

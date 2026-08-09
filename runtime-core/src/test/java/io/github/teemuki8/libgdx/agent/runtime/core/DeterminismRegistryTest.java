@@ -148,6 +148,40 @@ final class DeterminismRegistryTest {
     }
 
     @Test
+    void failedResumeProducesRetainedSanitizedInconclusiveResult() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("determinism-resume-failure"))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .build();
+        runtime.entities().register(EntityId.of("counter"), EntityType.of("state"),
+                () -> "Counter", inspector -> inspector.property("value", () -> 1L));
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {})
+                .resume(() -> {
+                    throw new IllegalStateException("secret resume token");
+                })
+                .tick(delta -> {}).build());
+        runtime.scenarios().register("seeded", context -> {});
+        runtime.start();
+        DeterminismSpec request = spec("seeded", 1, 1);
+
+        runtime.determinism().check(
+                request, "determinism-resume-failure", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        DeterminismResult result = runtime.determinism().check(
+                request, "determinism-resume-failure", Duration.ofSeconds(1))
+                .result().orElseThrow();
+
+        assertEquals(DeterminismStatus.INCONCLUSIVE, result.status());
+        assertEquals("determinism.restore",
+                result.applicationFailure().orElseThrow().category());
+        assertFalse(result.message().contains("secret resume token"));
+        assertFalse(runtime.controls().pauseStateKnown());
+    }
+
+    @Test
     void hugeSanitizedDetailStaysWithinDeterminismMessageBound() {
         ArrayDeque<Runnable> queue = new ArrayDeque<>();
         long[] value = {0};

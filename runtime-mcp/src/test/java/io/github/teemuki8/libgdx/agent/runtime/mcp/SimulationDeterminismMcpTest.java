@@ -33,7 +33,13 @@ final class SimulationDeterminismMcpTest {
                 .clock(() -> 1).commandDispatcher(queue::addLast).build();
         runtime.simulation().register(SimulationTimelineSpec.fixedStep(16));
         runtime.entities().register(EntityId.of("world"), EntityType.of("physics"),
-                () -> "world", inspector -> inspector.property("step", () -> 16L));
+                () -> "world", inspector -> inspector
+                        .property("step", () -> 16L)
+                        .property("gravity", () -> new io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue.Vector2Value(
+                                io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues.decimal("0"),
+                                io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues.decimal("-9.8")))
+                        .property("mode", () ->
+                                io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues.enumValue("CONTINUOUS")));
         runtime.entities().register(EntityId.of("body"), EntityType.of("physics"),
                 () -> "body", inspector -> inspector.property("position", () -> position[0]));
         runtime.entities().register(EntityId.of("contacts"), EntityType.of("physics"),
@@ -63,6 +69,11 @@ final class SimulationDeterminismMcpTest {
             Map<?, ?> parameterSchema = (Map<?, ?>) ((Map<?, ?>)
                     inputVariant.get("properties")).get("parameters");
             assertEquals(false, parameterSchema.get("additionalProperties"));
+            Map<?, ?> definitions = (Map<?, ?>) tool.inputSchema().get("$defs");
+            Map<?, ?> valueDefinition = (Map<?, ?>)
+                    definitions.get("simulationDeterminismValue");
+            assertEquals(16, valueDefinition.get("x-runtime-maxDepth"));
+            assertEquals(1_024, valueDefinition.get("x-runtime-maxNodes"));
 
             Map<String, Object> request = request();
             McpSchema.CallToolResult queued = handler.handle(call(
@@ -84,6 +95,22 @@ final class SimulationDeterminismMcpTest {
                     "epochTick", 1, "inputId", "move",
                     "parameters", Map.of("amount", 1, "unknown", true))));
             assertTrue(handler.handle(call("runtime_simulation_determinism_check", invalid))
+                    .block(Duration.ofSeconds(5)).isError());
+
+            LinkedHashMap<String, Object> malformedTag = new LinkedHashMap<>(request);
+            malformedTag.put("configurationRequirements", List.of(Map.of(
+                    "entityId", "world", "property", "gravity", "expected", Map.of(
+                            "$runtimeValue", "vector2", "x", 0, "y", -9.8,
+                            "unknown", true))));
+            assertTrue(handler.handle(call(
+                    "runtime_simulation_determinism_check", malformedTag))
+                    .block(Duration.ofSeconds(5)).isError());
+
+            LinkedHashMap<String, Object> oversized = new LinkedHashMap<>(request);
+            oversized.put("configurationRequirements", List.of(Map.of(
+                    "entityId", "world", "property", "gravity", "expected",
+                    java.util.Collections.nCopies(257, 0))));
+            assertTrue(handler.handle(call("runtime_simulation_determinism_check", oversized))
                     .block(Duration.ofSeconds(5)).isError());
         }
     }
@@ -109,8 +136,12 @@ final class SimulationDeterminismMcpTest {
         request.put("inputs", List.of(Map.of(
                 "epochTick", 1, "inputId", "move",
                 "parameters", Map.of("amount", 1))));
-        request.put("configurationRequirements", List.of(Map.of(
-                "entityId", "world", "property", "step", "expected", 16)));
+        request.put("configurationRequirements", List.of(
+                Map.of("entityId", "world", "property", "step", "expected", 16),
+                Map.of("entityId", "world", "property", "gravity", "expected", Map.of(
+                        "$runtimeValue", "vector2", "x", 0, "y", -9.8)),
+                Map.of("entityId", "world", "property", "mode", "expected", Map.of(
+                        "$runtimeValue", "enum", "value", "CONTINUOUS"))));
         request.put("evidenceRequirements", List.of(Map.of(
                 "entityId", "contacts", "property", "complete")));
         request.put("eventTypes", List.of());

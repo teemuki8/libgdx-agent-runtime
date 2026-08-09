@@ -144,30 +144,6 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
         }
     }
 
-    /** Evaluates one closed assertion over an exact inclusive simulation-tick range. */
-    record SimulationAssert(
-            io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertion assertion,
-            java.util.List<io.github.teemuki8.libgdx.agent.runtime.core.SimulationEvidenceRequirement>
-                    evidenceRequirements,
-            long executionEpochId, long fromEpochTick, long toEpochTick, int evidenceLimit)
-            implements RuntimeCommand {
-        /** Validates the complete closed simulation assertion request. */
-        public SimulationAssert {
-            java.util.Objects.requireNonNull(assertion, "assertion");
-            evidenceRequirements = java.util.List.copyOf(java.util.Objects.requireNonNull(
-                    evidenceRequirements, "evidenceRequirements"));
-            if (executionEpochId < 0) {
-                throw new IllegalArgumentException("executionEpochId must be non-negative");
-            }
-            new io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertionSpec(
-                    assertion, evidenceRequirements);
-            new io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertionScope(
-                    new io.github.teemuki8.libgdx.agent.runtime.core.ExecutionEpochId(
-                            executionEpochId),
-                    fromEpochTick, toEpochTick, evidenceLimit);
-        }
-    }
-
     /** Reads current canonical fixed-step accumulator state. */
     record FixedStep() implements RuntimeCommand {}
 
@@ -191,6 +167,31 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
             ProtocolJson.requireIdentifier(controlRequestId, "controlRequestId");
             requirePositive(ticks, "ticks");
             requirePositive(timeoutNanos, "timeoutNanos");
+        }
+    }
+
+    /** Evaluates one closed assertion over an exact inclusive simulation-tick range. */
+    record SimulationAssert(
+            io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertion assertion,
+            java.util.List<io.github.teemuki8.libgdx.agent.runtime.core.SimulationEvidenceRequirement>
+                    evidenceRequirements,
+            long executionEpochId, long fromEpochTick, long toEpochTick, int evidenceLimit)
+            implements RuntimeCommand {
+        /** Validates the complete closed simulation assertion request. */
+        public SimulationAssert {
+            java.util.Objects.requireNonNull(assertion, "assertion");
+            var validatedSpec =
+                    new io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertionSpec(
+                            assertion, java.util.Objects.requireNonNull(
+                                    evidenceRequirements, "evidenceRequirements"));
+            evidenceRequirements = validatedSpec.evidenceRequirements();
+            if (executionEpochId < 0) {
+                throw new IllegalArgumentException("executionEpochId must be non-negative");
+            }
+            new io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertionScope(
+                    new io.github.teemuki8.libgdx.agent.runtime.core.ExecutionEpochId(
+                            executionEpochId),
+                    fromEpochTick, toEpochTick, evidenceLimit);
         }
     }
 

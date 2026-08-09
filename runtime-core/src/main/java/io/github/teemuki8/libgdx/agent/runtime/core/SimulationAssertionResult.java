@@ -30,8 +30,12 @@ public record SimulationAssertionResult(AssertionStatus status, String assertion
         observed = Objects.requireNonNull(observed, "observed");
         expected.ifPresent(SimulationAssertionValueBounds::validate);
         observed.ifPresent(SimulationAssertionValueBounds::validate);
-        ArrayList<SimulationAssertionEvidence> ordered = new ArrayList<>(
-                Objects.requireNonNull(evidence, "evidence"));
+        Objects.requireNonNull(evidence, "evidence");
+        if (evidence.size() > scope.evidenceLimit()) {
+            throw new IllegalArgumentException(
+                    "simulation assertion evidence exceeds requested limit");
+        }
+        ArrayList<SimulationAssertionEvidence> ordered = new ArrayList<>(evidence);
         ordered.forEach(value -> {
             Objects.requireNonNull(value, "evidence value");
             if (!value.executionEpochId().equals(scope.executionEpochId())
@@ -46,9 +50,6 @@ public record SimulationAssertionResult(AssertionStatus status, String assertion
                 .thenComparing(value -> value.property().orElse(""))
                 .thenComparing(SimulationAssertionEvidence::kind));
         evidence = List.copyOf(ordered);
-        if (evidence.size() > scope.evidenceLimit()) {
-            throw new IllegalArgumentException("simulation assertion evidence exceeds requested limit");
-        }
         if (status == AssertionStatus.INCONCLUSIVE && !evidenceIncomplete) {
             throw new IllegalArgumentException(
                     "inconclusive simulation assertion must report incomplete evidence");

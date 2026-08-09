@@ -192,6 +192,23 @@ class SimulationAssertionContractTest {
     }
 
     @Test
+    void rejectsOversizedResultEvidenceBeforeCopyingCallerCollection() {
+        List<SimulationAssertionEvidence> oversized = new java.util.AbstractList<>() {
+            @Override public SimulationAssertionEvidence get(int index) {
+                throw new AssertionError("oversized evidence must not be traversed");
+            }
+
+            @Override public int size() {
+                return 2;
+            }
+        };
+
+        assertThrows(IllegalArgumentException.class, () -> new SimulationAssertionResult(
+                AssertionStatus.FAIL, "entityExists", scope(), Optional.empty(), Optional.empty(),
+                oversized, false, "assertion failed"));
+    }
+
+    @Test
     void resultCanonicalizesEvidenceOrderWithinItsExactScope() {
         SimulationAssertionScope scope = new SimulationAssertionScope(
                 new ExecutionEpochId(0), 1, 2, 2);

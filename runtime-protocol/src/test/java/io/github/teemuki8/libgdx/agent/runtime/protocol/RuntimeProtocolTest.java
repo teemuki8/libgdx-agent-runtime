@@ -563,7 +563,7 @@ final class RuntimeProtocolTest {
     }
 
     @Test
-    void simulationAssertionUsesAdditiveTwoTwoSchemaAndExactTickEvaluation() {
+    void simulationAssertionUsesAdditiveTwoThreeSchemaAndExactTickEvaluation() {
         boolean[] awake = {true};
         AgentRuntime runtime = AgentRuntime.builder()
                 .sessionId(SessionId.of("simulation-assertion"))
@@ -640,7 +640,7 @@ final class RuntimeProtocolTest {
             assertEquals(AssertionStatus.PASS, result.result().status());
 
             RuntimeResponse.Failure oldVersion = assertInstanceOf(RuntimeResponse.Failure.class,
-                    service.execute(new RuntimeRequest(ProtocolVersion.V2_1,
+                    service.execute(new RuntimeRequest(ProtocolVersion.V2_2,
                             "simulation-assert-old", "simulation-assertion", command)));
             assertEquals(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                     oldVersion.error().code());
@@ -666,6 +666,23 @@ final class RuntimeProtocolTest {
                          "unknown":true}}}
                         """).getBytes(StandardCharsets.UTF_8)));
         assertEquals(ProtocolVersion.V2_4, ProtocolVersion.CURRENT);
+    }
+
+    @Test
+    void simulationAssertionRejectsOversizedRequirementsBeforeCopyingCallerCollection() {
+        List<SimulationEvidenceRequirement> oversized = new java.util.AbstractList<>() {
+            @Override public SimulationEvidenceRequirement get(int index) {
+                throw new AssertionError("oversized requirements must not be traversed");
+            }
+
+            @Override public int size() {
+                return 9;
+            }
+        };
+
+        assertThrows(IllegalArgumentException.class, () -> new RuntimeCommand.SimulationAssert(
+                new SimulationAssertion.EntityExists(EntityId.of("ball")), oversized,
+                0, 1, 1, 1));
     }
 
     @Test

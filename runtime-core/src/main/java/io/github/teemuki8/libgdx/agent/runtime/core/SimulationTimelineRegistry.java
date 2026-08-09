@@ -78,15 +78,38 @@ public final class SimulationTimelineRegistry {
      */
     public Optional<SimulationTick> tick(
             long runtimeSuppliedDeltaNanos, SimulationTickCallback callback) {
+        TickExecution execution = tickObserved(runtimeSuppliedDeltaNanos, callback);
+        rethrow(execution);
+        return execution.tick();
+    }
+
+    TickExecution tickObserved(
+            long runtimeSuppliedDeltaNanos, SimulationTickCallback callback) {
         Objects.requireNonNull(callback, "callback");
         if (!runtime.prepareSimulationTick()) {
             callback.simulate(runtimeSuppliedDeltaNanos);
-            return Optional.empty();
+            return new TickExecution(Optional.empty(), Optional.empty());
         }
         SimulationTickSource source = runtime.controls().paused()
                 ? SimulationTickSource.PAUSED : SimulationTickSource.RUNNING;
-        return Optional.of(execute(runtimeSuppliedDeltaNanos, source,
-                OptionalLong.empty(), callback, true));
+        return execute(runtimeSuppliedDeltaNanos, source,
+                OptionalLong.empty(), callback, true);
+    }
+
+    TickExecution tickUnacknowledgedObserved(
+            long runtimeSuppliedDeltaNanos, java.util.function.LongConsumer callback) {
+        Objects.requireNonNull(callback, "callback");
+        if (!runtime.prepareSimulationTick()) {
+            callback.accept(runtimeSuppliedDeltaNanos);
+            return new TickExecution(Optional.empty(), Optional.empty());
+        }
+        SimulationTickSource source = runtime.controls().paused()
+                ? SimulationTickSource.PAUSED : SimulationTickSource.RUNNING;
+        return execute(runtimeSuppliedDeltaNanos, source,
+                OptionalLong.empty(), supplied -> {
+                    callback.accept(supplied);
+                    return 0;
+                }, false);
     }
 
     /** Returns one bounded epoch-relative timeline page. Safe for concurrent readers. */
@@ -136,8 +159,10 @@ public final class SimulationTimelineRegistry {
             legacyCallback.accept(supplied);
             return supplied;
         });
-        return execute(runtimeSuppliedDeltaNanos, SimulationTickSource.PAUSED,
+        TickExecution execution = execute(runtimeSuppliedDeltaNanos, SimulationTickSource.PAUSED,
                 OptionalLong.of(controlledTick), callback, acknowledgedCallback.isPresent());
+        rethrow(execution);
+        return execution.tick().orElseThrow();
     }
 
     synchronized void startEpoch(ExecutionEpochId epochId) {
@@ -155,7 +180,7 @@ public final class SimulationTimelineRegistry {
         }
     }
 
-    private SimulationTick execute(long suppliedDeltaNanos, SimulationTickSource source,
+    private TickExecution execute(long suppliedDeltaNanos, SimulationTickSource source,
             OptionalLong controlledTick, SimulationTickCallback callback, boolean acknowledged) {
         validateSuppliedDelta(suppliedDeltaNanos);
         Attempt attempt = beginAttempt();
@@ -197,13 +222,9 @@ public final class SimulationTimelineRegistry {
 
         Completion completion = completeAttempt(attempt, suppliedDeltaNanos, source,
                 acknowledged, reported[0], resultingFrame, applicationFailure[0], failure);
-        if (failure != null) {
-            SimulationTimelineRegistry.<RuntimeException>throwUnchecked(failure);
-        }
-        if (completion.postFailure != null) {
-            throw completion.postFailure;
-        }
-        return completion.tick;
+        Throwable retainedFailure = failure != null ? failure : completion.postFailure;
+        return new TickExecution(Optional.of(completion.tick),
+                Optional.ofNullable(retainedFailure));
     }
 
     private synchronized Attempt beginAttempt() {
@@ -362,6 +383,20 @@ public final class SimulationTimelineRegistry {
     @SuppressWarnings("unchecked")
     private static <T extends Throwable> void throwUnchecked(Throwable failure) throws T {
         throw (T) failure;
+    }
+
+    private static void rethrow(TickExecution execution) {
+        if (execution.failure().isPresent()) {
+            SimulationTimelineRegistry.<RuntimeException>throwUnchecked(
+                    execution.failure().orElseThrow());
+        }
+    }
+
+    record TickExecution(Optional<SimulationTick> tick, Optional<Throwable> failure) {
+        TickExecution {
+            tick = Objects.requireNonNull(tick, "tick");
+            failure = Objects.requireNonNull(failure, "failure");
+        }
     }
 
     private record Attempt(SimulationTickId id, ExecutionEpochId executionEpochId, long epochTick) {}

@@ -234,12 +234,22 @@ public final class RuntimeToolHandler implements AutoCloseable {
                     number(arguments, "executionEpochId", -1),
                     number(arguments, "fromEpochTick", -1),
                     number(arguments, "toEpochTick", -1), limit);
+            case "runtime_fixed_step" -> new RuntimeCommand.FixedStep();
+            case "runtime_fixed_step_updates" -> new RuntimeCommand.FixedStepUpdates(
+                    number(arguments, "fromSequence", -1),
+                    number(arguments, "toSequence", -1), limit);
+            case "runtime_simulation_advance" -> new RuntimeCommand.SimulationAdvance(
+                    string(arguments, "controlRequestId"),
+                    Math.toIntExact(number(arguments, "ticks", -1)),
+                    number(arguments, "timeoutNanos", -1));
             default -> throw new IllegalArgumentException("unknown runtime tool");
         };
         ProtocolVersion version = switch (toolName) {
             case "runtime_capabilities" -> new ProtocolVersion(
                     1, Math.toIntExact(number(arguments, "protocolMinor", 0)));
             case "runtime_simulation", "runtime_simulation_ticks" -> ProtocolVersion.V2_1;
+            case "runtime_fixed_step", "runtime_fixed_step_updates",
+                    "runtime_simulation_advance" -> ProtocolVersion.V2_2;
             default -> ProtocolVersion.V2;
         };
         return new RuntimeRequest(version,

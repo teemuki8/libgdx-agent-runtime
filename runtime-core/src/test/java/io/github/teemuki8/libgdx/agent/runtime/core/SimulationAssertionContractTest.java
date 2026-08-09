@@ -167,6 +167,15 @@ class SimulationAssertionContractTest {
                 AssertionStatus.FAIL, "entityExists", scope(), Optional.empty(), Optional.empty(),
                 List.of(evidence(1, RuntimeValues.bool(false)),
                         evidence(1, RuntimeValues.bool(true))), false, "assertion failed"));
+
+        RuntimeValue oversized = new RuntimeValue.ListValue(
+                Collections.nCopies(257, RuntimeValues.bool(true)));
+        assertThrows(IllegalArgumentException.class, () ->
+                new SimulationAssertion.PropertyEquals(BALL, "values", oversized));
+        assertThrows(IllegalArgumentException.class, () -> evidence(1, oversized));
+        assertThrows(IllegalArgumentException.class, () -> new SimulationAssertionResult(
+                AssertionStatus.FAIL, "propertyEquals", scope(), Optional.of(oversized),
+                Optional.empty(), List.of(), false, "assertion failed"));
     }
 
     private static SimulationAssertionScope scope() {

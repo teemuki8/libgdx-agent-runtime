@@ -23,5 +23,6 @@ public record SimulationAssertionEvidence(Optional<SimulationTickId> simulationT
         property = Objects.requireNonNull(property, "property");
         property.ifPresent(value -> IdentifierSupport.validate(value, "property"));
         observed = Objects.requireNonNull(observed, "observed");
+        observed.ifPresent(SimulationAssertionValueBounds::validate);
     }
 }

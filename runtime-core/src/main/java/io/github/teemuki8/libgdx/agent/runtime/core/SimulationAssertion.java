@@ -69,6 +69,7 @@ public sealed interface SimulationAssertion permits SimulationAssertion.EntityEx
             Objects.requireNonNull(entityId, "entityId");
             validateProperty(property);
             Objects.requireNonNull(expected, "expected");
+            SimulationAssertionValueBounds.validate(expected);
         }
     }
 

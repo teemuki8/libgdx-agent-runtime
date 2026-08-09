@@ -16,6 +16,8 @@ public record SimulationAssertionResult(AssertionStatus status, String assertion
         Objects.requireNonNull(scope, "scope");
         expected = Objects.requireNonNull(expected, "expected");
         observed = Objects.requireNonNull(observed, "observed");
+        expected.ifPresent(SimulationAssertionValueBounds::validate);
+        observed.ifPresent(SimulationAssertionValueBounds::validate);
         evidence = List.copyOf(Objects.requireNonNull(evidence, "evidence"));
         if (evidence.size() > scope.evidenceLimit()) {
             throw new IllegalArgumentException("simulation assertion evidence exceeds requested limit");

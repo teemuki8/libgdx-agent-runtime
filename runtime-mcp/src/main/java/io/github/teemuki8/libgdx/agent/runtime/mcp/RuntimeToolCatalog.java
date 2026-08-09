@@ -267,6 +267,21 @@ public final class RuntimeToolCatalog {
                     "Repeat one seeded scenario and report the first configured observable divergence",
                     determinismInput()));
         }
+        if (supported.contains("runtime_simulation")) {
+            selected.add(tool("runtime_simulation",
+                    "Read application-reported simulation timing and current tick state",
+                    sessionInput(Map.of(), List.of())));
+        }
+        if (supported.contains("runtime_simulation_ticks")) {
+            selected.add(tool("runtime_simulation_ticks",
+                    "Read bounded epoch-relative simulation ticks and resulting frame mappings",
+                    sessionInput(Map.of(
+                            "executionEpochId", integer(0, Long.MAX_VALUE),
+                            "fromEpochTick", integer(1, Long.MAX_VALUE),
+                            "toEpochTick", integer(1, Long.MAX_VALUE),
+                            "limit", integer(1, MAX_RESULTS)),
+                            List.of("executionEpochId", "fromEpochTick", "toEpochTick", "limit"))));
+        }
         selected.removeIf(tool -> !supported.contains(tool.name()));
         tools = List.copyOf(selected);
         LinkedHashMap<String, McpSchema.Tool> index = new LinkedHashMap<>();

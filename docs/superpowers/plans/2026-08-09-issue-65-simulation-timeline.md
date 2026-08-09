@@ -27,8 +27,9 @@ boundary, and immutable retention. Existing control code delegates to it without
 
 **Files:**
 - Create core `SimulationTimeline*`, `SimulationTick*`, and callback types.
-- Modify `AgentRuntime`, `SimulationControlRegistry`, `SimulationControllerSpec`, and recording hooks.
-- Test in `SimulationTimelineTest` and focused existing control/recording tests.
+- Modify `AgentRuntime`, `SimulationControlRegistry`, and `SimulationControllerSpec` while preserving
+  the existing controlled-tick-only meaning of recording entries.
+- Test in `SimulationTimelineTest` and focused existing control tests.
 
 **Interfaces:**
 - `AgentRuntime.simulation()` returns `SimulationTimelineRegistry`.

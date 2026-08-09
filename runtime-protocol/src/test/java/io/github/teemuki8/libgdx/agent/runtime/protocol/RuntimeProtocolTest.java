@@ -112,9 +112,9 @@ final class RuntimeProtocolTest {
         RuntimeProtocolService service = new RuntimeProtocolService(new RuntimeRegistry());
         RuntimeResponse.Failure version = assertInstanceOf(RuntimeResponse.Failure.class,
                 service.execute(new RuntimeRequest(
-                        new ProtocolVersion(2, 1), "v", null, new RuntimeCommand.Sessions())));
+                        new ProtocolVersion(2, 2), "v", null, new RuntimeCommand.Sessions())));
         assertEquals(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED, version.error().code());
-        assertEquals("1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10,1.11,1.12,1.13,2.0",
+        assertEquals("1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10,1.11,1.12,1.13,2.0,2.1",
                 version.error().details().get("supported"));
 
         RuntimeResponse.Failure future = assertInstanceOf(RuntimeResponse.Failure.class,

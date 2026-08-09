@@ -30,7 +30,8 @@ V1 includes registered entities, bounded immutable values, baseline/frame captur
 events, decisions, completed-frame queries, execution epochs, explicit attribution, typed actions,
 and declarative assertions. Optional application-owned capabilities add scenarios, exact-tick
 control, registered input, opaque checkpoints, runtime/UI correlation, recording, and determinism
-comparison through closed protocol 1.0-1.13 and stdio MCP surfaces. A deterministic LWJGL3 fixture
+comparison through closed protocol 1.0-1.13, 2.0, and 2.1 stdio MCP surfaces. Protocol 2.1 adds
+application-reported simulation timing and tick-to-frame evidence. A deterministic LWJGL3 fixture
 qualifies the full workflow.
 
 V1 excludes replay execution, reflection, instrumentation, mutation interception, networking, ECS
@@ -44,6 +45,7 @@ Version 1.0 establishes the stable Java and exact-version protocol contracts des
 public final class GameApplication extends ApplicationAdapter {
     private AgentRuntime runtime;
     private Enemy enemy;
+    private long accumulatorNanos;
 
     @Override public void create() {
         enemy = new Enemy("enemy-1", 100);
@@ -52,6 +54,8 @@ public final class GameApplication extends ApplicationAdapter {
                 .configuration(RuntimeConfiguration.developmentDefaults())
                 .commandDispatcher(Gdx.app::postRunnable)
                 .build();
+        runtime.simulation().register(
+                SimulationTimelineSpec.fixedStep(16_666_667L));
         runtime.entities().register(
                 EntityId.of(enemy.id()),
                 EntityType.of("enemy"),
@@ -64,10 +68,15 @@ public final class GameApplication extends ApplicationAdapter {
     }
 
     @Override public void render() {
-        runtime.frame(LibGdxTime.deltaNanos(), () -> {
-            update();
-            renderGame();
-        });
+        accumulatorNanos += Math.min(LibGdxTime.deltaNanos(), 250_000_000L);
+        while (accumulatorNanos >= 16_666_667L) {
+            runtime.simulation().tick(16_666_667L, suppliedDeltaNanos -> {
+                updateFixedStep(suppliedDeltaNanos);
+                return 16_666_667L; // the delta actually executed
+            });
+            accumulatorNanos -= 16_666_667L;
+        }
+        renderGame();
     }
 
     @Override public void dispose() {
@@ -133,10 +142,10 @@ game running elsewhere. Remote process attachment is explicitly outside V1.
 | `runtime-core` | JDK-only model, capture, retention, queries | `agent-runtime-core` |
 | `runtime-libgdx` | render-thread helpers, metrics, converters | `agent-runtime-libgdx` |
 | `runtime-protocol` | strict V1 JSON and session registry | `agent-runtime-protocol` |
-| `runtime-mcp` | eight base and registered optional stdio MCP tools | `agent-runtime-mcp` |
+| `runtime-mcp` | closed base and registered optional stdio MCP tools | `agent-runtime-mcp` |
 | `runtime-fixtures` | deterministic LWJGL3 qualification | not published |
 
-Group: `io.github.teemuki8`. Current release: `1.0.0`. Development version: `1.0.1-SNAPSHOT`.
+Group: `io.github.teemuki8`. Current release: `2.0.0`. Development version: `2.0.1-SNAPSHOT`.
 
 ## Build
 
@@ -188,6 +197,7 @@ publishes.
 - [Frame correlation](docs/guides/frame-correlation.md)
 - [Decision tracing](docs/guides/decision-tracing.md)
 - [Agent tools](docs/guides/agent-tools.md)
+- [Agent cookbook](docs/guides/agent-cookbook.md)
 - [Releasing to Maven Central](docs/guides/releasing.md)
 - [Behavioral contract](docs/design-contract.md)
 - [Dependency review](docs/dependency-review.md)

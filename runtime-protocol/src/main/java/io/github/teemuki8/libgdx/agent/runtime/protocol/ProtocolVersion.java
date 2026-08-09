@@ -32,8 +32,10 @@ public record ProtocolVersion(int major, int minor) {
     public static final ProtocolVersion V1_13 = new ProtocolVersion(1, 13);
     /** Additive removed-entity-history and structured failure-evidence protocol version. */
     public static final ProtocolVersion V2 = new ProtocolVersion(2, 0);
+    /** Application-reported simulation timeline protocol version. */
+    public static final ProtocolVersion V2_1 = new ProtocolVersion(2, 1);
     /** Latest implemented protocol version. */
-    public static final ProtocolVersion CURRENT = V2;
+    public static final ProtocolVersion CURRENT = V2_1;
 
     /** Validates version components. */
     public ProtocolVersion {
@@ -64,12 +66,17 @@ public record ProtocolVersion(int major, int minor) {
      */
     public boolean capability(RuntimeCommand command) {
         if (isV2()) {
+            if (command instanceof RuntimeCommand.Simulation
+                    || command instanceof RuntimeCommand.SimulationTicks) {
+                return minor() >= 1;
+            }
             return true;
         }
         if (major() != 1) {
             return false;
         }
         return switch (command) {
+            case RuntimeCommand.Simulation _, RuntimeCommand.SimulationTicks _ -> false;
             case RuntimeCommand.EntityHistory _ -> false;
             case RuntimeCommand.CommandStatus _, RuntimeCommand.CommandCancel _ -> minor() >= 2;
             case RuntimeCommand.EpochFrames _ -> minor() >= 3;
@@ -94,6 +101,8 @@ public record ProtocolVersion(int major, int minor) {
     /** Returns the exact required-version message for one unsupported command. */
     public String requiredVersionMessage(RuntimeCommand command) {
         return switch (command) {
+            case RuntimeCommand.Simulation _, RuntimeCommand.SimulationTicks _ ->
+                    "command requires protocol version 2.1";
             case RuntimeCommand.EntityHistory _ -> "command requires protocol version 2.0";
             case RuntimeCommand.CommandStatus _, RuntimeCommand.CommandCancel _ ->
                     "command requires protocol version 1.2";

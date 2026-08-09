@@ -197,24 +197,17 @@ public final class SimulationControlRegistry {
                     }
                     return;
                 }
-                FrameId expected = runtime.latestFrame().map(frame ->
-                        new FrameId(Math.addExact(frame.frameId().value(), 1))).orElse(new FrameId(0));
                 long tick;
                 synchronized (this) {
                     tick = Math.addExact(currentTick, 1);
                 }
+                FrameId resultingFrame;
                 try {
-                    runtime.frame(signature.deltaNanos, () -> {
-                        runtime.inputs().executeTick(tick, runtime.currentEpoch());
-                        spec.tick().accept(signature.deltaNanos);
-                    });
-                    runtime.inputs().completeTick(tick, expected);
+                    SimulationTick simulationTick = runtime.simulation().tickControlled(
+                            signature.deltaNanos, tick, spec.acknowledgedTick(), spec.tick());
+                    resultingFrame = simulationTick.resultingFrameId().orElseThrow(() ->
+                            new IllegalStateException("controlled tick did not complete a frame"));
                 } catch (RuntimeException | Error failure) {
-                    if (runtime.frame(expected).isPresent()) {
-                        runtime.inputs().completeTick(tick, expected);
-                    } else {
-                        runtime.inputs().failTick(tick);
-                    }
                     synchronized (this) {
                         evidence.stopReason = ControlStopReason.CALLBACK_FAILED;
                     }
@@ -224,12 +217,12 @@ public final class SimulationControlRegistry {
                     currentTick = tick;
                     evidence.completedTicks++;
                     if (evidence.firstFrameId.isEmpty()) {
-                        evidence.firstFrameId = Optional.of(expected);
+                        evidence.firstFrameId = Optional.of(resultingFrame);
                     }
-                    evidence.finalFrameId = Optional.of(expected);
+                    evidence.finalFrameId = Optional.of(resultingFrame);
                 }
                 runtime.recordings().recordTick(
-                        tick, signature.deltaNanos, runtime.currentEpoch(), expected);
+                        tick, signature.deltaNanos, runtime.currentEpoch(), resultingFrame);
                 try {
                     if (satisfied(evidence, signature)) {
                         return;
@@ -285,28 +278,21 @@ public final class SimulationControlRegistry {
             }
             tick = Math.addExact(currentTick, 1);
         }
-        FrameId expected = runtime.latestFrame().map(frame ->
-                new FrameId(Math.addExact(frame.frameId().value(), 1))).orElse(new FrameId(0));
+        SimulationTick simulationTick;
         try {
-            runtime.frame(deltaNanos, () -> {
-                runtime.inputs().executeTick(tick, runtime.currentEpoch());
-                spec.tick().accept(deltaNanos);
-            });
-            runtime.inputs().completeTick(tick, expected);
+            simulationTick = runtime.simulation().tickControlled(
+                    deltaNanos, tick, spec.acknowledgedTick(), spec.tick());
         } catch (RuntimeException | Error failure) {
-            if (runtime.frame(expected).isPresent()) {
-                runtime.inputs().completeTick(tick, expected);
-            } else {
-                runtime.inputs().failTick(tick);
-            }
             throw failure;
         }
+        FrameId resultingFrame = simulationTick.resultingFrameId().orElseThrow(() ->
+                new IllegalStateException("determinism tick did not complete a frame"));
         synchronized (this) {
             currentTick = tick;
         }
         runtime.recordings().recordTick(
-                tick, deltaNanos, runtime.currentEpoch(), expected);
-        return runtime.frame(expected).orElseThrow();
+                tick, deltaNanos, runtime.currentEpoch(), resultingFrame);
+        return runtime.frame(resultingFrame).orElseThrow();
     }
 
     private boolean satisfied(Evidence evidence, Signature signature) {

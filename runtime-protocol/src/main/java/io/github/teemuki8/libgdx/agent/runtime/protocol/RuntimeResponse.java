@@ -33,6 +33,8 @@ import io.github.teemuki8.libgdx.agent.runtime.core.InputInjection;
 import io.github.teemuki8.libgdx.agent.runtime.core.RecordingChunk;
 import io.github.teemuki8.libgdx.agent.runtime.core.RecordingOperation;
 import io.github.teemuki8.libgdx.agent.runtime.core.DeterminismOperation;
+import io.github.teemuki8.libgdx.agent.runtime.core.SimulationState;
+import io.github.teemuki8.libgdx.agent.runtime.core.SimulationTickPage;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -102,7 +104,9 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
                 name = "recordingOperation"),
         @JsonSubTypes.Type(value = Result.RecordingChunkResult.class, name = "recordingChunk"),
         @JsonSubTypes.Type(value = Result.Determinism.class, name = "determinism"),
-        @JsonSubTypes.Type(value = Result.EntityHistory.class, name = "entityHistory")
+        @JsonSubTypes.Type(value = Result.EntityHistory.class, name = "entityHistory"),
+        @JsonSubTypes.Type(value = Result.Simulation.class, name = "simulation"),
+        @JsonSubTypes.Type(value = Result.SimulationTicks.class, name = "simulationTicks")
     })
     sealed interface Result permits Result.Sessions, Result.Capabilities, Result.Frames,
             Result.Snapshot, Result.Entity, Result.Changes, Result.Events, Result.Decisions,
@@ -110,7 +114,8 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
             Result.Scenarios, Result.Reset, Result.Actions, Result.Action, Result.Assertion,
             Result.Control, Result.Inputs, Result.Input, Result.Checkpoints, Result.Checkpoint,
             Result.UiBindings, Result.UiFrames, Result.RecordingOperationResult,
-            Result.RecordingChunkResult, Result.Determinism, Result.EntityHistory {
+            Result.RecordingChunkResult, Result.Determinism, Result.EntityHistory,
+            Result.Simulation, Result.SimulationTicks {
         /** Published session catalog. */
         record Sessions(List<SessionInfo> sessions) implements Result {
             /** Copies sessions. */
@@ -170,6 +175,22 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         /** Paginated retained history page for one entity, including removed entities. */
         record EntityHistory(EntityHistoryPage page) implements Result {
             public EntityHistory {
+                Objects.requireNonNull(page, "page");
+            }
+        }
+
+        /** Current application-reported simulation timing and timeline state. */
+        record Simulation(SimulationState state) implements Result {
+            /** Validates state evidence. */
+            public Simulation {
+                Objects.requireNonNull(state, "state");
+            }
+        }
+
+        /** One bounded page of application-reported simulation tick evidence. */
+        record SimulationTicks(SimulationTickPage page) implements Result {
+            /** Validates page evidence. */
+            public SimulationTicks {
                 Objects.requireNonNull(page, "page");
             }
         }

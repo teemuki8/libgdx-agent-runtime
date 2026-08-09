@@ -141,3 +141,12 @@ Disabled runtimes retain no providers or frames and perform no serialization.
     difference. Per-frame observed counters reset at frame completion, and truncation evidence
     reports the saturating observed count with the already-bounded retained count and configured
     limit.
+34. Simulation ticks are explicit application testimony separate from render frames and runtime
+    capture frames. A session-monotonic tick ID is never reused; epoch ticks begin at one after a
+    zero-time baseline. Normal, controlled, and determinism ticks share one application-owned
+    input/callback/capture boundary and produce at most one correlated completed frame. Configured,
+    supplied, and application-reported executed deltas remain distinct. Legacy control callbacks
+    are `UNACKNOWLEDGED`; mismatches and callback/capture failures retain typed bounded evidence and
+    never claim fixed-step success. Timeline retention and queries are bounded with explicit
+    pagination, partial eviction, and not-yet-executed status. Protocol 2.1 adds the closed
+    `simulation` and `simulationTicks` commands without changing protocols 1.0-1.13 or 2.0.

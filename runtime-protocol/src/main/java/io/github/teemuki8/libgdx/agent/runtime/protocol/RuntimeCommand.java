@@ -3,7 +3,7 @@ package io.github.teemuki8.libgdx.agent.runtime.protocol;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 
-/** Explicit allowlisted V1 command union. */
+/** Explicit allowlisted versioned command union. */
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "type")
 @JsonSubTypes({
     @JsonSubTypes.Type(value = RuntimeCommand.Sessions.class, name = "sessions"),
@@ -39,7 +39,9 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
     @JsonSubTypes.Type(value = RuntimeCommand.RecordingStop.class, name = "recordingStop"),
     @JsonSubTypes.Type(value = RuntimeCommand.RecordingGet.class, name = "recordingGet"),
     @JsonSubTypes.Type(value = RuntimeCommand.DeterminismCheck.class, name = "determinismCheck"),
-    @JsonSubTypes.Type(value = RuntimeCommand.EntityHistory.class, name = "entityHistory")
+    @JsonSubTypes.Type(value = RuntimeCommand.EntityHistory.class, name = "entityHistory"),
+    @JsonSubTypes.Type(value = RuntimeCommand.Simulation.class, name = "simulation"),
+    @JsonSubTypes.Type(value = RuntimeCommand.SimulationTicks.class, name = "simulationTicks")
 })
 public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeCommand.Capabilities,
         RuntimeCommand.Frames, RuntimeCommand.Snapshot, RuntimeCommand.Entity,
@@ -54,7 +56,7 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
         RuntimeCommand.UiBindings, RuntimeCommand.UiFrames,
         RuntimeCommand.RecordingStart, RuntimeCommand.RecordingStop,
         RuntimeCommand.RecordingGet, RuntimeCommand.DeterminismCheck,
-        RuntimeCommand.EntityHistory {
+        RuntimeCommand.EntityHistory, RuntimeCommand.Simulation, RuntimeCommand.SimulationTicks {
     /** Lists published sessions. */
     record Sessions() implements RuntimeCommand {}
 
@@ -115,6 +117,21 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
                 throw new IllegalArgumentException("versionOffset must be non-negative");
             }
             validateLimit(versionLimit);
+        }
+    }
+
+    /** Reads current application-reported simulation timing and tick state. */
+    record Simulation() implements RuntimeCommand {}
+
+    /** Reads one bounded inclusive epoch-relative simulation tick range. */
+    record SimulationTicks(long executionEpochId, long fromEpochTick,
+            long toEpochTick, int limit) implements RuntimeCommand {
+        /** Validates epoch, range, and page size. */
+        public SimulationTicks {
+            if (executionEpochId < 0 || fromEpochTick <= 0 || toEpochTick < fromEpochTick) {
+                throw new IllegalArgumentException("simulation tick range is invalid");
+            }
+            validateLimit(limit);
         }
     }
 

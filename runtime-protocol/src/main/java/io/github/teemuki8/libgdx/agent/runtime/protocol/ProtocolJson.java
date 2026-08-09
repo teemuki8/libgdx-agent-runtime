@@ -57,7 +57,7 @@ public final class ProtocolJson {
         return MAPPER.copy();
     }
 
-    /** Returns the mapper matching one response version: structured diagnostics under 2.0. */
+    /** Returns the mapper matching one response version: structured diagnostics under 2.x. */
     public static ObjectMapper mapper(ProtocolVersion version) {
         return version.isV2() ? STRUCTURED_MAPPER.copy() : MAPPER.copy();
     }
@@ -93,7 +93,7 @@ public final class ProtocolJson {
     /**
      * Writes a response through a stream capped at {@link #MAX_RESPONSE_BYTES} bytes.
      *
-     * <p>The response version's mapper (structured diagnostics under 2.0) streams directly
+     * <p>The response version's mapper (structured diagnostics under 2.x) streams directly
      * through a bounded filter, so serialization aborts with
      * {@link ProtocolErrorCode#LIMIT_EXCEEDED} before byte {@code MAX_RESPONSE_BYTES + 1}
      * is written to {@code output}; the caller's stream never receives a partial

@@ -92,4 +92,3 @@ Tests must prove integer accumulation, float conversion, pause/remainder preserv
 controlled stepping, clamping and both drop paths, mismatch and callback failure evidence,
 reentrancy, lifecycle/thread checks, disabled behavior, bounded eviction/order, closed 2.2 JSON/MCP
 schemas, fixture/Java use, and cookbook parity. Linux qualification runs under Xvfb.
-

@@ -1,6 +1,7 @@
 package io.github.teemuki8.libgdx.agent.runtime.core;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -129,7 +130,10 @@ final class FixedStepSimulationTest {
         assertEquals(0, report.ticksCompleted());
         assertEquals(10, report.catchUpDroppedTimeNanos());
         assertEquals(5, report.accumulatorRemainderNanos());
-        assertEquals(List.of(FixedStepUpdateDiagnostic.TICK_FAILED,
+        assertEquals(Optional.of(new SimulationTickId(1)), report.firstSimulationTickId());
+        assertEquals(Optional.of(new FrameId(1)), report.firstRuntimeFrameId());
+        assertEquals(List.of(FixedStepUpdateDiagnostic.APPLICATION_CALLBACK_FAILED,
+                FixedStepUpdateDiagnostic.TICK_FAILED,
                 FixedStepUpdateDiagnostic.CATCH_UP_TICKS_DROPPED), report.diagnostics());
         assertTrue(report.diagnostics().stream()
                 .noneMatch(value -> value.name().contains("private")));
@@ -147,9 +151,73 @@ final class FixedStepSimulationTest {
 
         assertThrows(IllegalStateException.class,
                 () -> runtime.fixedStepSimulation().update(10));
-        assertEquals(List.of(FixedStepUpdateDiagnostic.TICK_FAILED),
+        assertEquals(List.of(FixedStepUpdateDiagnostic.APPLICATION_CALLBACK_FAILED,
+                        FixedStepUpdateDiagnostic.TICK_FAILED),
                 runtime.fixedStepSimulation().updates(
                         new FixedStepUpdateQuery(1, 1, 1)).reports().getFirst().diagnostics());
+    }
+
+    @Test
+    void captureAndPostValidationFailuresRetainTypedTickCorrelation() {
+        long[] clockCalls = {0};
+        AgentRuntime captureFailure = AgentRuntime.builder()
+                .sessionId(SessionId.of("fixed-step-capture-failure"))
+                .clock(() -> clockCalls[0]++ == 0 ? 1 : -1)
+                .build();
+        captureFailure.fixedStepSimulation().register(
+                configuration(10, 10, 10, 1, 2), supplied -> supplied);
+        captureFailure.start();
+        assertThrows(IllegalStateException.class,
+                () -> captureFailure.fixedStepSimulation().update(10));
+        FixedStepUpdateReport captured = captureFailure.fixedStepSimulation().updates(
+                new FixedStepUpdateQuery(1, 1, 1)).reports().getFirst();
+        assertEquals(Optional.of(new SimulationTickId(1)), captured.firstSimulationTickId());
+        assertEquals(Optional.empty(), captured.firstRuntimeFrameId());
+        assertEquals(List.of(FixedStepUpdateDiagnostic.RUNTIME_CAPTURE_FAILED,
+                FixedStepUpdateDiagnostic.TICK_FAILED), captured.diagnostics());
+
+        AgentRuntime invalidDelta = runtime("fixed-step-invalid-report");
+        invalidDelta.fixedStepSimulation().register(
+                configuration(10, 10, 10, 1, 2), supplied -> -1);
+        invalidDelta.start();
+        assertThrows(AgentRuntimeException.class,
+                () -> invalidDelta.fixedStepSimulation().update(10));
+        FixedStepUpdateReport invalid = invalidDelta.fixedStepSimulation().updates(
+                new FixedStepUpdateQuery(1, 1, 1)).reports().getFirst();
+        assertEquals(1, invalid.ticksCompleted());
+        assertEquals(Optional.of(new FrameId(1)), invalid.firstRuntimeFrameId());
+        assertEquals(List.of(FixedStepUpdateDiagnostic.EXECUTED_DELTA_INVALID,
+                FixedStepUpdateDiagnostic.TICK_FAILED), invalid.diagnostics());
+
+        AgentRuntime oversizedDelta = runtime("fixed-step-oversized-report");
+        oversizedDelta.fixedStepSimulation().register(
+                configuration(10, 10, 10, 1, 2), supplied -> Long.MAX_VALUE);
+        oversizedDelta.start();
+        assertThrows(AgentRuntimeException.class,
+                () -> oversizedDelta.fixedStepSimulation().update(10));
+        assertEquals(List.of(FixedStepUpdateDiagnostic.EXECUTED_DELTA_INVALID,
+                        FixedStepUpdateDiagnostic.TICK_FAILED),
+                oversizedDelta.fixedStepSimulation().updates(
+                        new FixedStepUpdateQuery(1, 1, 1)).reports().getFirst().diagnostics());
+
+        AgentRuntime timeLimit = AgentRuntime.builder()
+                .sessionId(SessionId.of("fixed-step-time-limit"))
+                .clock(new IncrementingClock())
+                .simulationTimelineLimits(new SimulationTimelineLimits(4, 4, 10, 15, 64))
+                .build();
+        timeLimit.fixedStepSimulation().register(
+                configuration(10, 20, 20, 2, 2), supplied -> supplied);
+        timeLimit.start();
+        assertThrows(AgentRuntimeException.class,
+                () -> timeLimit.fixedStepSimulation().update(20));
+        FixedStepUpdateReport limited = timeLimit.fixedStepSimulation().updates(
+                new FixedStepUpdateQuery(1, 1, 1)).reports().getFirst();
+        assertEquals(2, limited.ticksAttempted());
+        assertEquals(2, limited.ticksCompleted());
+        assertEquals(Optional.of(new SimulationTickId(1)), limited.firstSimulationTickId());
+        assertEquals(Optional.of(new SimulationTickId(2)), limited.finalSimulationTickId());
+        assertEquals(List.of(FixedStepUpdateDiagnostic.SIMULATION_TIME_LIMIT_EXCEEDED,
+                FixedStepUpdateDiagnostic.TICK_FAILED), limited.diagnostics());
     }
 
     @Test
@@ -255,6 +323,22 @@ final class FixedStepSimulationTest {
     }
 
     @Test
+    void registrationRejectsStepOutsideControlledAdvanceLimit() {
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("fixed-step-control-limit"))
+                .controlLimits(new ControlLimits(4, 4, 4, 9))
+                .build();
+
+        AgentRuntimeException failure = assertThrows(AgentRuntimeException.class,
+                () -> runtime.fixedStepSimulation().register(
+                        configuration(10, 10, 10, 1, 2), supplied -> supplied));
+
+        assertEquals(RuntimeErrorCode.LIMIT_EXCEEDED, failure.code());
+        assertFalse(runtime.simulation().state().configured());
+        assertFalse(runtime.controls().available());
+    }
+
+    @Test
     void publicReportAndPageDefensivelyCopyAndValidateEvidence() {
         ArrayList<FixedStepUpdateDiagnostic> diagnostics = new ArrayList<>(List.of(
                 FixedStepUpdateDiagnostic.RENDER_DELTA_CLAMPED));
@@ -274,6 +358,27 @@ final class FixedStepSimulationTest {
         assertThrows(IllegalArgumentException.class, () -> new FixedStepUpdatePage(
                 query, List.of(report, report), false, false,
                 OptionalLong.of(1), OptionalLong.of(1)));
+
+        FixedStepSimulationConfiguration configuration = configuration(10, 10, 10, 1, 2);
+        assertThrows(IllegalArgumentException.class, () -> new FixedStepSimulationState(
+                true, Optional.of(configuration), 10, 0.0, false,
+                OptionalLong.empty(), 0));
+        assertThrows(IllegalArgumentException.class, () -> new FixedStepSimulationState(
+                true, Optional.of(configuration), 0, 0.0, false,
+                OptionalLong.empty(), 1));
+        assertThrows(IllegalArgumentException.class, () -> new FixedStepSimulationState(
+                true, Optional.of(configuration), 0, 0.0, false,
+                OptionalLong.of(1), 3));
+        assertThrows(IllegalArgumentException.class, () -> new FixedStepSimulationState(
+                true, Optional.of(configuration), 5, 0.4, false,
+                OptionalLong.of(1), 1));
+        assertThrows(IllegalArgumentException.class, () -> new FixedStepSimulationState(
+                true, Optional.of(configuration), 0, 0.0, false,
+                OptionalLong.of(0), 1));
+        assertThrows(IllegalArgumentException.class, () -> new FixedStepUpdateReport(
+                1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.0,
+                Optional.of(new SimulationTickId(1)), Optional.of(new SimulationTickId(1)),
+                Optional.empty(), Optional.empty(), false, List.of()));
     }
 
     private static FixedStepSimulationConfiguration configuration(long fixedStep,

@@ -21,6 +21,41 @@ import org.junit.jupiter.api.Timeout;
 final class Lwjgl3FixtureSmokeTest {
     @Test
     @Timeout(90)
+    void realHiddenLwjgl3RenderLoopUsesCanonicalFixedStepHelper() throws Exception {
+        Path evidence = Files.createTempFile("agent-runtime-fixed-step-fixture-", ".txt");
+        Files.deleteIfExists(evidence);
+        List<String> command = new ArrayList<>();
+        command.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
+        command.add("--enable-native-access=ALL-UNNAMED");
+        command.add("-cp");
+        command.add(System.getProperty("fixture.classpath"));
+        command.add(FixedStepFixtureApplication.class.getName());
+        command.add(evidence.toString());
+        Process process = new ProcessBuilder(command)
+                .redirectErrorStream(true)
+                .start();
+        boolean exited = process.waitFor(Duration.ofSeconds(60).toMillis(), TimeUnit.MILLISECONDS);
+        if (!exited) {
+            process.destroyForcibly();
+        }
+        String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        assertTrue(exited, () -> "fixed-step fixture timed out: " + output);
+        assertEquals(0, process.exitValue(), () -> "fixed-step fixture failed: " + output);
+        assertTrue(Files.isRegularFile(evidence));
+        String facts = Files.readString(evidence);
+        assertTrue(facts.contains("session=fixed-step-fixture"));
+        assertTrue(facts.contains("fixedStepNanos=10000000"));
+        assertTrue(facts.contains("controlledTicks=2"));
+        assertTrue(facts.contains("remainderPreserved=true"));
+        assertTrue(facts.contains("timelineMatches=true"));
+        assertTrue(facts.contains("renderReports=true"));
+        assertTrue(facts.contains("pausedDiagnostic=true"));
+        assertFalse(facts.contains("Exception"));
+        Files.deleteIfExists(evidence);
+    }
+
+    @Test
+    @Timeout(90)
     void realHiddenLwjgl3ApplicationCapturesDeterministicEvidence() throws Exception {
         Path evidence = Files.createTempFile("agent-runtime-fixture-", ".txt");
         Files.deleteIfExists(evidence);

@@ -19,8 +19,21 @@ public record FixedStepSimulationState(boolean configured,
             throw new IllegalArgumentException("invalid fixed-step simulation state");
         }
         if (!configured && (accumulatorRemainderNanos != 0 || interpolationAlpha != 0.0
-                || retainedUpdateReports != 0)) {
+                || paused || latestUpdateSequence.isPresent() || retainedUpdateReports != 0)) {
             throw new IllegalArgumentException("unconfigured fixed-step state contains evidence");
+        }
+        if (configured) {
+            FixedStepSimulationConfiguration value = configuration.orElseThrow();
+            double expectedAlpha = (double) accumulatorRemainderNanos / value.fixedStepNanos();
+            boolean hasRetainedReports = retainedUpdateReports > 0;
+            if (accumulatorRemainderNanos >= value.fixedStepNanos()
+                    || Double.compare(interpolationAlpha, expectedAlpha) != 0
+                    || retainedUpdateReports > value.retainedUpdateReports()
+                    || hasRetainedReports != latestUpdateSequence.isPresent()
+                    || latestUpdateSequence.isPresent()
+                            && latestUpdateSequence.orElseThrow() <= 0) {
+                throw new IllegalArgumentException("configured fixed-step state is inconsistent");
+            }
         }
     }
 }

@@ -89,10 +89,12 @@ public final class FixedStepSimulationRegistry {
                 accumulatorNanos -= configuration.fixedStepNanos();
                 attempted++;
                 try {
-                    Optional<SimulationTick> tick = executeNormalTick();
-                    completed++;
-                    if (tick.isPresent()) {
-                        SimulationTick retained = tick.orElseThrow();
+                    SimulationTimelineRegistry.TickExecution execution = executeNormalTick();
+                    if (execution.tick().isPresent()) {
+                        SimulationTick retained = execution.tick().orElseThrow();
+                        if (completedOutcome(retained.outcome())) {
+                            completed++;
+                        }
                         firstTick = firstTick.isPresent()
                                 ? firstTick : Optional.of(retained.simulationTickId());
                         finalTick = Optional.of(retained.simulationTickId());
@@ -103,8 +105,16 @@ public final class FixedStepSimulationRegistry {
                         }
                         addTimingDiagnostic(diagnostics, retained.outcome());
                     } else if (unacknowledgedCallback != null) {
+                        completed++;
                         addDiagnostic(diagnostics,
                                 FixedStepUpdateDiagnostic.EXECUTED_DELTA_UNACKNOWLEDGED);
+                    } else {
+                        completed++;
+                    }
+                    if (execution.failure().isPresent()) {
+                        tickFailure = execution.failure().orElseThrow();
+                        addDiagnostic(diagnostics, FixedStepUpdateDiagnostic.TICK_FAILED);
+                        break;
                     }
                 } catch (RuntimeException | Error failure) {
                     tickFailure = failure;
@@ -211,6 +221,10 @@ public final class FixedStepSimulationRegistry {
         if (configuration != null) {
             throw new IllegalStateException("fixed-step simulation is already registered");
         }
+        if (value.fixedStepNanos() > runtime.controls().limits().maximumDeltaNanos()) {
+            throw new AgentRuntimeException(RuntimeErrorCode.LIMIT_EXCEEDED,
+                    "fixed step exceeds the configured simulation-control delta limit");
+        }
         if (runtime.simulation().state().configured() || runtime.controls().available()) {
             throw new IllegalStateException(
                     "fixed-step simulation requires unregistered timing and control");
@@ -230,12 +244,12 @@ public final class FixedStepSimulationRegistry {
         unacknowledgedCallback = unacknowledged;
     }
 
-    private Optional<SimulationTick> executeNormalTick() {
+    private SimulationTimelineRegistry.TickExecution executeNormalTick() {
         if (acknowledgedCallback != null) {
-            return runtime.simulation().tick(
+            return runtime.simulation().tickObserved(
                     configuration.fixedStepNanos(), acknowledgedCallback);
         }
-        return runtime.simulation().tickUnacknowledged(
+        return runtime.simulation().tickUnacknowledgedObserved(
                 configuration.fixedStepNanos(), unacknowledgedCallback);
     }
 
@@ -304,12 +318,35 @@ public final class FixedStepSimulationRegistry {
 
     private static void addTimingDiagnostic(List<FixedStepUpdateDiagnostic> diagnostics,
             SimulationTickOutcome outcome) {
-        if (outcome == SimulationTickOutcome.DELTA_MISMATCH) {
-            addDiagnostic(diagnostics, FixedStepUpdateDiagnostic.EXECUTED_DELTA_MISMATCH);
-        } else if (outcome == SimulationTickOutcome.UNACKNOWLEDGED) {
-            addDiagnostic(diagnostics,
-                    FixedStepUpdateDiagnostic.EXECUTED_DELTA_UNACKNOWLEDGED);
+        switch (outcome) {
+            case DELTA_MISMATCH -> addDiagnostic(
+                    diagnostics, FixedStepUpdateDiagnostic.EXECUTED_DELTA_MISMATCH);
+            case UNACKNOWLEDGED -> addDiagnostic(
+                    diagnostics, FixedStepUpdateDiagnostic.EXECUTED_DELTA_UNACKNOWLEDGED);
+            case REPORTED_DELTA_INVALID -> addDiagnostic(
+                    diagnostics, FixedStepUpdateDiagnostic.EXECUTED_DELTA_INVALID);
+            case TIME_LIMIT_EXCEEDED -> addDiagnostic(
+                    diagnostics, FixedStepUpdateDiagnostic.SIMULATION_TIME_LIMIT_EXCEEDED);
+            case CALLBACK_FAILED -> addDiagnostic(
+                    diagnostics, FixedStepUpdateDiagnostic.APPLICATION_CALLBACK_FAILED);
+            case CAPTURE_FAILED -> addDiagnostic(
+                    diagnostics, FixedStepUpdateDiagnostic.RUNTIME_CAPTURE_FAILED);
+            case CALLBACK_AND_CAPTURE_FAILED -> {
+                addDiagnostic(diagnostics, FixedStepUpdateDiagnostic.APPLICATION_CALLBACK_FAILED);
+                addDiagnostic(diagnostics, FixedStepUpdateDiagnostic.RUNTIME_CAPTURE_FAILED);
+            }
+            case COMPLETED -> {
+                // No diagnostic.
+            }
         }
+    }
+
+    private static boolean completedOutcome(SimulationTickOutcome outcome) {
+        return switch (outcome) {
+            case COMPLETED, DELTA_MISMATCH, UNACKNOWLEDGED,
+                    REPORTED_DELTA_INVALID, TIME_LIMIT_EXCEEDED -> true;
+            case CALLBACK_FAILED, CAPTURE_FAILED, CALLBACK_AND_CAPTURE_FAILED -> false;
+        };
     }
 
     private static void addDiagnostic(List<FixedStepUpdateDiagnostic> diagnostics,

@@ -44,6 +44,13 @@ public record FixedStepUpdateReport(long updateSequence, long suppliedRenderDelt
         finalRuntimeFrameId = Objects.requireNonNull(finalRuntimeFrameId, "finalRuntimeFrameId");
         validateRange(firstSimulationTickId, finalSimulationTickId, "simulation tick");
         validateRange(firstRuntimeFrameId, finalRuntimeFrameId, "runtime frame");
+        boolean tickCorrelation = firstSimulationTickId.isPresent();
+        boolean frameCorrelation = firstRuntimeFrameId.isPresent();
+        if (ticksAttempted == 0 && (tickCorrelation || frameCorrelation)
+                || frameCorrelation && !tickCorrelation
+                || paused && (ticksAttempted != 0 || tickCorrelation || frameCorrelation)) {
+            throw new IllegalArgumentException("fixed-step tick correlation is inconsistent");
+        }
         diagnostics = List.copyOf(diagnostics);
         if (diagnostics.size() > FixedStepUpdateDiagnostic.values().length
                 || new HashSet<>(diagnostics).size() != diagnostics.size()) {

@@ -29,4 +29,3 @@ Applications and bootstrap obtain one canonical loop, while agents can diagnose 
 time, accumulated-time loss, catch-up drops, partial failures, and tick/frame correlation without
 screenshots. Core remains reusable and JDK-only. The application must still explicitly acknowledge
 the executed delta; only a future direct Box2D adapter can provide stronger `World.step` evidence.
-

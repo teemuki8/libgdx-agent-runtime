@@ -56,13 +56,19 @@ public record Box2dContactTick(SimulationTickId simulationTickId,
     }
 
     /** Latest bounded facts retained for one active contact. */
-    public record ActiveContact(Box2dContactRecord.Key key, boolean touching, boolean enabled,
-            List<Box2dVector> points, Optional<Box2dVector> normal,
+    public record ActiveContact(Box2dContactRecord.Key key,
+            Box2dContactRecord.Endpoint endpointA, Box2dContactRecord.Endpoint endpointB,
+            boolean touching, boolean enabled, List<Box2dVector> points, Optional<Box2dVector> normal,
             List<Box2dContactRecord.Impulse> impulses, List<Truncation> truncations)
             implements Comparable<ActiveContact> {
         /** Defensively copies active-contact values. */
         public ActiveContact {
             Objects.requireNonNull(key, "key");
+            Objects.requireNonNull(endpointA, "endpointA");
+            Objects.requireNonNull(endpointB, "endpointB");
+            if (!key.matches(endpointA, endpointB)) {
+                throw new IllegalArgumentException("active contact key and endpoints disagree");
+            }
             points = List.copyOf(points);
             normal = Objects.requireNonNull(normal, "normal");
             impulses = List.copyOf(impulses);

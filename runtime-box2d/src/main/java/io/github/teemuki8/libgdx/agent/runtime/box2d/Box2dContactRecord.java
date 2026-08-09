@@ -6,14 +6,17 @@ import java.util.Objects;
 import java.util.Optional;
 
 /** One immediately copied and canonically oriented Box2D contact callback. */
-public record Box2dContactRecord(Phase phase, Key key, boolean touching, boolean enabled,
-        Availability availability, List<Box2dVector> points, Optional<Box2dVector> normal,
-        List<Impulse> impulses, Optional<OldManifold> oldManifold, long occurrence,
-        List<Truncation> truncations) implements Comparable<Box2dContactRecord> {
+public record Box2dContactRecord(Phase phase, Key key, Endpoint endpointA, Endpoint endpointB,
+        boolean touching, boolean enabled, Availability availability, List<Box2dVector> points,
+        Optional<Box2dVector> normal, List<Impulse> impulses,
+        Optional<OldManifold> oldManifold, long occurrence, List<Truncation> truncations)
+        implements Comparable<Box2dContactRecord> {
     /** Validates closed phase availability and defensively copies bounded values. */
     public Box2dContactRecord {
         Objects.requireNonNull(phase, "phase");
         Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(endpointA, "endpointA");
+        Objects.requireNonNull(endpointB, "endpointB");
         Objects.requireNonNull(availability, "availability");
         points = List.copyOf(points);
         normal = Objects.requireNonNull(normal, "normal");
@@ -22,6 +25,9 @@ public record Box2dContactRecord(Phase phase, Key key, boolean touching, boolean
         truncations = List.copyOf(truncations);
         if (occurrence <= 0) {
             throw new IllegalArgumentException("contact callback occurrence must be positive");
+        }
+        if (!key.matches(endpointA, endpointB)) {
+            throw new IllegalArgumentException("contact key and endpoints disagree");
         }
         boolean endpointsOnly = phase == Phase.BEGIN || phase == Phase.END;
         if (endpointsOnly != (availability == Availability.ENDPOINTS_ONLY)
@@ -87,20 +93,36 @@ public record Box2dContactRecord(Phase phase, Key key, boolean touching, boolean
         }
     }
 
-    /** Canonically ordered stable contact identity. */
-    public record Key(Endpoint endpointA, Endpoint endpointB) implements Comparable<Key> {
-        /** Requires strict canonical endpoint order. */
+    /** Canonically ordered stable fixture/child contact identity. */
+    public record Key(String fixtureAId, int childIndexA, String fixtureBId, int childIndexB)
+            implements Comparable<Key> {
+        /** Requires strict canonical fixture/child order. */
         public Key {
-            Objects.requireNonNull(endpointA, "endpointA");
-            Objects.requireNonNull(endpointB, "endpointB");
-            if (endpointA.compareTo(endpointB) >= 0) {
+            validateId(fixtureAId, "fixtureAId");
+            validateId(fixtureBId, "fixtureBId");
+            if (childIndexA < 0 || childIndexB < 0
+                    || compare(fixtureAId, childIndexA, fixtureBId, childIndexB) >= 0) {
                 throw new IllegalArgumentException("contact endpoints are not canonically ordered");
             }
         }
 
         @Override public int compareTo(Key other) {
-            int first = endpointA.compareTo(other.endpointA);
-            return first != 0 ? first : endpointB.compareTo(other.endpointB);
+            int first = compare(fixtureAId, childIndexA,
+                    other.fixtureAId, other.childIndexA);
+            return first != 0 ? first : compare(fixtureBId, childIndexB,
+                    other.fixtureBId, other.childIndexB);
+        }
+
+        /** Returns whether copied endpoints have exactly this stable fixture/child identity. */
+        public boolean matches(Endpoint first, Endpoint second) {
+            return fixtureAId.equals(first.fixtureId) && childIndexA == first.childIndex
+                    && fixtureBId.equals(second.fixtureId) && childIndexB == second.childIndex;
+        }
+
+        private static int compare(String firstId, int firstChild,
+                String secondId, int secondChild) {
+            int fixtureOrder = firstId.compareTo(secondId);
+            return fixtureOrder != 0 ? fixtureOrder : Integer.compare(firstChild, secondChild);
         }
     }
 

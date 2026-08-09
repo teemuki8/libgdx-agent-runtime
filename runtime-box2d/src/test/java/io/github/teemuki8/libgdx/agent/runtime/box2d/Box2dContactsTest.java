@@ -100,8 +100,8 @@ final class Box2dContactsTest {
                     () -> scene.tick(contacts));
             assertSame(expected, actual);
             Box2dContactTick tick = contacts.ticks(1, 1, 16).ticks().getFirst();
-            assertFalse(tick.records().getFirst().key().endpointA().sensor());
-            assertFalse(tick.records().getFirst().key().endpointB().sensor());
+            assertFalse(tick.records().getFirst().endpointA().sensor());
+            assertFalse(tick.records().getFirst().endpointB().sensor());
             assertTrue(tick.diagnostics().stream().anyMatch(value ->
                     value.code() == Box2dContactTick.DiagnosticCode.APPLICATION_LISTENER_FAILED));
             assertTrue(tick.diagnostics().stream().noneMatch(value ->
@@ -133,10 +133,10 @@ final class Box2dContactsTest {
             Box2dContactRecord post = contacts.ticks(1, 1, 16).ticks().getFirst().records().stream()
                     .filter(value -> value.phase() == Box2dContactRecord.Phase.POST_SOLVE)
                     .findFirst().orElseThrow();
-            assertEquals("a-native-b", post.key().endpointA().fixtureId());
-            assertEquals("z-native-a", post.key().endpointB().fixtureId());
-            assertEquals(application.childB, post.key().endpointA().childIndex());
-            assertEquals(application.childA, post.key().endpointB().childIndex());
+            assertEquals("a-native-b", post.key().fixtureAId());
+            assertEquals("z-native-a", post.key().fixtureBId());
+            assertEquals(application.childB, post.key().childIndexA());
+            assertEquals(application.childA, post.key().childIndexB());
             assertEquals(application.points, post.points());
             assertEquals(new Box2dVector(-application.normal.x(), -application.normal.y()),
                     post.normal().orElseThrow());
@@ -156,8 +156,8 @@ final class Box2dContactsTest {
             scene.ballFixture.setSensor(true);
             scene.ball.setTransform(12, 12, 0);
             assertEquals(application.points, post.points());
-            assertFalse(post.key().endpointA().sensor());
-            assertFalse(post.key().endpointB().sensor());
+            assertFalse(post.endpointA().sensor());
+            assertFalse(post.endpointB().sensor());
         }
     }
 
@@ -259,6 +259,24 @@ final class Box2dContactsTest {
                     value.code() == Box2dContactTick.DiagnosticCode.CALLBACK_OUTSIDE_TICK
                             && value.observed() > 0));
             assertFalse(tick.complete());
+        }
+    }
+
+    @Test
+    void missingCapturedTickInsideRetainedRangeIsNeverReportedComplete() {
+        try (Scene scene = new Scene("contact-history-gap")) {
+            Box2dContacts contacts = scene.registerContacts(
+                    Box2dContactPolicy.developmentDefaults());
+            scene.world.setContactListener(contacts.listener());
+            scene.start();
+            scene.tick(contacts);
+            scene.runtime.simulation().tick(STEP_NANOS, supplied -> supplied);
+            scene.tick(contacts);
+
+            Box2dContactTickPage missing = contacts.ticks(2, 2, 16);
+            assertTrue(missing.ticks().isEmpty());
+            assertEquals(Box2dContactTickPage.RangeStatus.NOT_YET_CAPTURED,
+                    missing.rangeStatus());
         }
     }
 

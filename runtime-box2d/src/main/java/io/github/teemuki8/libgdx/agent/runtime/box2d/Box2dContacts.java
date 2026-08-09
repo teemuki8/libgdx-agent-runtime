@@ -140,15 +140,17 @@ public final class Box2dContacts implements AutoCloseable {
                     .toList();
             boolean hasMore = matching.size() > limit;
             List<Box2dContactTick> page = matching.stream().limit(limit).toList();
+            long requestedTicks = toTick - fromTick + 1;
+            boolean missingTick = matching.size() != requestedTicks;
             Box2dContactTickPage.RangeStatus status;
             if (oldest.isEmpty()) {
                 status = Box2dContactTickPage.RangeStatus.NOT_YET_CAPTURED;
             } else if (fromTick < oldest.orElseThrow().value()) {
                 status = Box2dContactTickPage.RangeStatus.PARTIALLY_EVICTED;
+            } else if (missingTick) {
+                status = Box2dContactTickPage.RangeStatus.NOT_YET_CAPTURED;
             } else if (hasMore) {
                 status = Box2dContactTickPage.RangeStatus.PAGINATED;
-            } else if (toTick > newest.orElseThrow().value()) {
-                status = Box2dContactTickPage.RangeStatus.NOT_YET_CAPTURED;
             } else {
                 status = Box2dContactTickPage.RangeStatus.COMPLETE;
             }
@@ -254,9 +256,9 @@ public final class Box2dContacts implements AutoCloseable {
             availability = Box2dContactRecord.Availability.CURRENT_MANIFOLD_AND_IMPULSES;
         }
         truncations.sort((left, right) -> left.dimension().compareTo(right.dimension()));
-        return new Box2dContactRecord(phase, mapping.key(), contact.isTouching(),
-                contact.isEnabled(), availability, points, normal, impulses, old,
-                occurrence, truncations);
+        return new Box2dContactRecord(phase, mapping.key(), mapping.endpointA(),
+                mapping.endpointB(), contact.isTouching(), contact.isEnabled(), availability,
+                points, normal, impulses, old, occurrence, truncations);
     }
 
     private void updateActive(Box2dContactRecord.Phase phase,
@@ -273,8 +275,9 @@ public final class Box2dContacts implements AutoCloseable {
         Box2dContactTick.ActiveContact value;
         if (phase == Box2dContactRecord.Phase.BEGIN) {
             activeObserved = saturatingIncrement(activeObserved);
-            value = new Box2dContactTick.ActiveContact(key, contact.isTouching(),
-                    contact.isEnabled(), List.of(), Optional.empty(), List.of(), List.of());
+            value = new Box2dContactTick.ActiveContact(key, mapping.endpointA(),
+                    mapping.endpointB(), contact.isTouching(), contact.isEnabled(), List.of(),
+                    Optional.empty(), List.of(), List.of());
         } else if (!active.containsKey(key)) {
             current.diagnostic(Box2dContactTick.DiagnosticCode.MISSING_CORRELATION, 1);
             return;
@@ -283,9 +286,9 @@ public final class Box2dContacts implements AutoCloseable {
                     contact, mapping.reversed(), limits.pointsPerContact());
             manifold.truncations().forEach(
                     truncation -> current.diagnostic(diagnosticFor(truncation), 1));
-            value = new Box2dContactTick.ActiveContact(key, contact.isTouching(),
-                    contact.isEnabled(), manifold.points(), manifold.normal(), List.of(),
-                    manifold.truncations());
+            value = new Box2dContactTick.ActiveContact(key, mapping.endpointA(),
+                    mapping.endpointB(), contact.isTouching(), contact.isEnabled(),
+                    manifold.points(), manifold.normal(), List.of(), manifold.truncations());
         } else {
             Box2dContactCopies.CurrentManifold manifold = Box2dContactCopies.current(
                     contact, mapping.reversed(), limits.pointsPerContact());
@@ -296,9 +299,9 @@ public final class Box2dContacts implements AutoCloseable {
             truncations.forEach(
                     truncation -> current.diagnostic(diagnosticFor(truncation), 1));
             truncations.sort((left, right) -> left.dimension().compareTo(right.dimension()));
-            value = new Box2dContactTick.ActiveContact(key, contact.isTouching(),
-                    contact.isEnabled(), manifold.points(), manifold.normal(),
-                    copiedImpulses.values(), truncations);
+            value = new Box2dContactTick.ActiveContact(key, mapping.endpointA(),
+                    mapping.endpointB(), contact.isTouching(), contact.isEnabled(),
+                    manifold.points(), manifold.normal(), copiedImpulses.values(), truncations);
         }
         if (active.containsKey(key)) {
             active.put(key, value);

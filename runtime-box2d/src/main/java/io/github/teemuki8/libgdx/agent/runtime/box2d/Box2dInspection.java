@@ -363,9 +363,12 @@ public final class Box2dInspection implements AutoCloseable {
         if (order == 0) {
             return Optional.empty();
         }
-        return Optional.of(order < 0
-                ? new ContactMapping(new Box2dContactRecord.Key(endpointA, endpointB), false)
-                : new ContactMapping(new Box2dContactRecord.Key(endpointB, endpointA), true));
+        Box2dContactRecord.Endpoint canonicalA = order < 0 ? endpointA : endpointB;
+        Box2dContactRecord.Endpoint canonicalB = order < 0 ? endpointB : endpointA;
+        Box2dContactRecord.Key key = new Box2dContactRecord.Key(
+                canonicalA.fixtureId(), canonicalA.childIndex(),
+                canonicalB.fixtureId(), canonicalB.childIndex());
+        return Optional.of(new ContactMapping(key, canonicalA, canonicalB, order > 0));
     }
 
     void unregisterContacts(String worldId, Box2dContacts registration) {
@@ -550,7 +553,8 @@ public final class Box2dInspection implements AutoCloseable {
         }
     }
 
-    record ContactMapping(Box2dContactRecord.Key key, boolean reversed) {}
+    record ContactMapping(Box2dContactRecord.Key key, Box2dContactRecord.Endpoint endpointA,
+            Box2dContactRecord.Endpoint endpointB, boolean reversed) {}
 
     private final class Registration<T> implements Box2dRegistration<T> {
         private final Entry<T> entry;

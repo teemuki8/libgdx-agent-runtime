@@ -54,7 +54,8 @@ final class Box2dContactContractTest {
         ArrayList<Box2dContactRecord.OldManifoldPoint> oldPoints = new ArrayList<>(
                 List.of(new Box2dContactRecord.OldManifoldPoint(7, 5, -6)));
         Box2dContactRecord record = new Box2dContactRecord(
-                Box2dContactRecord.Phase.PRE_SOLVE, key("a", "b"), true, true,
+                Box2dContactRecord.Phase.PRE_SOLVE, key("a", "b"),
+                endpoint("a"), endpoint("b"), true, true,
                 Box2dContactRecord.Availability.CURRENT_AND_OLD_MANIFOLD,
                 points, Optional.of(new Box2dVector(0, 1)), List.of(),
                 Optional.of(new Box2dContactRecord.OldManifold(
@@ -63,7 +64,8 @@ final class Box2dContactContractTest {
         ArrayList<Box2dContactRecord.Impulse> impulses = new ArrayList<>(
                 List.of(new Box2dContactRecord.Impulse(3, -4)));
         Box2dContactRecord postSolve = new Box2dContactRecord(
-                Box2dContactRecord.Phase.POST_SOLVE, key("a", "b"), true, true,
+                Box2dContactRecord.Phase.POST_SOLVE, key("a", "b"),
+                endpoint("a"), endpoint("b"), true, true,
                 Box2dContactRecord.Availability.CURRENT_MANIFOLD_AND_IMPULSES,
                 List.of(), Optional.empty(), impulses, Optional.empty(), 1, List.of());
 
@@ -79,7 +81,8 @@ final class Box2dContactContractTest {
         assertThrows(IllegalArgumentException.class,
                 () -> new Box2dContactRecord.OldManifoldPoint(-1, 0, 0));
         assertThrows(IllegalArgumentException.class, () -> new Box2dContactRecord(
-                Box2dContactRecord.Phase.BEGIN, key("a", "b"), true, true,
+                Box2dContactRecord.Phase.BEGIN, key("a", "b"),
+                endpoint("a"), endpoint("b"), true, true,
                 Box2dContactRecord.Availability.ENDPOINTS_ONLY,
                 List.of(new Box2dVector(0, 0)), Optional.empty(), List.of(),
                 Optional.empty(), 1, List.of()));
@@ -88,7 +91,7 @@ final class Box2dContactContractTest {
     @Test
     void canonicalKeysAndTickCountersRejectDishonestEvidence() {
         assertThrows(IllegalArgumentException.class,
-                () -> new Box2dContactRecord.Key(endpoint("b"), endpoint("a")));
+                () -> new Box2dContactRecord.Key("b", 0, "a", 0));
         Box2dContactRecord later = record(Box2dContactRecord.Phase.POST_SOLVE, "a", "c", 1);
         Box2dContactRecord earlier = record(Box2dContactRecord.Phase.BEGIN, "a", "b", 1);
         assertThrows(IllegalArgumentException.class, () -> tick(
@@ -157,12 +160,13 @@ final class Box2dContactContractTest {
                 ? Optional.of(new Box2dContactRecord.OldManifold(
                         Box2dContactRecord.ManifoldType.CIRCLES, List.of()))
                 : Optional.empty();
-        return new Box2dContactRecord(phase, key(fixtureA, fixtureB), true, true, availability,
-                List.of(), Optional.empty(), List.of(), old, occurrence, List.of());
+        return new Box2dContactRecord(phase, key(fixtureA, fixtureB), endpoint(fixtureA),
+                endpoint(fixtureB), true, true, availability, List.of(), Optional.empty(),
+                List.of(), old, occurrence, List.of());
     }
 
     private static Box2dContactRecord.Key key(String fixtureA, String fixtureB) {
-        return new Box2dContactRecord.Key(endpoint(fixtureA), endpoint(fixtureB));
+        return new Box2dContactRecord.Key(fixtureA, 0, fixtureB, 0);
     }
 
     private static Box2dContactRecord.Endpoint endpoint(String fixture) {

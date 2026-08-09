@@ -16,9 +16,11 @@ import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import java.lang.ref.WeakReference;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.OptionalLong;
 
 /** Explicit bounded registration adapter for selected application-owned Box2D objects. */
@@ -30,6 +32,8 @@ public final class Box2dInspection implements AutoCloseable {
     private final LinkedHashMap<String, BodyEntry> bodies = new LinkedHashMap<>();
     private final LinkedHashMap<String, FixtureEntry> fixtures = new LinkedHashMap<>();
     private final LinkedHashMap<String, JointEntry> joints = new LinkedHashMap<>();
+    private final LinkedHashMap<String, Box2dContacts> contacts = new LinkedHashMap<>();
+    private final LinkedHashMap<String, Long> callbacksAfterClose = new LinkedHashMap<>();
     private boolean closed;
 
     /** Creates an adapter owned by the calling application/capture thread. */
@@ -124,6 +128,25 @@ public final class Box2dInspection implements AutoCloseable {
         return handle(entry);
     }
 
+    /** Registers one explicit bounded contact capture for an already registered world. */
+    public Box2dContacts registerContacts(String worldId, Box2dContactLimits contactLimits,
+            Box2dContactPolicy policy) {
+        requireOwnerOpen();
+        String id = Objects.requireNonNull(worldId, "worldId");
+        requireEntry(worlds, id, "world");
+        Objects.requireNonNull(contactLimits, "contactLimits");
+        Objects.requireNonNull(policy, "policy");
+        if (contacts.containsKey(id)) {
+            throw new IllegalArgumentException(
+                    "Box2D contacts are already registered for this world");
+        }
+        Box2dContacts registration = new Box2dContacts(
+                runtime, this, id, contactLimits, policy, ownerThread);
+        registration.registerEntity();
+        contacts.put(id, registration);
+        return registration;
+    }
+
     /** Returns configured adapter limits. */
     public Box2dAdapterLimits limits() {
         return limits;
@@ -137,11 +160,16 @@ public final class Box2dInspection implements AutoCloseable {
         }
         if (runtime.status() != RuntimeStatus.CLOSED) {
             runtime.entities().requireProviderMutationAllowed();
+        }
+        List.copyOf(contacts.values()).forEach(Box2dContacts::closeFromInspection);
+        if (runtime.status() != RuntimeStatus.CLOSED) {
             joints.values().forEach(Entry::closeProvider);
             fixtures.values().forEach(Entry::closeProvider);
             bodies.values().forEach(Entry::closeProvider);
             worlds.values().forEach(Entry::closeProvider);
         }
+        contacts.clear();
+        callbacksAfterClose.clear();
         closed = true;
         clearEntries(joints);
         clearEntries(fixtures);
@@ -292,6 +320,7 @@ public final class Box2dInspection implements AutoCloseable {
             }
             requireUniqueNative(value, joints, entry);
         }
+        notifyContactMutation(entry);
         entry.rebind(value);
     }
 
@@ -312,9 +341,82 @@ public final class Box2dInspection implements AutoCloseable {
         if (runtime.status() != RuntimeStatus.CLOSED) {
             entry.closeProvider();
         }
+        notifyContactMutation(entry);
         entry.closed = true;
         entry.reference.clear();
         map(entry).remove(entry.id, entry);
+        if (entry instanceof WorldEntry) {
+            callbacksAfterClose.remove(entry.id);
+        }
+    }
+
+    Optional<ContactMapping> contactMapping(String worldId, Fixture nativeA, int childA,
+            Fixture nativeB, int childB) {
+        FixtureEntry fixtureA = fixtureEntry(nativeA);
+        FixtureEntry fixtureB = fixtureEntry(nativeB);
+        if (fixtureA == null || fixtureB == null) {
+            return Optional.empty();
+        }
+        BodyEntry bodyA = bodies.get(fixtureA.parentId);
+        BodyEntry bodyB = bodies.get(fixtureB.parentId);
+        if (bodyA == null || bodyB == null || !worldId.equals(bodyA.parentId)
+                || !worldId.equals(bodyB.parentId)) {
+            return Optional.empty();
+        }
+        Box2dContactRecord.Endpoint endpointA = new Box2dContactRecord.Endpoint(
+                bodyA.id, fixtureA.id, childA, nativeA.isSensor());
+        Box2dContactRecord.Endpoint endpointB = new Box2dContactRecord.Endpoint(
+                bodyB.id, fixtureB.id, childB, nativeB.isSensor());
+        int order = endpointA.compareTo(endpointB);
+        if (order == 0) {
+            return Optional.empty();
+        }
+        Box2dContactRecord.Endpoint canonicalA = order < 0 ? endpointA : endpointB;
+        Box2dContactRecord.Endpoint canonicalB = order < 0 ? endpointB : endpointA;
+        Box2dContactRecord.Key key = new Box2dContactRecord.Key(
+                canonicalA.fixtureId(), canonicalA.childIndex(),
+                canonicalB.fixtureId(), canonicalB.childIndex());
+        return Optional.of(new ContactMapping(key, canonicalA, canonicalB, order > 0));
+    }
+
+    void unregisterContacts(String worldId, Box2dContacts registration) {
+        contacts.remove(worldId, registration);
+    }
+
+    void callbackAfterContactsClosed(String worldId) {
+        if (!worlds.containsKey(worldId)) {
+            return;
+        }
+        callbacksAfterClose.compute(worldId, (ignored, count) ->
+                count == null ? 1L : count == Long.MAX_VALUE ? count : count + 1);
+    }
+
+    long takeCallbacksAfterClose(String worldId) {
+        Long observed = callbacksAfterClose.remove(worldId);
+        return observed == null ? 0 : observed;
+    }
+
+    private void notifyContactMutation(Entry<?> entry) {
+        if (entry instanceof WorldEntry) {
+            Box2dContacts registration = contacts.get(entry.id);
+            if (registration != null) {
+                registration.worldChanged();
+            }
+        } else if (entry instanceof FixtureEntry fixture) {
+            BodyEntry body = bodies.get(fixture.parentId);
+            if (body != null) {
+                Box2dContacts registration = contacts.get(body.parentId);
+                if (registration != null) {
+                    registration.fixtureChanged(fixture.id);
+                }
+            }
+        }
+    }
+
+    private FixtureEntry fixtureEntry(Fixture fixture) {
+        return fixtures.values().stream()
+                .filter(entry -> entry.reference.get() == fixture)
+                .findFirst().orElse(null);
     }
 
     private void requireNoBodyDescendants(BodyEntry body) {
@@ -488,6 +590,9 @@ public final class Box2dInspection implements AutoCloseable {
             this.bodyB = bodyB;
         }
     }
+
+    record ContactMapping(Box2dContactRecord.Key key, Box2dContactRecord.Endpoint endpointA,
+            Box2dContactRecord.Endpoint endpointB, boolean reversed) {}
 
     private final class Registration<T> implements Box2dRegistration<T> {
         private final Entry<T> entry;

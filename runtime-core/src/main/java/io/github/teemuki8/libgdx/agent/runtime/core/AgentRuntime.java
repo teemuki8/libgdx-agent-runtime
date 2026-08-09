@@ -1186,6 +1186,16 @@ public final class AgentRuntime implements AutoCloseable {
         }
     }
 
+    boolean onCaptureThread() {
+        return Thread.currentThread() == captureThread;
+    }
+
+    FrameId openFrameId() {
+        requireCaptureThread();
+        requireOpenFrame("operation requires an open frame");
+        return activeFrame;
+    }
+
     private void requireRunning() {
         if (status == RuntimeStatus.CLOSED) {
             throw new AgentRuntimeException(RuntimeErrorCode.RUNTIME_CLOSED, "runtime is closed");

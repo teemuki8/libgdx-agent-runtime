@@ -171,3 +171,29 @@ Disabled runtimes retain no providers or frames and perform no serialization.
     `EntityRegistry.requireProviderMutationAllowed()` is the generic no-mutation preflight for an
     adapter that rebinds an existing provider target; it preserves the same capture-thread,
     open-frame, and closed-runtime lifecycle as provider registration.
+36. Box2D contacts are explicit per-world adapter registrations. The application installs the
+    direct or evidence-first composed listener and wraps exactly one application-owned `World.step`
+    in `captureStep` during an active simulation tick; the runtime never installs a listener or
+    owns stepping. Callback facts resolve only explicitly registered fixture/body endpoints and
+    are copied before native callback return into canonical application-ID order. Callback records,
+    active contacts, points, impulses, old-manifold points, diagnostics, typed tick history, and
+    query pages are independently bounded. Observed/retained/limit and typed truncation evidence
+    make incomplete negative conclusions impossible. Begin/end expose endpoint facts only;
+    pre-solve and post-solve expose their closed phase-specific values with unavailable values as
+    explicit nulls or empty lists. The `box2d.contacts.<worldId>` entity and
+    `box2d.contact.*` events correlate retained evidence to the active simulation tick and actual
+    runtime frame through existing immutable entity/event, protocol, and MCP paths. Epoch reset,
+    world rebind, and fixture rebind/unregister clear stale active evidence with closed diagnostics.
+    Close releases adapter evidence and references without disposing native objects; completed core
+    frames retain their normal immutable lifetime. Contact adjacency never implies gameplay
+    causality, and canonical order is not a cross-platform or whole-program determinism claim.
+37. Contact active-state incompleteness is sticky across quiet ticks for outside, late, unmapped,
+    missing-begin, and failed-step callbacks; only an authoritative epoch/world baseline clears the
+    unknown state. Nested record/active truncation participates in `complete`. Typed contact ticks
+    become queryable only after the simulation timeline confirms their resulting runtime frame;
+    failed correlation is retained as typed incomplete evidence. Typed history retains bounded exact
+    evicted tick IDs across deque eviction and epoch reset: known evictions report
+    `PARTIALLY_EVICTED`, discarded eviction metadata reports `EVICTION_UNKNOWN`, and uncovered gaps
+    remain `NOT_YET_CAPTURED`. Disabled capture executes the application step and forwards its
+    listener without evidence. Fixture mutation removes only affected retained contact keys, and
+    public evidence values reject oversized or open truncation structures before copying them.

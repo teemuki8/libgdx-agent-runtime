@@ -12,13 +12,20 @@ import com.badlogic.gdx.physics.box2d.BodyDef;
 import com.badlogic.gdx.physics.box2d.Box2D;
 import com.badlogic.gdx.physics.box2d.CircleShape;
 import com.badlogic.gdx.physics.box2d.Fixture;
+import com.badlogic.gdx.physics.box2d.PolygonShape;
 import com.badlogic.gdx.physics.box2d.World;
 import com.badlogic.gdx.utils.GdxNativesLoader;
 import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dAdapterLimits;
+import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dContactLimits;
+import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dContactPolicy;
+import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dContacts;
 import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dInspection;
 import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dUnitTransform;
 import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dWorldSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
+import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
+import io.github.teemuki8.libgdx.agent.runtime.core.EntitySnapshot;
+import io.github.teemuki8.libgdx.agent.runtime.core.FrameId;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import io.github.teemuki8.libgdx.agent.runtime.core.SessionId;
@@ -48,17 +55,24 @@ final class Box2dInspectionFixtureTest {
     }
 
     @Test
-    void actualBox2dStepIsCapturedAndAvailableThroughExistingProtocolEntityQuery() {
+    void actualBox2dContactEvidenceUsesExistingProtocolAndMcpQueries() {
         World world = new World(new Vector2(0, -10), true);
         try {
+            Body ground = world.createBody(new BodyDef());
+            PolygonShape groundShape = new PolygonShape();
+            groundShape.setAsBox(8, 0.5f);
+            Fixture groundFixture = ground.createFixture(groundShape, 0);
+            groundShape.dispose();
+
             BodyDef bodyDefinition = new BodyDef();
             bodyDefinition.type = BodyDef.BodyType.DynamicBody;
-            bodyDefinition.position.set(2, 4);
+            bodyDefinition.position.set(0, 1.05f);
             Body ball = world.createBody(bodyDefinition);
             CircleShape shape = new CircleShape();
             shape.setRadius(0.5f);
             Fixture fixture = ball.createFixture(shape, 1);
             shape.dispose();
+            ball.setLinearVelocity(0, -2);
 
             AgentRuntime runtime = AgentRuntime.builder()
                     .sessionId(SessionId.of("box2d-inspection-fixture"))
@@ -68,17 +82,36 @@ final class Box2dInspectionFixtureTest {
                 inspection.registerWorld("main", world, new Box2dWorldSpec(
                         true, true, true, 6, 2, OptionalDouble.of(60),
                         new Box2dUnitTransform(100)));
+                inspection.registerBody("ground", "main", ground);
+                inspection.registerFixture("ground-shape", "ground", groundFixture);
                 inspection.registerBody("ball", "main", ball);
                 inspection.registerFixture("ball-shape", "ball", fixture);
+                Box2dContacts contacts = inspection.registerContacts("main",
+                        Box2dContactLimits.developmentDefaults(),
+                        Box2dContactPolicy.developmentDefaults());
+                world.setContactListener(contacts.listener());
                 runtime.simulation().register(SimulationTimelineSpec.fixedStep(FIXED_STEP_NANOS));
                 runtime.start();
 
                 for (int tick = 0; tick < 3; tick++) {
                     runtime.simulation().tick(FIXED_STEP_NANOS, supplied -> {
-                        world.step((float) (supplied / 1_000_000_000.0), 6, 2);
+                        contacts.captureStep(() -> world.step(
+                                (float) (supplied / 1_000_000_000.0), 6, 2));
                         return supplied;
                     });
                 }
+
+                EntitySnapshot contactEntity = runtime.entity(
+                        EntityId.of("box2d.contacts.main")).orElseThrow();
+                assertEquals("box2d.contacts", contactEntity.type().value());
+                RuntimeValue.ListValue activeContacts = assertInstanceOf(
+                        RuntimeValue.ListValue.class,
+                        contactEntity.property("activeContacts").orElseThrow());
+                assertFalse(activeContacts.values().isEmpty());
+                assertTrue(java.util.stream.LongStream.rangeClosed(1, 3)
+                        .mapToObj(frame -> runtime.frame(new FrameId(frame)).orElseThrow())
+                        .flatMap(frame -> frame.events().stream())
+                        .anyMatch(event -> event.type().value().equals("box2d.contact.begin")));
 
                 RuntimeRegistry registry = new RuntimeRegistry();
                 try (PublishedRuntime publication = registry.publish(runtime);
@@ -103,6 +136,32 @@ final class Box2dInspectionFixtureTest {
                     assertEquals(RuntimeValues.integer(1),
                             entity.latest().property("registeredFixtureCount").orElseThrow());
 
+                    RuntimeResponse.Result.Entity contactResult = assertInstanceOf(
+                            RuntimeResponse.Result.Entity.class,
+                            assertInstanceOf(RuntimeResponse.Success.class,
+                                    new RuntimeProtocolService(registry).execute(new RuntimeRequest(
+                                            ProtocolVersion.V2_1, "box2d-contacts",
+                                            runtime.sessionId().value(),
+                                            new RuntimeCommand.Entity(
+                                                    "box2d.contacts.main", 0, 3, 10))))
+                                    .result());
+                    assertEquals("box2d.contacts", contactResult.latest().type().value());
+                    assertFalse(assertInstanceOf(RuntimeValue.ListValue.class,
+                            contactResult.latest().property("activeContacts").orElseThrow())
+                            .values().isEmpty());
+
+                    RuntimeResponse.Result.Events contactEvents = assertInstanceOf(
+                            RuntimeResponse.Result.Events.class,
+                            assertInstanceOf(RuntimeResponse.Success.class,
+                                    new RuntimeProtocolService(registry).execute(new RuntimeRequest(
+                                            ProtocolVersion.V2_1, "box2d-contact-events",
+                                            runtime.sessionId().value(),
+                                            new RuntimeCommand.Events(0, 3,
+                                                    "box2d.contact.begin", false,
+                                                    "box2d.body.ball", "box2d.body.ground", 10))))
+                                    .result());
+                    assertEquals(1, contactEvents.page().items().size());
+
                     McpSchema.CallToolResult mcp = handler.handle(
                             McpSchema.CallToolRequest.builder("runtime_entity")
                                     .arguments(Map.of(
@@ -112,6 +171,30 @@ final class Box2dInspectionFixtureTest {
                     assertNotNull(mcp);
                     assertFalse(mcp.isError());
                     assertTrue(mcp.structuredContent().toString().contains("box2d.body.ball"));
+
+                    McpSchema.CallToolResult contactMcp = handler.handle(
+                            McpSchema.CallToolRequest.builder("runtime_entity")
+                                    .arguments(Map.of(
+                                            "sessionId", runtime.sessionId().value(),
+                                            "entityId", "box2d.contacts.main"))
+                                    .build()).block(Duration.ofSeconds(5));
+                    assertNotNull(contactMcp);
+                    assertFalse(contactMcp.isError());
+                    assertTrue(contactMcp.structuredContent().toString()
+                            .contains("activeContacts"));
+
+                    McpSchema.CallToolResult contactEventsMcp = handler.handle(
+                            McpSchema.CallToolRequest.builder("runtime_events")
+                                    .arguments(Map.of(
+                                            "sessionId", runtime.sessionId().value(),
+                                            "eventType", "box2d.contact.begin",
+                                            "subject", "box2d.body.ball",
+                                            "source", "box2d.body.ground"))
+                                    .build()).block(Duration.ofSeconds(5));
+                    assertNotNull(contactEventsMcp);
+                    assertFalse(contactEventsMcp.isError());
+                    assertTrue(contactEventsMcp.structuredContent().toString()
+                            .contains("box2d.contact.begin"));
                 }
             } finally {
                 runtime.close();

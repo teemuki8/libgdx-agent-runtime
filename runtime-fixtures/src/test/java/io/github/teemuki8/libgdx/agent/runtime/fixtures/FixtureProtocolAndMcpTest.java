@@ -47,6 +47,45 @@ import org.junit.jupiter.api.Timeout;
 
 final class FixtureProtocolAndMcpTest {
     @Test
+    void fixtureSimulationTickCorrelatesThroughJavaProtocolAndMcp() {
+        DeterministicSimulation simulation = new DeterministicSimulation();
+        AgentRuntime runtime = simulation.startRuntime();
+        simulation.advance(runtime, 1);
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime);
+                RuntimeToolHandler handler =
+                        new RuntimeToolHandler(new RuntimeProtocolService(registry))) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            RuntimeResponse.Result.SimulationTicks protocol = assertInstanceOf(
+                    RuntimeResponse.Result.SimulationTicks.class,
+                    assertInstanceOf(RuntimeResponse.Success.class,
+                            new RuntimeProtocolService(registry).execute(new RuntimeRequest(
+                                    ProtocolVersion.V2_1, "fixture-simulation-tick",
+                                    DeterministicSimulation.SESSION_ID.value(),
+                                    new RuntimeCommand.SimulationTicks(0, 1, 1, 8))))
+                            .result());
+            assertEquals(new FrameId(1),
+                    protocol.page().ticks().getFirst().resultingFrameId().orElseThrow());
+
+            McpSchema.CallToolResult state = handler.handle(call("runtime_simulation", Map.of(
+                    "sessionId", DeterministicSimulation.SESSION_ID.value())))
+                    .block(Duration.ofSeconds(5));
+            assertFalse(state.isError());
+            assertTrue(state.structuredContent().toString().contains("16000000"));
+
+            McpSchema.CallToolResult ticks = handler.handle(call(
+                    "runtime_simulation_ticks", Map.of(
+                            "sessionId", DeterministicSimulation.SESSION_ID.value(),
+                            "executionEpochId", 0, "fromEpochTick", 1,
+                            "toEpochTick", 1, "limit", 8)))
+                    .block(Duration.ofSeconds(5));
+            assertFalse(ticks.isError());
+            assertTrue(ticks.structuredContent().toString().contains("resultingFrameId"));
+        }
+        runtime.close();
+    }
+
+    @Test
     void fixtureEvidenceRoundTripsThroughProtocol() {
         Fixture fixture = fixture();
         try (PublishedRuntime publication = fixture.registry.publish(fixture.runtime)) {

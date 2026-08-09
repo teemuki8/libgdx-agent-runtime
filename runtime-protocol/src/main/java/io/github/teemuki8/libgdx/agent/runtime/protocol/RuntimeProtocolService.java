@@ -56,6 +56,8 @@ public final class RuntimeProtocolService {
     private static final List<String> DETERMINISM_TOOLS =
             List.of("runtime_determinism_check");
     private static final List<String> V2_TOOLS = List.of("runtime_entity_history");
+    private static final List<String> V2_1_TOOLS =
+            List.of("runtime_simulation", "runtime_simulation_ticks");
     private static final List<String> FEATURES = List.of(
             "entities", "frames", "changes", "events", "decisions");
     private static final List<ProtocolVersion> SUPPORTED_VERSIONS =
@@ -63,7 +65,8 @@ public final class RuntimeProtocolService {
                     ProtocolVersion.V1_3, ProtocolVersion.V1_4, ProtocolVersion.V1_5,
                     ProtocolVersion.V1_6, ProtocolVersion.V1_7, ProtocolVersion.V1_8,
                     ProtocolVersion.V1_9, ProtocolVersion.V1_10, ProtocolVersion.V1_11,
-                    ProtocolVersion.V1_12, ProtocolVersion.V1_13, ProtocolVersion.V2);
+                    ProtocolVersion.V1_12, ProtocolVersion.V1_13, ProtocolVersion.V2,
+                    ProtocolVersion.V2_1);
     private final RuntimeRegistry registry;
 
     /** Creates a service over an isolated or global registry. */
@@ -120,7 +123,7 @@ public final class RuntimeProtocolService {
         if (determinism) {
             tools = Stream.concat(tools, DETERMINISM_TOOLS.stream());
         }
-        return Stream.concat(tools, V2_TOOLS.stream()).toList();
+        return Stream.concat(Stream.concat(tools, V2_TOOLS.stream()), V2_1_TOOLS.stream()).toList();
     }
 
     /** Returns registered action schemas in deterministic session and action order. */
@@ -157,7 +160,7 @@ public final class RuntimeProtocolService {
             return failure(request, ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                     "protocol version is unsupported", Map.of(
                             "supported",
-                            "1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10,1.11,1.12,1.13,2.0",
+                            "1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10,1.11,1.12,1.13,2.0,2.1",
                             "requested", request.version().major() + "." + request.version().minor()));
         }
         try {
@@ -248,6 +251,14 @@ public final class RuntimeProtocolService {
             case RuntimeCommand.DeterminismCheck command -> determinism(runtime, command,
                     request.version());
             case RuntimeCommand.EntityHistory command -> entityHistory(runtime, command);
+            case RuntimeCommand.Simulation ignored ->
+                    new RuntimeResponse.Result.Simulation(runtime.simulation().state());
+            case RuntimeCommand.SimulationTicks command ->
+                    new RuntimeResponse.Result.SimulationTicks(runtime.simulation().ticks(
+                            new io.github.teemuki8.libgdx.agent.runtime.core.SimulationTickQuery(
+                                    new ExecutionEpochId(command.executionEpochId()),
+                                    command.fromEpochTick(), command.toEpochTick(),
+                                    command.limit())));
             case RuntimeCommand.Sessions ignored ->
                     throw new AssertionError("sessions handled before runtime lookup");
         };
@@ -593,6 +604,24 @@ public final class RuntimeProtocolService {
                     List.of("removed-entities", "retained-final-state", "version-pagination"),
                     List.of("entities", "frames")));
         }
+        if (ProtocolVersion.V2_1.equals(version)) {
+            var timelineLimits = runtime.simulation().limits();
+            details.add(new RuntimeCapability(
+                    "simulation-timeline", ProtocolVersion.V2_1,
+                    RuntimeCapability.Availability.AVAILABLE, Optional.empty(),
+                    RuntimeCapability.Access.READ_ONLY,
+                    List.of("AgentRuntime#simulation", "SimulationTimelineRegistry#state",
+                            "SimulationTimelineRegistry#ticks"),
+                    List.of("simulation", "simulationTicks"), V2_1_TOOLS, Map.of(
+                            "retainedTicks", (long) timelineLimits.retainedTicks(),
+                            "queryPageSize", (long) timelineLimits.queryPageSize(),
+                            "maximumDeltaNanos", timelineLimits.maximumDeltaNanos(),
+                            "maximumEpochSimulationTimeNanos",
+                            timelineLimits.maximumEpochSimulationTimeNanos(),
+                            "diagnosticLength", (long) timelineLimits.diagnosticLength()),
+                    List.of("application-reported", "bounded", "tick-frame-correlation"),
+                    List.of("execution-epochs", "frames")));
+        }
         return List.copyOf(details);
     }
 
@@ -638,6 +667,9 @@ public final class RuntimeProtocolService {
         }
         if (version.isV2()) {
             tools = Stream.concat(tools, V2_TOOLS.stream());
+        }
+        if (ProtocolVersion.V2_1.equals(version)) {
+            tools = Stream.concat(tools, V2_1_TOOLS.stream());
         }
         return tools.toList();
     }

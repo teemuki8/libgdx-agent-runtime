@@ -3,6 +3,7 @@ package io.github.teemuki8.libgdx.agent.runtime.core;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.function.BooleanSupplier;
 import java.util.function.LongConsumer;
 
@@ -11,13 +12,15 @@ public final class SimulationControllerSpec {
     private final Runnable pause;
     private final Runnable resume;
     private final LongConsumer tick;
+    private final Optional<SimulationTickCallback> acknowledgedTick;
     private final List<Condition> conditions;
 
     private SimulationControllerSpec(Runnable pause, Runnable resume, LongConsumer tick,
-            List<Condition> conditions) {
+            Optional<SimulationTickCallback> acknowledgedTick, List<Condition> conditions) {
         this.pause = pause;
         this.resume = resume;
         this.tick = tick;
+        this.acknowledgedTick = acknowledgedTick;
         this.conditions = List.copyOf(conditions);
     }
 
@@ -38,6 +41,10 @@ public final class SimulationControllerSpec {
         return tick;
     }
 
+    Optional<SimulationTickCallback> acknowledgedTick() {
+        return acknowledgedTick;
+    }
+
     List<Condition> conditions() {
         return conditions;
     }
@@ -47,6 +54,7 @@ public final class SimulationControllerSpec {
         private Runnable pause;
         private Runnable resume;
         private LongConsumer tick;
+        private SimulationTickCallback acknowledgedTick;
         private final List<Condition> conditions = new ArrayList<>();
 
         private Builder() {}
@@ -66,6 +74,19 @@ public final class SimulationControllerSpec {
         /** Sets the application-defined deterministic tick callback. */
         public Builder tick(LongConsumer value) {
             tick = Objects.requireNonNull(value, "value");
+            acknowledgedTick = null;
+            return this;
+        }
+
+        /**
+         * Sets the application-defined tick callback that reports its actually executed delta.
+         *
+         * <p>This explicit acknowledgement enables fixed-step comparison in simulation timeline
+         * evidence. The legacy {@link #tick(LongConsumer)} form remains unacknowledged.
+         */
+        public Builder acknowledgedTick(SimulationTickCallback value) {
+            acknowledgedTick = Objects.requireNonNull(value, "value");
+            tick = value::simulate;
             return this;
         }
 
@@ -81,7 +102,8 @@ public final class SimulationControllerSpec {
             return new SimulationControllerSpec(
                     Objects.requireNonNull(pause, "pause"),
                     Objects.requireNonNull(resume, "resume"),
-                    Objects.requireNonNull(tick, "tick"), conditions);
+                    Objects.requireNonNull(tick, "tick"),
+                    Optional.ofNullable(acknowledgedTick), conditions);
         }
     }
 

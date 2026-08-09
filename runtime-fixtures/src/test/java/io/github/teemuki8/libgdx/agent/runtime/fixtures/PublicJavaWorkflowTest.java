@@ -30,6 +30,15 @@ final class PublicJavaWorkflowTest {
         FrameRange range = FrameRange.of(0, 45);
 
         assertEquals(46, runtime.latestFrame().orElseThrow().frameId().value() + 1);
+        var timeline = runtime.simulation().ticks(
+                new io.github.teemuki8.libgdx.agent.runtime.core.SimulationTickQuery(
+                        new io.github.teemuki8.libgdx.agent.runtime.core.ExecutionEpochId(0),
+                        1, 45, 45));
+        assertTrue(timeline.complete());
+        assertEquals(45, timeline.ticks().size());
+        assertEquals(1, timeline.ticks().getFirst().resultingFrameId().orElseThrow().value());
+        assertEquals(45, timeline.ticks().getLast().resultingFrameId().orElseThrow().value());
+        assertEquals(720_000_000L, runtime.simulation().state().epochSimulationTimeNanos());
         assertFalse(runtime.entity(EntityId.of("enemy-2")).isPresent());
         var health = runtime.changes(new ChangeQuery(
                 range, Optional.of(EntityId.of("enemy-2")), Optional.empty(),

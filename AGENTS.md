@@ -53,6 +53,9 @@ workflow rather than blocking ordinary development.
    Java API, protocol, MCP, and the real fixture as applicable.
 5. Make the smallest coherent change and update affected guides, protocol examples, release notes,
    or compatibility documentation.
+   Every public Java API, protocol/MCP contract, artifact/dependency, or agent-visible behavior
+   change must update the relevant tested recipe or transcript in
+   `docs/guides/agent-cookbook.md` in the same pull request.
 6. Run a focused verification gate while iterating, then the relevant end-to-end gate from the skill.
 
 ## Definition of done
@@ -61,6 +64,7 @@ workflow rather than blocking ordinary development.
   ordering, and structured failure where relevant.
 - Public Java records and methods validate and defensively copy inputs and have warning-free Javadocs.
 - Protocol JSON and MCP inputs remain closed and reject unknown fields and unsupported versions.
+- The agent cookbook agrees with changed public calls, outputs, lifecycle, bounds, and failures.
 - Linux-native integration changes pass the real LWJGL3 fixture under Xvfb.
 - On Linux, treat `xvfb-run` as a repository verification prerequisite. Do not substitute the
   developer's active desktop display for the isolated fixture or full gate.

@@ -39,6 +39,7 @@ public final class AgentRuntime implements AutoCloseable {
     private final ActionRegistry actions;
     private final AssertionEvaluator assertions;
     private final SimulationControlRegistry controls;
+    private final SimulationTimelineRegistry simulation;
     private final InputRegistry inputs;
     private final CheckpointRegistry checkpoints;
     private final UiCorrelationRegistry uiCorrelations;
@@ -88,6 +89,7 @@ public final class AgentRuntime implements AutoCloseable {
         actions = new ActionRegistry(this, builder.actionLimits);
         assertions = new AssertionEvaluator(this);
         controls = new SimulationControlRegistry(this, builder.controlLimits);
+        simulation = new SimulationTimelineRegistry(this, builder.simulationTimelineLimits);
         inputs = new InputRegistry(this, builder.inputLimits);
         checkpoints = new CheckpointRegistry(this, builder.checkpointLimits);
         uiCorrelations = new UiCorrelationRegistry(this, builder.uiCorrelationLimits);
@@ -168,6 +170,11 @@ public final class AgentRuntime implements AutoCloseable {
     /** Returns the optional application-owned simulation control registration surface. */
     public SimulationControlRegistry controls() {
         return controls;
+    }
+
+    /** Returns the application-owned simulation tick boundary and immutable timeline. */
+    public SimulationTimelineRegistry simulation() {
+        return simulation;
     }
 
     /** Returns the explicit bounded registry for controlled-tick input facts. */
@@ -263,6 +270,7 @@ public final class AgentRuntime implements AutoCloseable {
             throw lifecycle("an epoch cannot start while a frame is open");
         }
         currentEpoch = new ExecutionEpochId(Math.addExact(currentEpoch.value(), 1));
+        simulation.startEpoch(currentEpoch);
         activeFrame = new FrameId(nextFrame++);
         activeDeltaNanos = 0;
         activeBaseline = Optional.of(baselineKind);
@@ -1061,6 +1069,31 @@ public final class AgentRuntime implements AutoCloseable {
         requireMutableRegistration();
     }
 
+    void requireSimulationTimelineRegistration() {
+        requireMutableRegistration();
+        if (status != RuntimeStatus.CREATED) {
+            throw lifecycle("simulation timing must be registered before start");
+        }
+    }
+
+    boolean prepareSimulationTick() {
+        if (!configuration.enabled()) {
+            if (status == RuntimeStatus.CLOSED) {
+                throw new AgentRuntimeException(RuntimeErrorCode.RUNTIME_CLOSED, "runtime is closed");
+            }
+            if (status != RuntimeStatus.DISABLED) {
+                throw lifecycle("runtime must be started");
+            }
+            return false;
+        }
+        requireCaptureThread();
+        requireRunning();
+        if (activeFrame != null) {
+            throw lifecycle("a simulation tick cannot start while a frame is open");
+        }
+        return true;
+    }
+
     void requireInputRegistration() {
         requireMutableRegistration();
     }
@@ -1365,6 +1398,8 @@ public final class AgentRuntime implements AutoCloseable {
         private ScenarioLimits scenarioLimits = ScenarioLimits.developmentDefaults();
         private ActionLimits actionLimits = ActionLimits.developmentDefaults();
         private ControlLimits controlLimits = ControlLimits.developmentDefaults();
+        private SimulationTimelineLimits simulationTimelineLimits =
+                SimulationTimelineLimits.developmentDefaults();
         private InputLimits inputLimits = InputLimits.developmentDefaults();
         private CheckpointLimits checkpointLimits = CheckpointLimits.developmentDefaults();
         private UiCorrelationLimits uiCorrelationLimits =
@@ -1461,6 +1496,12 @@ public final class AgentRuntime implements AutoCloseable {
         /** Configures hard bounds for optional simulation control. */
         public Builder controlLimits(ControlLimits value) {
             controlLimits = Objects.requireNonNull(value, "value");
+            return this;
+        }
+
+        /** Configures hard bounds for application-reported simulation timeline evidence. */
+        public Builder simulationTimelineLimits(SimulationTimelineLimits value) {
+            simulationTimelineLimits = Objects.requireNonNull(value, "value");
             return this;
         }
 

@@ -39,6 +39,9 @@ guide in the same change.
 6. Exercise invalid lifecycle/thread calls, unknown fields, unsupported versions, bounds,
    truncation/eviction, deterministic ordering, and bounded diagnostics as applicable.
 7. Update guides and ADRs when public behavior or architecture changes.
+8. For every public Java API, protocol/MCP contract, artifact/dependency, or agent-visible behavior
+   change, update the matching tested recipe or transcript in
+   `docs/guides/agent-cookbook.md` in the same pull request.
 
 Do not weaken tests to accept nondeterminism. Do not infer causality from adjacent frames or generic
 object state. Keep application-owned scheduling and mutation explicit.

@@ -97,11 +97,19 @@ final class DeterminismCanonicalSize {
 
     /** Comparable event: type, optional subject/source, metadata, ordered attributes. */
     static long event(RuntimeEvent event) {
-        long size = string(event.type().value());
-        size = add(size, optionalEntityId(event.subject()));
-        size = add(size, optionalEntityId(event.source()));
-        size = add(size, metadata(event.metadata()));
-        return add(size, properties(event.attributes()));
+        return event(event.type(), event.subject(), event.source(),
+                event.metadata(), event.attributes());
+    }
+
+    /** Comparable event fields after deterministic runtime-identifier normalization. */
+    static long event(EventType type, Optional<EntityId> subject,
+            Optional<EntityId> source, FactMetadata metadata,
+            List<RuntimeValue.Field> attributes) {
+        long size = string(type.value());
+        size = add(size, optionalEntityId(subject));
+        size = add(size, optionalEntityId(source));
+        size = add(size, metadata(metadata));
+        return add(size, properties(attributes));
     }
 
     /** Comparable decision: type, actor, candidates, chosen candidate, reason, metadata, completion. */

@@ -188,6 +188,49 @@ final class SimulationDeterminismRegistryTest {
     }
 
     @Test
+    void selectedEventsNormalizeRuntimeOwnedCorrelationAttributes() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        int[] reset = {0};
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("simulation-determinism-event-normalization"))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .build();
+        runtime.simulation().register(SimulationTimelineSpec.fixedStep(STEP));
+        runtime.entities().register(EntityId.of("body"), EntityType.of("physics"),
+                () -> "body", inspector -> inspector.property("position", () -> 0L));
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {}).resume(() -> {}).acknowledgedTick(delta -> {
+                    runtime.emit(EventSpec.type("box2d.contact.begin")
+                            .attribute("executionEpochId", RuntimeValues.integer(reset[0]))
+                            .attribute("simulationTickId",
+                                    RuntimeValues.integer(reset[0] * 100L))
+                            .attribute("epochTick", RuntimeValues.integer(1))
+                            .attribute("semantic", RuntimeValues.string("same")));
+                    return delta;
+                }).build());
+        runtime.scenarios().register("contacts", context -> reset[0]++);
+        runtime.start();
+        DeterminismSpec execution = new DeterminismSpec("contacts", 1,
+                RuntimeValues.object(), 2, 1, STEP,
+                new DeterminismProfile(new SnapshotComparisonScope(
+                        List.of(EntityId.of("body")), List.of("position"),
+                        List.of(), true, false), false));
+        SimulationDeterminismSpec spec = new SimulationDeterminismSpec(
+                execution, List.of(), List.of(), List.of(),
+                List.of(EventType.of("box2d.contact.begin")));
+
+        runtime.determinism().checkSimulation(
+                spec, "normalized-contact-events", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        SimulationDeterminismResult result = runtime.determinism().checkSimulation(
+                spec, "normalized-contact-events", Duration.ofSeconds(1))
+                .result().orElseThrow();
+
+        assertEquals(DeterminismStatus.EQUAL, result.status(), result::toString);
+    }
+
+    @Test
     void resetAndTickFailuresAreSanitizedAndNeverEqual() {
         ArrayDeque<Runnable> resetQueue = new ArrayDeque<>();
         AgentRuntime resetRuntime = customRuntime(resetQueue, new long[] {0}, new long[] {8},

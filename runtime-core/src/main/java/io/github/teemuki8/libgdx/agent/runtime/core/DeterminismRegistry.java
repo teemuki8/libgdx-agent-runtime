@@ -554,8 +554,11 @@ public final class DeterminismRegistry {
                     return countOverrun(counters, selectedEntities, selectedFacts,
                             "determinism fact count limit exceeded");
                 }
+                ComparableEvent comparable = ComparableEvent.from(event, profile);
                 eventsBytes = DeterminismCanonicalSize.add(eventsBytes,
-                        DeterminismCanonicalSize.event(event));
+                        DeterminismCanonicalSize.event(comparable.type(), comparable.subject(),
+                                comparable.source(), comparable.metadata(),
+                                comparable.attributes()));
             }
         }
         long decisionsBytes = 0;
@@ -606,7 +609,7 @@ public final class DeterminismRegistry {
                 .toList();
         List<ComparableEvent> events = scope.includeEvents()
                 ? selectedEvents(frame, eventTypes).stream()
-                        .map(ComparableEvent::from).toList() : List.of();
+                        .map(event -> ComparableEvent.from(event, profile)).toList() : List.of();
         List<ComparableDecision> decisions = scope.includeDecisions()
                 ? frame.decisions().stream().map(ComparableDecision::from).toList() : List.of();
         List<ComparableUi> ui = profile.includeUiCorrelations()
@@ -1078,9 +1081,13 @@ public final class DeterminismRegistry {
     private record ComparableEvent(EventType type, Optional<EntityId> subject,
             Optional<EntityId> source, FactMetadata metadata,
             List<RuntimeValue.Field> attributes) {
-        private static ComparableEvent from(RuntimeEvent value) {
+        private static ComparableEvent from(
+                RuntimeEvent value, DeterminismProfile profile) {
             return new ComparableEvent(value.type(), value.subject(), value.source(),
-                    value.metadata(), value.attributes());
+                    value.metadata(), value.attributes().stream()
+                            .filter(attribute -> !profile.excludedVolatileFields()
+                                    .contains(attribute.name()))
+                            .toList());
         }
     }
 

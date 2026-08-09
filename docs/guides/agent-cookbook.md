@@ -1140,6 +1140,12 @@ correlation, capture diagnostic, nested or frame truncation, partial eviction, t
 failure, or evidence-limit exhaustion. A preflight timing/solver/configuration conflict is rejected
 before dispatch. The application must reset after any failure that leaves mutation unknown.
 
+For selected events, the fixed `EXCLUDE_RUNTIME_IDENTIFIERS` normalization removes only
+runtime-owned absolute correlation attributes named `executionEpochId`, `simulationTickId`, or
+`runtimeFrameId` (along with the existing frame/event/decision identifiers). `epochTick`, contact
+endpoints, impulses, and application semantic attributes remain exact comparison evidence. This
+normalization changes only the comparable copy; inspected runtime events retain the full schema.
+
 `EQUAL` means only that the explicitly selected immutable evidence matched under the same
 application-reported setup in this operation. It is not whole-program determinism, semantic
 causality, or a promise that another CPU, platform, libGDX version, or Box2D native version produces

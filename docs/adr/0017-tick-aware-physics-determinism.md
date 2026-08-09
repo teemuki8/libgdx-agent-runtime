@@ -31,6 +31,8 @@ and result schemas. Existing Java and protocol determinism contracts remain unch
 - Fixed-step or solver conflicts are rejected before execution, while post-reset rebind/config
   failures are explicitly inconclusive.
 - Equality is exact and limited to the selected observables on the same qualified environment.
+- Selected event comparison excludes runtime-owned absolute epoch/tick/frame correlation fields
+  while preserving epoch-relative and semantic attributes; ordinary retained events are unchanged.
 - Legacy and simulation operations share bounded retention.
 - Box2D native pointers, wrapper identity, rendering, and unregistered application state are never
   compared or claimed deterministic.

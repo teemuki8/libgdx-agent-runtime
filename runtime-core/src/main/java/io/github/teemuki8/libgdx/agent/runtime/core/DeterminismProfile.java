@@ -11,7 +11,8 @@ public record DeterminismProfile(SnapshotComparisonScope comparisonScope,
             DeterminismNormalization.EXCLUDE_RUNTIME_IDENTIFIERS,
             DeterminismNormalization.EXCLUDE_WALL_CLOCK);
     private static final List<String> EXCLUDED_VOLATILE_FIELDS = List.of(
-            "executionEpochId", "frameId", "eventId", "decisionId", "capturedAt");
+            "executionEpochId", "frameId", "runtimeFrameId", "simulationTickId",
+            "eventId", "decisionId", "capturedAt");
 
     /** Validates the explicit snapshot scope. */
     public DeterminismProfile {

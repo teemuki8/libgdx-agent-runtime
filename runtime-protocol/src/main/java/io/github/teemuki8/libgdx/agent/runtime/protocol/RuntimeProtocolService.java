@@ -58,6 +58,7 @@ public final class RuntimeProtocolService {
     private static final List<String> V2_TOOLS = List.of("runtime_entity_history");
     private static final List<String> V2_1_TOOLS =
             List.of("runtime_simulation", "runtime_simulation_ticks");
+    private static final List<String> V2_2_TOOLS = List.of("runtime_simulation_assert");
     private static final List<String> FEATURES = List.of(
             "entities", "frames", "changes", "events", "decisions");
     private static final List<ProtocolVersion> SUPPORTED_VERSIONS =
@@ -66,7 +67,7 @@ public final class RuntimeProtocolService {
                     ProtocolVersion.V1_6, ProtocolVersion.V1_7, ProtocolVersion.V1_8,
                     ProtocolVersion.V1_9, ProtocolVersion.V1_10, ProtocolVersion.V1_11,
                     ProtocolVersion.V1_12, ProtocolVersion.V1_13, ProtocolVersion.V2,
-                    ProtocolVersion.V2_1);
+                    ProtocolVersion.V2_1, ProtocolVersion.V2_2);
     private final RuntimeRegistry registry;
 
     /** Creates a service over an isolated or global registry. */
@@ -123,7 +124,9 @@ public final class RuntimeProtocolService {
         if (determinism) {
             tools = Stream.concat(tools, DETERMINISM_TOOLS.stream());
         }
-        return Stream.concat(Stream.concat(tools, V2_TOOLS.stream()), V2_1_TOOLS.stream()).toList();
+        return Stream.concat(Stream.concat(
+                Stream.concat(tools, V2_TOOLS.stream()), V2_1_TOOLS.stream()),
+                V2_2_TOOLS.stream()).toList();
     }
 
     /** Returns registered action schemas in deterministic session and action order. */
@@ -160,7 +163,7 @@ public final class RuntimeProtocolService {
             return failure(request, ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                     "protocol version is unsupported", Map.of(
                             "supported",
-                            "1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10,1.11,1.12,1.13,2.0,2.1",
+                            "1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10,1.11,1.12,1.13,2.0,2.1,2.2",
                             "requested", request.version().major() + "." + request.version().minor()));
         }
         try {
@@ -259,6 +262,8 @@ public final class RuntimeProtocolService {
                                     new ExecutionEpochId(command.executionEpochId()),
                                     command.fromEpochTick(), command.toEpochTick(),
                                     command.limit())));
+            case RuntimeCommand.SimulationAssert command ->
+                    simulationAssertion(runtime, command);
             case RuntimeCommand.Sessions ignored ->
                     throw new AssertionError("sessions handled before runtime lookup");
         };
@@ -604,7 +609,7 @@ public final class RuntimeProtocolService {
                     List.of("removed-entities", "retained-final-state", "version-pagination"),
                     List.of("entities", "frames")));
         }
-        if (ProtocolVersion.V2_1.equals(version)) {
+        if (version.isV2() && version.minor() >= 1) {
             var timelineLimits = runtime.simulation().limits();
             details.add(new RuntimeCapability(
                     "simulation-timeline", ProtocolVersion.V2_1,
@@ -621,6 +626,33 @@ public final class RuntimeProtocolService {
                             "diagnosticLength", (long) timelineLimits.diagnosticLength()),
                     List.of("application-reported", "bounded", "tick-frame-correlation"),
                     List.of("execution-epochs", "frames")));
+        }
+        if (version.isV2() && version.minor() >= 2) {
+            details.add(new RuntimeCapability(
+                    "simulation-assertions", ProtocolVersion.V2_2,
+                    runtime.configuration().enabled()
+                            ? RuntimeCapability.Availability.AVAILABLE
+                            : RuntimeCapability.Availability.UNAVAILABLE,
+                    runtime.configuration().enabled() ? Optional.empty()
+                            : Optional.of("runtime-disabled"),
+                    RuntimeCapability.Access.READ_ONLY,
+                    List.of("AssertionEvaluator#evaluateSimulation"),
+                    List.of("simulationAssert"), V2_2_TOOLS, Map.of(
+                            "evaluatedTicks",
+                            (long) io.github.teemuki8.libgdx.agent.runtime.core
+                                    .SimulationAssertionScope.MAX_TICKS,
+                            "supportingEvidence",
+                            (long) io.github.teemuki8.libgdx.agent.runtime.core
+                                    .SimulationAssertionScope.MAX_EVIDENCE,
+                            "evidenceRequirements",
+                            (long) io.github.teemuki8.libgdx.agent.runtime.core
+                                    .SimulationAssertionSpec.MAX_REQUIREMENTS,
+                            "assertionTerms",
+                            (long) io.github.teemuki8.libgdx.agent.runtime.core
+                                    .SimulationAssertion.MAX_TERMS),
+                    List.of("bounded", "closed-schema", "deterministic", "exact-tick-scope",
+                            "inconclusive-safe"),
+                    List.of("completed-frames", "simulation-timeline")));
         }
         return List.copyOf(details);
     }
@@ -668,8 +700,11 @@ public final class RuntimeProtocolService {
         if (version.isV2()) {
             tools = Stream.concat(tools, V2_TOOLS.stream());
         }
-        if (ProtocolVersion.V2_1.equals(version)) {
+        if (version.isV2() && version.minor() >= 1) {
             tools = Stream.concat(tools, V2_1_TOOLS.stream());
+        }
+        if (version.isV2() && version.minor() >= 2) {
+            tools = Stream.concat(tools, V2_2_TOOLS.stream());
         }
         return tools.toList();
     }
@@ -681,6 +716,18 @@ public final class RuntimeProtocolService {
                 new io.github.teemuki8.libgdx.agent.runtime.core.AssertionScope(
                         new ExecutionEpochId(command.executionEpochId()),
                         range(command.fromFrame(), command.toFrame()), command.evidenceLimit())));
+    }
+
+    private static RuntimeResponse.Result simulationAssertion(
+            AgentRuntime runtime, RuntimeCommand.SimulationAssert command) {
+        return new RuntimeResponse.Result.SimulationAssertion(
+                runtime.assertions().evaluateSimulation(
+                        new io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertionSpec(
+                                command.assertion(), command.evidenceRequirements()),
+                        new io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertionScope(
+                                new ExecutionEpochId(command.executionEpochId()),
+                                command.fromEpochTick(), command.toEpochTick(),
+                                command.evidenceLimit())));
     }
 
     private static RuntimeResponse.Result control(

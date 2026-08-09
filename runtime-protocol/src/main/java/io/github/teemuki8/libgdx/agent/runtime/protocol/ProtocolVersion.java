@@ -34,8 +34,10 @@ public record ProtocolVersion(int major, int minor) {
     public static final ProtocolVersion V2 = new ProtocolVersion(2, 0);
     /** Application-reported simulation timeline protocol version. */
     public static final ProtocolVersion V2_1 = new ProtocolVersion(2, 1);
+    /** Simulation-scoped declarative assertion protocol version. */
+    public static final ProtocolVersion V2_2 = new ProtocolVersion(2, 2);
     /** Latest implemented protocol version. */
-    public static final ProtocolVersion CURRENT = V2_1;
+    public static final ProtocolVersion CURRENT = V2_2;
 
     /** Validates version components. */
     public ProtocolVersion {
@@ -66,6 +68,9 @@ public record ProtocolVersion(int major, int minor) {
      */
     public boolean capability(RuntimeCommand command) {
         if (isV2()) {
+            if (command instanceof RuntimeCommand.SimulationAssert) {
+                return minor() >= 2;
+            }
             if (command instanceof RuntimeCommand.Simulation
                     || command instanceof RuntimeCommand.SimulationTicks) {
                 return minor() >= 1;
@@ -101,6 +106,8 @@ public record ProtocolVersion(int major, int minor) {
     /** Returns the exact required-version message for one unsupported command. */
     public String requiredVersionMessage(RuntimeCommand command) {
         return switch (command) {
+            case RuntimeCommand.SimulationAssert _ ->
+                    "command requires protocol version 2.2";
             case RuntimeCommand.Simulation _, RuntimeCommand.SimulationTicks _ ->
                     "command requires protocol version 2.1";
             case RuntimeCommand.EntityHistory _ -> "command requires protocol version 2.0";

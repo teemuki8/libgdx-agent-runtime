@@ -35,6 +35,7 @@ import io.github.teemuki8.libgdx.agent.runtime.core.RecordingOperation;
 import io.github.teemuki8.libgdx.agent.runtime.core.DeterminismOperation;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationState;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationTickPage;
+import io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertionResult;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -106,7 +107,9 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         @JsonSubTypes.Type(value = Result.Determinism.class, name = "determinism"),
         @JsonSubTypes.Type(value = Result.EntityHistory.class, name = "entityHistory"),
         @JsonSubTypes.Type(value = Result.Simulation.class, name = "simulation"),
-        @JsonSubTypes.Type(value = Result.SimulationTicks.class, name = "simulationTicks")
+        @JsonSubTypes.Type(value = Result.SimulationTicks.class, name = "simulationTicks"),
+        @JsonSubTypes.Type(value = Result.SimulationAssertion.class,
+                name = "simulationAssertion")
     })
     sealed interface Result permits Result.Sessions, Result.Capabilities, Result.Frames,
             Result.Snapshot, Result.Entity, Result.Changes, Result.Events, Result.Decisions,
@@ -115,7 +118,7 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
             Result.Control, Result.Inputs, Result.Input, Result.Checkpoints, Result.Checkpoint,
             Result.UiBindings, Result.UiFrames, Result.RecordingOperationResult,
             Result.RecordingChunkResult, Result.Determinism, Result.EntityHistory,
-            Result.Simulation, Result.SimulationTicks {
+            Result.Simulation, Result.SimulationTicks, Result.SimulationAssertion {
         /** Published session catalog. */
         record Sessions(List<SessionInfo> sessions) implements Result {
             /** Copies sessions. */
@@ -291,6 +294,13 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         /** Deterministic bounded declarative assertion outcome. */
         record Assertion(AssertionResult result) implements Result {
             public Assertion {
+                Objects.requireNonNull(result, "result");
+            }
+        }
+
+        /** Deterministic bounded simulation-scoped assertion outcome. */
+        record SimulationAssertion(SimulationAssertionResult result) implements Result {
+            public SimulationAssertion {
                 Objects.requireNonNull(result, "result");
             }
         }

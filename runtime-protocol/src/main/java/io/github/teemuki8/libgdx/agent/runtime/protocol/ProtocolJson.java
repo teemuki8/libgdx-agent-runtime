@@ -24,6 +24,7 @@ import io.github.teemuki8.libgdx.agent.runtime.core.InputInjection;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue;
 import java.util.Optional;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeAssertion;
+import io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertion;
 import io.github.teemuki8.libgdx.agent.runtime.core.RecordingActionEntry;
 import io.github.teemuki8.libgdx.agent.runtime.core.RecordingEntry;
 import io.github.teemuki8.libgdx.agent.runtime.core.RecordingFrameEntry;
@@ -187,6 +188,7 @@ public final class ProtocolJson {
         mapper.addMixIn(ApplicationFailureEvidence.class, ApplicationFailureEvidenceMixin.class);
         mapper.addMixIn(RuntimeValue.class, RuntimeValueMixin.class);
         mapper.addMixIn(RuntimeAssertion.class, RuntimeAssertionMixin.class);
+        mapper.addMixIn(SimulationAssertion.class, SimulationAssertionMixin.class);
         mapper.addMixIn(RecordingEntry.class, RecordingEntryMixin.class);
         mapper.addMixIn(CaptureDiagnostic.class, structuredDiagnostics
                 ? CaptureDiagnosticStructuredMixin.class : CaptureDiagnosticMixin.class);
@@ -245,6 +247,32 @@ public final class ProtocolJson {
                 name = "snapshotsEquivalent")
     })
     private interface RuntimeAssertionMixin {}
+
+    @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "assertionType")
+    @JsonSubTypes({
+        @JsonSubTypes.Type(value = SimulationAssertion.EntityExists.class,
+                name = "entityExists"),
+        @JsonSubTypes.Type(value = SimulationAssertion.PropertyEquals.class,
+                name = "propertyEquals"),
+        @JsonSubTypes.Type(value = SimulationAssertion.ScalarApproximatelyEquals.class,
+                name = "scalarApproximatelyEquals"),
+        @JsonSubTypes.Type(value = SimulationAssertion.VectorApproximatelyEquals.class,
+                name = "vectorApproximatelyEquals"),
+        @JsonSubTypes.Type(value = SimulationAssertion.VectorInArea.class,
+                name = "vectorInArea"),
+        @JsonSubTypes.Type(value = SimulationAssertion.VectorMagnitudeAtMost.class,
+                name = "vectorMagnitudeAtMost"),
+        @JsonSubTypes.Type(value = SimulationAssertion.VectorDistanceApproximatelyEquals.class,
+                name = "vectorDistanceApproximatelyEquals"),
+        @JsonSubTypes.Type(value = SimulationAssertion.WrappedAngleApproximatelyEquals.class,
+                name = "wrappedAngleApproximatelyEquals"),
+        @JsonSubTypes.Type(value = SimulationAssertion.EventCount.class,
+                name = "eventCount"),
+        @JsonSubTypes.Type(value = SimulationAssertion.ObjectListContains.class,
+                name = "objectListContains"),
+        @JsonSubTypes.Type(value = SimulationAssertion.AllOf.class, name = "allOf")
+    })
+    private interface SimulationAssertionMixin {}
 
     @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "entryType")
     @JsonSubTypes({

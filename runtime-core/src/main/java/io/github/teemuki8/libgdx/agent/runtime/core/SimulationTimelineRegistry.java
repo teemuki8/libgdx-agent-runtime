@@ -22,6 +22,7 @@ public final class SimulationTimelineRegistry {
     private Optional<SimulationTickId> latestTickId = Optional.empty();
     private OptionalLong lastRuntimeSuppliedDeltaNanos = OptionalLong.empty();
     private OptionalLong lastExecutedDeltaNanos = OptionalLong.empty();
+    private ActiveSimulationTick activeTick;
 
     SimulationTimelineRegistry(AgentRuntime runtime, SimulationTimelineLimits limits) {
         this.runtime = Objects.requireNonNull(runtime, "runtime");
@@ -55,6 +56,18 @@ public final class SimulationTimelineRegistry {
                 attemptedEpochTicks, completedEpochTicks, epochSimulationTimeNanos,
                 latestTickId, lastRuntimeSuppliedDeltaNanos, lastExecutedDeltaNanos,
                 runtime.controls().paused(), limits);
+    }
+
+    /**
+     * Returns the tick whose timeline-owned runtime frame is currently open.
+     *
+     * <p>The context is visible only on the capture thread and is not completed tick evidence.
+     */
+    public Optional<ActiveSimulationTick> activeTick() {
+        if (!runtime.onCaptureThread()) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(activeTick);
     }
 
     /**
@@ -153,6 +166,9 @@ public final class SimulationTimelineRegistry {
         Throwable failure = null;
         try {
             runtime.frame(suppliedDeltaNanos, () -> {
+                activeTick = new ActiveSimulationTick(attempt.id(),
+                        attempt.executionEpochId(), attempt.epochTick(), suppliedDeltaNanos,
+                        source, runtime.openFrameId());
                 try {
                     if (controlledTick.isPresent()) {
                         runtime.inputs().executeTick(
@@ -166,6 +182,8 @@ public final class SimulationTimelineRegistry {
             });
         } catch (Throwable thrown) {
             failure = thrown;
+        } finally {
+            activeTick = null;
         }
         Optional<FrameId> resultingFrame = runtime.frame(expected).isPresent()
                 ? Optional.of(expected) : Optional.empty();

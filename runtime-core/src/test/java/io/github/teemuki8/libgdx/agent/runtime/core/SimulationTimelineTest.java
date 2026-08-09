@@ -44,6 +44,121 @@ final class SimulationTimelineTest {
     }
 
     @Test
+    void activeTickContextExistsOnlyOnCaptureThreadDuringItsRuntimeFrame() {
+        AgentRuntime runtime = runtime("timeline-active-context");
+        runtime.start();
+        assertEquals(Optional.empty(), runtime.simulation().activeTick());
+
+        AtomicReference<Optional<ActiveSimulationTick>> otherThread = new AtomicReference<>();
+        runtime.simulation().tick(STEP, supplied -> {
+            assertEquals(Optional.of(new ActiveSimulationTick(
+                    new SimulationTickId(1), new ExecutionEpochId(0), 1, STEP,
+                    SimulationTickSource.RUNNING, new FrameId(1))),
+                    runtime.simulation().activeTick());
+            Thread reader = new Thread(
+                    () -> otherThread.set(runtime.simulation().activeTick()));
+            reader.start();
+            try {
+                reader.join();
+            } catch (InterruptedException failure) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError(failure);
+            }
+            return supplied;
+        });
+
+        assertEquals(Optional.empty(), otherThread.get());
+        assertEquals(Optional.empty(), runtime.simulation().activeTick());
+    }
+
+    @Test
+    void controlledTickExposesPausedContextAndFailuresAlwaysClearIt() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        AtomicReference<ActiveSimulationTick> controlled = new AtomicReference<>();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("timeline-active-controlled"))
+                .clock(new IncrementingClock())
+                .commandDispatcher(queue::addLast)
+                .build();
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {})
+                .resume(() -> {})
+                .acknowledgedTick(supplied -> {
+                    controlled.set(runtime.simulation().activeTick().orElseThrow());
+                    return supplied;
+                })
+                .build());
+        runtime.start();
+        runtime.controls().control(true, "pause", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        runtime.controls().advance("advance", 1, STEP, Duration.ofSeconds(1));
+        queue.removeFirst().run();
+
+        assertEquals(new ActiveSimulationTick(
+                new SimulationTickId(1), new ExecutionEpochId(0), 1, STEP,
+                SimulationTickSource.PAUSED, new FrameId(1)), controlled.get());
+        assertEquals(Optional.empty(), runtime.simulation().activeTick());
+
+        assertThrows(IllegalStateException.class,
+                () -> runtime.simulation().tick(STEP, supplied -> {
+                    assertTrue(runtime.simulation().activeTick().isPresent());
+                    throw new IllegalStateException("expected");
+                }));
+        assertEquals(Optional.empty(), runtime.simulation().activeTick());
+    }
+
+    @Test
+    void captureFailureClearsActiveTickContext() {
+        long[] clockCalls = {0};
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("timeline-active-capture-failure"))
+                .clock(() -> clockCalls[0]++ == 0 ? 1 : -1)
+                .build();
+        runtime.start();
+
+        assertThrows(IllegalStateException.class,
+                () -> runtime.simulation().tick(4, supplied -> {
+                    assertEquals(new FrameId(1), runtime.simulation().activeTick()
+                            .orElseThrow().runtimeFrameId());
+                    return supplied;
+                }));
+
+        assertEquals(Optional.empty(), runtime.simulation().activeTick());
+    }
+
+    @Test
+    void activeTickContextRemainsVisibleThroughEntityCapture() {
+        AgentRuntime runtime = runtime("timeline-active-capture");
+        runtime.entities().register(EntityId.of("tick.probe"), EntityType.of("probe"),
+                () -> "probe", inspector -> inspector.property("tick", () ->
+                        runtime.simulation().activeTick()
+                                .<RuntimeValue>map(value -> RuntimeValues.integer(
+                                        value.simulationTickId().value()))
+                                .orElseGet(RuntimeValues::nullValue)));
+        runtime.start();
+
+        runtime.simulation().tick(STEP, supplied -> supplied);
+
+        EntitySnapshot probe = runtime.latestFrame().orElseThrow().entities().stream()
+                .filter(entity -> entity.id().equals(EntityId.of("tick.probe")))
+                .findFirst().orElseThrow();
+        assertEquals(RuntimeValues.integer(1), probe.properties().getFirst().value());
+    }
+
+    @Test
+    void activeTickContextRejectsInvalidTransientEvidence() {
+        assertThrows(NullPointerException.class, () -> new ActiveSimulationTick(
+                null, new ExecutionEpochId(0), 1, 0,
+                SimulationTickSource.RUNNING, new FrameId(1)));
+        assertThrows(IllegalArgumentException.class, () -> new ActiveSimulationTick(
+                new SimulationTickId(1), new ExecutionEpochId(0), 0, 0,
+                SimulationTickSource.RUNNING, new FrameId(1)));
+        assertThrows(IllegalArgumentException.class, () -> new ActiveSimulationTick(
+                new SimulationTickId(1), new ExecutionEpochId(0), 1, -1,
+                SimulationTickSource.RUNNING, new FrameId(1)));
+    }
+
+    @Test
     void executedDeltaMismatchIsTypedAndNeverClaimsFixedStepCompletion() {
         AgentRuntime runtime = runtime("timeline-mismatch");
         runtime.simulation().register(SimulationTimelineSpec.fixedStep(STEP));

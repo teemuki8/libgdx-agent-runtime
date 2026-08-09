@@ -1047,7 +1047,7 @@ public final class AgentRuntime implements AutoCloseable {
         return new Registration(removal);
     }
 
-    private void requireMutableRegistration() {
+    void requireMutableRegistration() {
         requireCaptureThread();
         if (status == RuntimeStatus.CLOSED) {
             throw new AgentRuntimeException(RuntimeErrorCode.RUNTIME_CLOSED, "runtime is closed");

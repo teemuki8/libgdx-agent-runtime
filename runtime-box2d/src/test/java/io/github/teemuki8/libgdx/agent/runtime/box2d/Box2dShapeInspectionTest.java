@@ -1,12 +1,14 @@
 package io.github.teemuki8.libgdx.agent.runtime.box2d;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.physics.box2d.Body;
 import com.badlogic.gdx.physics.box2d.BodyDef;
 import com.badlogic.gdx.physics.box2d.Box2D;
 import com.badlogic.gdx.physics.box2d.ChainShape;
+import com.badlogic.gdx.physics.box2d.CircleShape;
 import com.badlogic.gdx.physics.box2d.EdgeShape;
 import com.badlogic.gdx.physics.box2d.Fixture;
 import com.badlogic.gdx.physics.box2d.PolygonShape;
@@ -67,8 +69,11 @@ final class Box2dShapeInspectionTest {
             assertEquals(RuntimeValues.integer(4), field(polygonGeometry, "observedVertices"));
             assertEquals(RuntimeValues.integer(2), field(polygonGeometry, "retainedVertices"));
             assertEquals(RuntimeValues.bool(true), field(polygonGeometry, "truncated"));
-            assertEquals(2, ((RuntimeValue.ListValue) field(
-                    polygonGeometry, "vertices")).values().size());
+            RuntimeValue.ListValue polygonVertices = (RuntimeValue.ListValue) field(
+                    polygonGeometry, "vertices");
+            assertEquals(java.util.List.of(
+                    RuntimeValues.vector2(-1, -2), RuntimeValues.vector2(1, -2)),
+                    polygonVertices.values());
             assertEquals(new RuntimeValue.ListValue(java.util.List.of(
                             RuntimeValues.enumValue("SHAPE_VERTICES_TRUNCATED"))),
                     runtime.entity(EntityId.of("box2d.fixture.polygon")).orElseThrow()
@@ -82,6 +87,53 @@ final class Box2dShapeInspectionTest {
             RuntimeValue.ObjectValue chainGeometry = geometry(runtime, "chain");
             assertEquals(RuntimeValues.bool(true), field(chainGeometry, "loop"));
             assertEquals(RuntimeValues.bool(true), field(chainGeometry, "truncated"));
+            assertEquals(java.util.List.of(
+                    RuntimeValues.vector2(0, 0), RuntimeValues.vector2(2, 0)),
+                    ((RuntimeValue.ListValue) field(chainGeometry, "vertices")).values());
+
+            ((PolygonShape) polygonFixture.getShape()).setAsBox(3, 4);
+            assertEquals(java.util.List.of(
+                    RuntimeValues.vector2(-1, -2), RuntimeValues.vector2(1, -2)),
+                    polygonVertices.values());
+            runtime.frame(1, () -> {});
+            assertEquals(java.util.List.of(
+                    RuntimeValues.vector2(-3, -4), RuntimeValues.vector2(3, -4)),
+                    ((RuntimeValue.ListValue) field(
+                            geometry(runtime, "polygon"), "vertices")).values());
+            runtime.close();
+            inspection.close();
+        } finally {
+            world.dispose();
+        }
+    }
+
+    @Test
+    void fixtureRebindRejectsChainWithoutExplicitLoopTestimony() {
+        World world = new World(new Vector2(), true);
+        try {
+            Body body = world.createBody(new BodyDef());
+            CircleShape circle = new CircleShape();
+            circle.setRadius(1);
+            Fixture circleFixture = body.createFixture(circle, 0);
+            circle.dispose();
+            ChainShape chain = new ChainShape();
+            chain.createChain(new float[] {0, 0, 1, 0, 2, 0});
+            Fixture chainFixture = body.createFixture(chain, 0);
+            chain.dispose();
+            AgentRuntime runtime = AgentRuntime.builder()
+                    .sessionId(SessionId.of("box2d-chain-rebind"))
+                    .build();
+            Box2dInspection inspection = new Box2dInspection(
+                    runtime, Box2dAdapterLimits.developmentDefaults());
+            inspection.registerWorld("main", world, new Box2dWorldSpec(
+                    true, true, true, 6, 2, OptionalDouble.empty(),
+                    new Box2dUnitTransform(1)));
+            inspection.registerBody("body", "main", body);
+            Box2dRegistration<Fixture> registration = inspection.registerFixture(
+                    "shape", "body", circleFixture);
+
+            assertThrows(IllegalArgumentException.class,
+                    () -> registration.rebind(chainFixture));
             runtime.close();
             inspection.close();
         } finally {

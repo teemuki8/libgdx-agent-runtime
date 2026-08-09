@@ -10,7 +10,13 @@ public interface Box2dRegistration<T> extends AutoCloseable {
     /** Returns the deterministic runtime entity ID. */
     EntityId runtimeEntityId();
 
-    /** Rebinds this stable registration to a recreated application-owned native object. */
+    /**
+     * Rebinds this stable registration to a recreated application-owned native object.
+     *
+     * <p>The call requires the application/capture thread and no open runtime frame. Fixture
+     * registrations retain their original explicit metadata; unregister and register again when
+     * that testimony changes.
+     */
     void rebind(T value);
 
     /** Unregisters evidence without destroying or disposing the native object. */

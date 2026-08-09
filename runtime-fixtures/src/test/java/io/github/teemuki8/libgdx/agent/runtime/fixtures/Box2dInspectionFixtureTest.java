@@ -1,7 +1,9 @@
 package io.github.teemuki8.libgdx.agent.runtime.fixtures;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.badlogic.gdx.math.Vector2;
@@ -21,6 +23,7 @@ import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import io.github.teemuki8.libgdx.agent.runtime.core.SessionId;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationTimelineSpec;
+import io.github.teemuki8.libgdx.agent.runtime.mcp.RuntimeToolHandler;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.ProtocolVersion;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.PublishedRuntime;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeCommand;
@@ -28,6 +31,9 @@ import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeProtocolService;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeRegistry;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeRequest;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeResponse;
+import io.modelcontextprotocol.spec.McpSchema;
+import java.time.Duration;
+import java.util.Map;
 import java.util.OptionalDouble;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -75,7 +81,9 @@ final class Box2dInspectionFixtureTest {
                 }
 
                 RuntimeRegistry registry = new RuntimeRegistry();
-                try (PublishedRuntime publication = registry.publish(runtime)) {
+                try (PublishedRuntime publication = registry.publish(runtime);
+                        RuntimeToolHandler handler = new RuntimeToolHandler(
+                                new RuntimeProtocolService(registry))) {
                     assertEquals(runtime.sessionId(), publication.sessionId());
                     RuntimeResponse.Result.Entity entity = assertInstanceOf(
                             RuntimeResponse.Result.Entity.class,
@@ -94,6 +102,16 @@ final class Box2dInspectionFixtureTest {
                     assertTrue(position.y().value().doubleValue() < 4);
                     assertEquals(RuntimeValues.integer(1),
                             entity.latest().property("registeredFixtureCount").orElseThrow());
+
+                    McpSchema.CallToolResult mcp = handler.handle(
+                            McpSchema.CallToolRequest.builder("runtime_entity")
+                                    .arguments(Map.of(
+                                            "sessionId", runtime.sessionId().value(),
+                                            "entityId", "box2d.body.ball"))
+                                    .build()).block(Duration.ofSeconds(5));
+                    assertNotNull(mcp);
+                    assertFalse(mcp.isError());
+                    assertTrue(mcp.structuredContent().toString().contains("box2d.body.ball"));
                 }
             } finally {
                 runtime.close();

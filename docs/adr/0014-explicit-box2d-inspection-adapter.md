@@ -22,7 +22,9 @@ primitive, vector, filter, vertex, and type-specific value during capture on the
 Registration handles support explicit rebind and unregister; neither the adapter nor runtime owns or
 disposes a Box2D object. Registration counts and shape vertices are hard-bounded. Shape geometry
 contains its own observed/retained/limit/truncated fields because adapter truncation happens before
-the value reaches core.
+the value reaches core. The generic `EntityRegistry.requireProviderMutationAllowed()` guard lets an
+adapter validate core's capture-thread/open-frame lifecycle immediately before changing an existing
+provider target without adding adapter dependencies to core.
 
 Physics values remain metres and radians. A required immutable transform defines positive finite
 render units per metre and provides explicit conversion in both directions. No global scale or

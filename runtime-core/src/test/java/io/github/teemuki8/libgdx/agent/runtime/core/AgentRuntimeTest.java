@@ -483,6 +483,23 @@ final class AgentRuntimeTest {
     }
 
     @Test
+    void providerMutationGuardPreservesThreadFrameAndCloseLifecycle() {
+        AgentRuntime runtime = runtime(RuntimeLimits.developmentDefaults());
+        runtime.entities().requireProviderMutationAllowed();
+        runtime.start();
+        runtime.beginFrame(1);
+        AgentRuntimeException openFrame = assertThrows(AgentRuntimeException.class,
+                () -> runtime.entities().requireProviderMutationAllowed());
+        assertEquals(RuntimeErrorCode.INVALID_LIFECYCLE, openFrame.code());
+        runtime.endFrame();
+        runtime.entities().requireProviderMutationAllowed();
+        runtime.close();
+        AgentRuntimeException closed = assertThrows(AgentRuntimeException.class,
+                () -> runtime.entities().requireProviderMutationAllowed());
+        assertEquals(RuntimeErrorCode.RUNTIME_CLOSED, closed.code());
+    }
+
+    @Test
     void entityHistoryPagePagesRemovedEntityWithIndependentVersionCursor() {
         AgentRuntime runtime = runtime(RuntimeLimits.developmentDefaults());
         boolean[] include = {true};

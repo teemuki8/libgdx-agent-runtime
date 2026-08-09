@@ -159,3 +159,6 @@ Disabled runtimes retain no providers or frames and perform no serialization.
     state, reaction-force inverse step, and the physics-metre/render-unit transform. The adapter
     never reflects, traverses a world for discovery, owns stepping/rendering, disposes native
     objects, infers pixel semantics, or hides runtime capture truncation.
+    `EntityRegistry.requireProviderMutationAllowed()` is the generic no-mutation preflight for an
+    adapter that rebinds an existing provider target; it preserves the same capture-thread,
+    open-frame, and closed-runtime lifecycle as provider registration.

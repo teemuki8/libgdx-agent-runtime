@@ -46,5 +46,11 @@ final class Box2dConfigurationTest {
         assertThrows(IllegalArgumentException.class, () -> new Box2dWorldSpec(
                 true, true, true, 6, 2, OptionalDouble.of(Double.POSITIVE_INFINITY),
                 new Box2dUnitTransform(100)));
+        assertThrows(IllegalArgumentException.class, () -> new Box2dWorldSpec(
+                true, true, true, 6, 2, OptionalDouble.of(Double.MAX_VALUE),
+                new Box2dUnitTransform(100)));
+        assertThrows(IllegalArgumentException.class, () -> new Box2dWorldSpec(
+                true, true, true, 6, 2, OptionalDouble.of(Double.MIN_VALUE),
+                new Box2dUnitTransform(100)));
     }
 }

@@ -135,13 +135,14 @@ public final class Box2dInspection implements AutoCloseable {
         if (closed) {
             return;
         }
-        closed = true;
         if (runtime.status() != RuntimeStatus.CLOSED) {
+            runtime.entities().requireProviderMutationAllowed();
             joints.values().forEach(Entry::closeProvider);
             fixtures.values().forEach(Entry::closeProvider);
             bodies.values().forEach(Entry::closeProvider);
             worlds.values().forEach(Entry::closeProvider);
         }
+        closed = true;
         clearEntries(joints);
         clearEntries(fixtures);
         clearEntries(bodies);
@@ -258,6 +259,7 @@ public final class Box2dInspection implements AutoCloseable {
             throw new IllegalStateException("Box2D registration is closed");
         }
         Objects.requireNonNull(value, "value");
+        runtime.entities().requireProviderMutationAllowed();
         if (entry instanceof WorldEntry world) {
             if (bodies.values().stream().anyMatch(body -> body.parentId.equals(world.id))
                     || joints.values().stream().anyMatch(joint -> joint.parentId.equals(world.id))) {
@@ -273,6 +275,11 @@ public final class Box2dInspection implements AutoCloseable {
             requireUniqueNative(value, bodies, entry);
         } else if (entry instanceof FixtureEntry fixture) {
             Fixture nativeFixture = (Fixture) value;
+            if (nativeFixture.getType() == Shape.Type.Chain
+                    && fixture.spec.chainLoop().isEmpty()) {
+                throw new IllegalArgumentException(
+                        "chain fixture requires explicit loop-state testimony");
+            }
             if (nativeFixture.getBody() != live(requireEntry(bodies, fixture.parentId, "body"))) {
                 throw new IllegalArgumentException("fixture does not belong to the registered body");
             }
@@ -302,10 +309,10 @@ public final class Box2dInspection implements AutoCloseable {
         if (entry instanceof BodyEntry body) {
             requireNoBodyDescendants(body);
         }
-        entry.closed = true;
         if (runtime.status() != RuntimeStatus.CLOSED) {
             entry.closeProvider();
         }
+        entry.closed = true;
         entry.reference.clear();
         map(entry).remove(entry.id, entry);
     }

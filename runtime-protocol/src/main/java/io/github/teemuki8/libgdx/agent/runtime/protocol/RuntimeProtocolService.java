@@ -126,9 +126,13 @@ public final class RuntimeProtocolService {
         if (determinism) {
             tools = Stream.concat(tools, DETERMINISM_TOOLS.stream());
         }
-        return Stream.concat(Stream.concat(Stream.concat(
+        Stream<String> versioned = Stream.concat(Stream.concat(
                 Stream.concat(tools, V2_TOOLS.stream()), V2_1_TOOLS.stream()),
-                V2_2_TOOLS.stream()), V2_3_TOOLS.stream()).toList();
+                V2_2_TOOLS.stream());
+        boolean simulationDeterminism = registry.sessions().stream()
+                .anyMatch(runtime -> runtime.determinism().simulationAvailable());
+        return (simulationDeterminism
+                ? Stream.concat(versioned, V2_3_TOOLS.stream()) : versioned).toList();
     }
 
     /** Returns registered action schemas in deterministic session and action order. */

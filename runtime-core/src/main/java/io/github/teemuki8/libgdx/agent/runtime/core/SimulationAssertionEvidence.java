@@ -4,17 +4,20 @@ import java.util.Objects;
 import java.util.Optional;
 
 /** One bounded supporting observable correlated to an exact simulation tick and runtime frame. */
-public record SimulationAssertionEvidence(SimulationTickId simulationTickId,
-        ExecutionEpochId executionEpochId, long epochTick, FrameId frameId, String kind,
+public record SimulationAssertionEvidence(Optional<SimulationTickId> simulationTickId,
+        ExecutionEpochId executionEpochId, long epochTick, Optional<FrameId> frameId, String kind,
         Optional<EntityId> entityId, Optional<String> property, Optional<RuntimeValue> observed) {
     /** Validates immutable evidence fields. */
     public SimulationAssertionEvidence {
-        Objects.requireNonNull(simulationTickId, "simulationTickId");
+        simulationTickId = Objects.requireNonNull(simulationTickId, "simulationTickId");
         Objects.requireNonNull(executionEpochId, "executionEpochId");
         if (epochTick <= 0) {
             throw new IllegalArgumentException("simulation assertion epoch tick must be positive");
         }
-        Objects.requireNonNull(frameId, "frameId");
+        frameId = Objects.requireNonNull(frameId, "frameId");
+        if (frameId.isPresent() && simulationTickId.isEmpty()) {
+            throw new IllegalArgumentException("runtime frame evidence requires a simulation tick");
+        }
         IdentifierSupport.validate(kind, "evidence kind");
         entityId = Objects.requireNonNull(entityId, "entityId");
         property = Objects.requireNonNull(property, "property");

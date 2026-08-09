@@ -45,6 +45,12 @@ public final class AssertionEvaluator {
         };
     }
 
+    /** Evaluates one closed assertion over exact completed simulation-tick evidence. */
+    public SimulationAssertionResult evaluateSimulation(
+            SimulationAssertionSpec spec, SimulationAssertionScope scope) {
+        return new SimulationAssertionEvaluation(runtime).evaluate(spec, scope);
+    }
+
     private void validateValues(RuntimeAssertion assertion) {
         RuntimeLimits limits = runtime.configuration().limits();
         switch (assertion) {

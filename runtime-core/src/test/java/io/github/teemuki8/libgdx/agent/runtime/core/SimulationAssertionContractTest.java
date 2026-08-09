@@ -160,7 +160,8 @@ class SimulationAssertionContractTest {
         assertThrows(IllegalArgumentException.class, () -> new SimulationAssertionScope(
                 new ExecutionEpochId(0), 1, 1, 101));
         assertThrows(IllegalArgumentException.class, () -> new SimulationAssertionEvidence(
-                new SimulationTickId(1), new ExecutionEpochId(0), 0, new FrameId(1),
+                Optional.of(new SimulationTickId(1)), new ExecutionEpochId(0), 0,
+                Optional.of(new FrameId(1)),
                 "property", Optional.of(BALL), Optional.of("position"), Optional.empty()));
         assertThrows(IllegalArgumentException.class, () -> new SimulationAssertionResult(
                 AssertionStatus.FAIL, "entityExists", scope(), Optional.empty(), Optional.empty(),
@@ -173,8 +174,8 @@ class SimulationAssertionContractTest {
     }
 
     private static SimulationAssertionEvidence evidence(long epochTick, RuntimeValue observed) {
-        return new SimulationAssertionEvidence(new SimulationTickId(epochTick),
-                new ExecutionEpochId(0), epochTick, new FrameId(epochTick), "property",
+        return new SimulationAssertionEvidence(Optional.of(new SimulationTickId(epochTick)),
+                new ExecutionEpochId(0), epochTick, Optional.of(new FrameId(epochTick)), "property",
                 Optional.of(BALL), Optional.of("awake"), Optional.of(observed));
     }
 

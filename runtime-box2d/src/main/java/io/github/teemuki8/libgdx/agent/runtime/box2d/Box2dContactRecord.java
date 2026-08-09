@@ -1,0 +1,143 @@
+package io.github.teemuki8.libgdx.agent.runtime.box2d;
+
+import io.github.teemuki8.libgdx.agent.runtime.core.Truncation;
+import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
+
+/** One immediately copied and canonically oriented Box2D contact callback. */
+public record Box2dContactRecord(Phase phase, Key key, boolean touching, boolean enabled,
+        Availability availability, List<Box2dVector> points, Optional<Box2dVector> normal,
+        List<Impulse> impulses, Optional<OldManifold> oldManifold, long occurrence,
+        List<Truncation> truncations) implements Comparable<Box2dContactRecord> {
+    /** Validates closed phase availability and defensively copies bounded values. */
+    public Box2dContactRecord {
+        Objects.requireNonNull(phase, "phase");
+        Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(availability, "availability");
+        points = List.copyOf(points);
+        normal = Objects.requireNonNull(normal, "normal");
+        impulses = List.copyOf(impulses);
+        oldManifold = Objects.requireNonNull(oldManifold, "oldManifold");
+        truncations = List.copyOf(truncations);
+        if (occurrence <= 0) {
+            throw new IllegalArgumentException("contact callback occurrence must be positive");
+        }
+        boolean endpointsOnly = phase == Phase.BEGIN || phase == Phase.END;
+        if (endpointsOnly != (availability == Availability.ENDPOINTS_ONLY)
+                || endpointsOnly && (!points.isEmpty() || normal.isPresent()
+                        || !impulses.isEmpty() || oldManifold.isPresent())
+                || phase == Phase.PRE_SOLVE
+                        && (availability != Availability.CURRENT_AND_OLD_MANIFOLD
+                                || oldManifold.isEmpty() || !impulses.isEmpty())
+                || phase == Phase.POST_SOLVE
+                        && (availability != Availability.CURRENT_MANIFOLD_AND_IMPULSES
+                                || oldManifold.isPresent())) {
+            throw new IllegalArgumentException("contact phase and available values disagree");
+        }
+    }
+
+    @Override public int compareTo(Box2dContactRecord other) {
+        int phaseOrder = phase.compareTo(other.phase);
+        if (phaseOrder != 0) {
+            return phaseOrder;
+        }
+        int keyOrder = key.compareTo(other.key);
+        return keyOrder != 0 ? keyOrder : Long.compare(occurrence, other.occurrence);
+    }
+
+    /** Native callback phase. */
+    public enum Phase {
+        /** A contact began. */ BEGIN,
+        /** A contact ended. */ END,
+        /** Pre-solve callback. */ PRE_SOLVE,
+        /** Post-solve callback. */ POST_SOLVE
+    }
+
+    /** Closed testimony about which phase-specific values were copied. */
+    public enum Availability {
+        /** Only endpoint and contact flags are available. */ ENDPOINTS_ONLY,
+        /** Current and bounded old-manifold values are available. */ CURRENT_AND_OLD_MANIFOLD,
+        /** Current manifold and bounded impulse values are available. */
+        CURRENT_MANIFOLD_AND_IMPULSES
+    }
+
+    /** Closed Box2D manifold type. */
+    public enum ManifoldType {
+        /** Circle-to-circle manifold. */ CIRCLES,
+        /** Face on canonical endpoint A. */ FACE_A,
+        /** Face on canonical endpoint B. */ FACE_B
+    }
+
+    /** Stable registered endpoint plus copied sensor state. */
+    public record Endpoint(String bodyId, String fixtureId, int childIndex, boolean sensor)
+            implements Comparable<Endpoint> {
+        /** Validates application IDs and a non-negative child index. */
+        public Endpoint {
+            validateId(bodyId, "bodyId");
+            validateId(fixtureId, "fixtureId");
+            if (childIndex < 0) {
+                throw new IllegalArgumentException("childIndex must be non-negative");
+            }
+        }
+
+        @Override public int compareTo(Endpoint other) {
+            int fixtureOrder = fixtureId.compareTo(other.fixtureId);
+            return fixtureOrder != 0 ? fixtureOrder : Integer.compare(childIndex, other.childIndex);
+        }
+    }
+
+    /** Canonically ordered stable contact identity. */
+    public record Key(Endpoint endpointA, Endpoint endpointB) implements Comparable<Key> {
+        /** Requires strict canonical endpoint order. */
+        public Key {
+            Objects.requireNonNull(endpointA, "endpointA");
+            Objects.requireNonNull(endpointB, "endpointB");
+            if (endpointA.compareTo(endpointB) >= 0) {
+                throw new IllegalArgumentException("contact endpoints are not canonically ordered");
+            }
+        }
+
+        @Override public int compareTo(Key other) {
+            int first = endpointA.compareTo(other.endpointA);
+            return first != 0 ? first : endpointB.compareTo(other.endpointB);
+        }
+    }
+
+    /** Copied normal magnitude and signed tangent impulse. */
+    public record Impulse(double normal, double tangent) {
+        /** Rejects non-finite or negative normal impulse evidence. */
+        public Impulse {
+            if (!Double.isFinite(normal) || normal < 0 || !Double.isFinite(tangent)) {
+                throw new IllegalArgumentException("contact impulse must be finite");
+            }
+        }
+    }
+
+    /** Copied old-manifold point identifier and warm-start impulses. */
+    public record OldManifoldPoint(long id, double normalImpulse, double tangentImpulse) {
+        /** Rejects invalid unsigned IDs and non-finite impulse values. */
+        public OldManifoldPoint {
+            if (id < 0 || id > 0xffff_ffffL || !Double.isFinite(normalImpulse)
+                    || normalImpulse < 0 || !Double.isFinite(tangentImpulse)) {
+                throw new IllegalArgumentException("old manifold point is invalid");
+            }
+        }
+    }
+
+    /** Bounded copied old-manifold values. */
+    public record OldManifold(ManifoldType type, List<OldManifoldPoint> points) {
+        /** Defensively copies old points. */
+        public OldManifold {
+            Objects.requireNonNull(type, "type");
+            points = List.copyOf(points);
+        }
+    }
+
+    private static void validateId(String value, String name) {
+        Objects.requireNonNull(value, name);
+        if (value.isBlank() || value.length() > 220) {
+            throw new IllegalArgumentException(name + " is outside range");
+        }
+    }
+}

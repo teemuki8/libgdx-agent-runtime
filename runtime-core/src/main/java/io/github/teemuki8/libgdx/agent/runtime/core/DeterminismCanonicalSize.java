@@ -97,11 +97,19 @@ final class DeterminismCanonicalSize {
 
     /** Comparable event: type, optional subject/source, metadata, ordered attributes. */
     static long event(RuntimeEvent event) {
-        long size = string(event.type().value());
-        size = add(size, optionalEntityId(event.subject()));
-        size = add(size, optionalEntityId(event.source()));
-        size = add(size, metadata(event.metadata()));
-        return add(size, properties(event.attributes()));
+        return event(event.type(), event.subject(), event.source(),
+                event.metadata(), event.attributes());
+    }
+
+    /** Comparable event fields after deterministic runtime-identifier normalization. */
+    static long event(EventType type, Optional<EntityId> subject,
+            Optional<EntityId> source, FactMetadata metadata,
+            List<RuntimeValue.Field> attributes) {
+        long size = string(type.value());
+        size = add(size, optionalEntityId(subject));
+        size = add(size, optionalEntityId(source));
+        size = add(size, metadata(metadata));
+        return add(size, properties(attributes));
     }
 
     /** Comparable decision: type, actor, candidates, chosen candidate, reason, metadata, completion. */
@@ -155,6 +163,30 @@ final class DeterminismCanonicalSize {
             case RuntimeValue.ListValue list -> add(size, values(list.values()));
             case RuntimeValue.ObjectValue object -> add(size, fields(object.fields()));
         };
+    }
+
+    /** One scheduled simulation input: tick, input id, and bounded parameters. */
+    static long simulationInput(SimulationDeterminismInput input) {
+        long size = Long.BYTES;
+        size = add(size, string(input.inputId()));
+        return add(size, value(input.parameters()));
+    }
+
+    /** One exact simulation configuration requirement. */
+    static long simulationConfiguration(SimulationConfigurationRequirement requirement) {
+        long size = string(requirement.entityId().value());
+        size = add(size, string(requirement.property()));
+        return add(size, value(requirement.expected()));
+    }
+
+    /** One simulation evidence-completeness requirement. */
+    static long simulationEvidence(SimulationEvidenceRequirement requirement) {
+        return add(string(requirement.entityId().value()), string(requirement.property()));
+    }
+
+    /** One selected simulation event type. */
+    static long simulationEventType(EventType eventType) {
+        return string(eventType.value());
     }
 
     private static long values(List<RuntimeValue> values) {

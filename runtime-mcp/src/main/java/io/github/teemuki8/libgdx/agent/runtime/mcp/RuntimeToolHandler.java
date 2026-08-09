@@ -735,7 +735,7 @@ public final class RuntimeToolHandler implements AutoCloseable {
             }
             return new SimulationConfigurationRequirement(
                     EntityId.of(string(fields, "entityId")), string(fields, "property"),
-                    runtimeValue(fields.get("expected"), 0));
+                    simulationValue(fields.get("expected")));
         }).toList();
     }
 

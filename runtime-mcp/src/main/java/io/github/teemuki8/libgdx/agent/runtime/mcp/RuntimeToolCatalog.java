@@ -537,7 +537,8 @@ public final class RuntimeToolCatalog {
                 "includeUiCorrelations", bool()),
                 List.of("comparisonScope", "includeUiCorrelations"));
         Map<String, Object> configurationRequirement = object(Map.of(
-                "entityId", string(), "property", string(), "expected", naturalValue()),
+                "entityId", string(), "property", string(), "expected",
+                simulationValueSchema("simulationDeterminismValue")),
                 List.of("entityId", "property", "expected"));
         Map<String, Object> evidenceRequirement = object(Map.of(
                 "entityId", string(), "property", string()),
@@ -578,11 +579,14 @@ public final class RuntimeToolCatalog {
         properties.put("eventTypes", Map.of("type", "array", "items", string(),
                 "maxItems", SimulationDeterminismSpec.MAX_EVENT_TYPES));
         properties.put("timeoutNanos", integer(1, Long.MAX_VALUE));
-        return sessionInput(properties, List.of(
+        LinkedHashMap<String, Object> schema = new LinkedHashMap<>(sessionInput(properties, List.of(
                 "determinismRequestId", "scenarioId", "randomSeed", "configuration",
                 "repeatCount", "ticksPerRepeat", "deltaNanos", "profile", "inputs",
                 "configurationRequirements", "evidenceRequirements", "eventTypes",
-                "timeoutNanos"));
+                "timeoutNanos")));
+        schema.put("$defs", Map.of("simulationDeterminismValue",
+                simulationValueSchema("simulationDeterminismValue")));
+        return Map.copyOf(schema);
     }
 
     private static Map<String, Object> assertionInput() {
@@ -815,7 +819,11 @@ public final class RuntimeToolCatalog {
     }
 
     private static Map<String, Object> simulationValueSchema() {
-        Map<String, Object> child = Map.of("$ref", "#/$defs/simulationAssertionValue");
+        return simulationValueSchema("simulationAssertionValue");
+    }
+
+    private static Map<String, Object> simulationValueSchema(String definitionName) {
+        Map<String, Object> child = Map.of("$ref", "#/$defs/" + definitionName);
         ArrayList<Map<String, Object>> alternatives = new ArrayList<>(List.of(
                 Map.of("type", "null"), bool(), Map.of("type", "integer"), number(),
                 Map.of("type", "string", "maxLength", 4_096),

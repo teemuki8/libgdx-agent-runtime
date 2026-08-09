@@ -1,7 +1,7 @@
 # Tick-Aware Physics Determinism Implementation Plan
 
 **Goal:** Extend the existing determinism registry with exact simulation-tick correlation,
-repeatable registered input scripts, explicit Box2D configuration testimony, protocol 2.3, MCP,
+repeatable registered input scripts, explicit Box2D configuration testimony, protocol 2.4, MCP,
 and agent-facing recipes while preserving every legacy shape.
 
 ## Global constraints
@@ -48,12 +48,12 @@ and agent-facing recipes while preserving every legacy shape.
 - Implement `Box2dDeterminism` without retaining native objects.
 - Run adapter tests and warning-free Javadocs.
 
-## Task 5: Add closed protocol 2.3 support
+## Task 5: Add closed protocol 2.4 support
 
 - Add RED round-trip and service tests for the new command/result and every nested record.
-- Prove 2.2 rejection, unknown-field/tag rejection, natural/canonical value bounds, and unchanged
+- Prove 2.3 rejection, unknown-field/tag rejection, natural/canonical value bounds, and unchanged
   legacy determinism JSON.
-- Add the 2.3 capability and dispatch through `checkSimulation(...)`.
+- Add the 2.4 capability and dispatch through `checkSimulation(...)`.
 - Run the protocol gate.
 
 ## Task 6: Add the closed MCP tool
@@ -73,5 +73,5 @@ and agent-facing recipes while preserving every legacy shape.
 - Run focused module gates, then
   `xvfb-run -a ./gradlew clean check javadoc --warning-mode=fail`, `jdeps` for core, and
   `git diff --check`.
-- Commit intentionally, push the isolated branch, and open a stacked draft PR against
-  `issue-69-physics-assertions`; do not merge or publish.
+- Commit intentionally, push the isolated branch, and open a draft PR against `main`; do not
+  publish artifacts.

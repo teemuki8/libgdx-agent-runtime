@@ -94,6 +94,11 @@ the controlled callback. Controlled ticks bypass and preserve the render accumul
 The legacy unacknowledged registration form remains available only when configuration explicitly
 allows it and produces `UNACKNOWLEDGED` timeline evidence.
 
+`runtime.controls().pauseStateKnown()` distinguishes the last successfully applied pause value
+from an application callback whose mutation may be partial. A failed pause/resume callback makes
+this value false. Determinism then returns sanitized `INCONCLUSIVE` restore/pause evidence and will
+not execute another comparison until an explicit application-dispatched pause or resume succeeds.
+
 From a scenario reset or checkpoint restore callback, explicitly clear or restore accumulator
 state before the new epoch baseline:
 
@@ -1065,8 +1070,20 @@ shapes remain unchanged.
 
 ### MCP request
 
-`runtime_simulation_determinism_check` uses natural JSON values and registered input-specific
-closed parameter schemas:
+`runtime_simulation_determinism_check` uses bounded natural JSON values and registered
+input-specific closed parameter schemas. Configuration requirements use the same reserved exact
+enum/vector tags as simulation assertions:
+
+```json
+{"$runtimeValue": "enum", "value": "CONTINUOUS"}
+{"$runtimeValue": "vector2", "x": 0, "y": -9.8}
+```
+
+The handler preflights the complete value before constructing immutable evidence: maximum depth
+16, 1,024 total nodes, 256 items or fields per collection, and 4,096 code units per string.
+Malformed tags and oversized values are rejected before dispatch.
+
+Example request:
 
 ```json
 {
@@ -1122,6 +1139,12 @@ wrong epoch, failed/unknown/unacknowledged tick, executed-delta mismatch, missin
 correlation, capture diagnostic, nested or frame truncation, partial eviction, timeout, callback
 failure, or evidence-limit exhaustion. A preflight timing/solver/configuration conflict is rejected
 before dispatch. The application must reset after any failure that leaves mutation unknown.
+
+For selected events, the fixed `EXCLUDE_RUNTIME_IDENTIFIERS` normalization removes only
+runtime-owned absolute correlation attributes named `executionEpochId`, `simulationTickId`, or
+`runtimeFrameId` (along with the existing frame/event/decision identifiers). `epochTick`, contact
+endpoints, impulses, and application semantic attributes remain exact comparison evidence. This
+normalization changes only the comparable copy; inspected runtime events retain the full schema.
 
 `EQUAL` means only that the explicitly selected immutable evidence matched under the same
 application-reported setup in this operation. It is not whole-program determinism, semantic

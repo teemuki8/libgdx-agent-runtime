@@ -188,6 +188,49 @@ final class SimulationDeterminismRegistryTest {
     }
 
     @Test
+    void selectedEventsNormalizeRuntimeOwnedCorrelationAttributes() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        int[] reset = {0};
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("simulation-determinism-event-normalization"))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .build();
+        runtime.simulation().register(SimulationTimelineSpec.fixedStep(STEP));
+        runtime.entities().register(EntityId.of("body"), EntityType.of("physics"),
+                () -> "body", inspector -> inspector.property("position", () -> 0L));
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {}).resume(() -> {}).acknowledgedTick(delta -> {
+                    runtime.emit(EventSpec.type("box2d.contact.begin")
+                            .attribute("executionEpochId", RuntimeValues.integer(reset[0]))
+                            .attribute("simulationTickId",
+                                    RuntimeValues.integer(reset[0] * 100L))
+                            .attribute("epochTick", RuntimeValues.integer(1))
+                            .attribute("semantic", RuntimeValues.string("same")));
+                    return delta;
+                }).build());
+        runtime.scenarios().register("contacts", context -> reset[0]++);
+        runtime.start();
+        DeterminismSpec execution = new DeterminismSpec("contacts", 1,
+                RuntimeValues.object(), 2, 1, STEP,
+                new DeterminismProfile(new SnapshotComparisonScope(
+                        List.of(EntityId.of("body")), List.of("position"),
+                        List.of(), true, false), false));
+        SimulationDeterminismSpec spec = new SimulationDeterminismSpec(
+                execution, List.of(), List.of(), List.of(),
+                List.of(EventType.of("box2d.contact.begin")));
+
+        runtime.determinism().checkSimulation(
+                spec, "normalized-contact-events", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        SimulationDeterminismResult result = runtime.determinism().checkSimulation(
+                spec, "normalized-contact-events", Duration.ofSeconds(1))
+                .result().orElseThrow();
+
+        assertEquals(DeterminismStatus.EQUAL, result.status(), result::toString);
+    }
+
+    @Test
     void resetAndTickFailuresAreSanitizedAndNeverEqual() {
         ArrayDeque<Runnable> resetQueue = new ArrayDeque<>();
         AgentRuntime resetRuntime = customRuntime(resetQueue, new long[] {0}, new long[] {8},
@@ -225,6 +268,60 @@ final class SimulationDeterminismRegistryTest {
     }
 
     @Test
+    void failedResumeMakesResultInconclusiveAndRequiresExplicitReconciliation() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        boolean[] failResume = {true};
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("simulation-determinism-resume-failure"))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .build();
+        runtime.simulation().register(SimulationTimelineSpec.fixedStep(STEP));
+        runtime.entities().register(EntityId.of("box2d.body.player"),
+                EntityType.of("box2d.body"), () -> "player",
+                inspector -> inspector.property("position", () -> 0L));
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {})
+                .resume(() -> {
+                    if (failResume[0]) {
+                        throw new IllegalStateException("secret restore token");
+                    }
+                })
+                .acknowledgedTick(delta -> delta).build());
+        runtime.scenarios().register("player-move", context -> {});
+        runtime.start();
+        SimulationDeterminismSpec request = new SimulationDeterminismSpec(
+                execution(STEP), List.of(), List.of(), List.of(), List.of());
+
+        runtime.determinism().checkSimulation(
+                request, "resume-failure", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        SimulationDeterminismResult result = runtime.determinism().checkSimulation(
+                request, "resume-failure", Duration.ofSeconds(1)).result().orElseThrow();
+
+        assertEquals(DeterminismStatus.INCONCLUSIVE, result.status());
+        assertEquals("simulationDeterminism.restore",
+                result.applicationFailure().orElseThrow().category());
+        assertFalse(result.message().contains("secret restore token"));
+        assertFalse(runtime.controls().pauseStateKnown());
+        runtime.determinism().checkSimulation(
+                request, "blocked-after-restore", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        SimulationDeterminismResult blocked = runtime.determinism().checkSimulation(
+                request, "blocked-after-restore", Duration.ofSeconds(1))
+                .result().orElseThrow();
+        assertEquals(DeterminismStatus.INCONCLUSIVE, blocked.status());
+        assertEquals("simulationDeterminism.pause",
+                blocked.applicationFailure().orElseThrow().category());
+
+        failResume[0] = false;
+        runtime.controls().control(false, "reconcile-resume", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        assertTrue(runtime.controls().pauseStateKnown());
+        assertFalse(runtime.controls().paused());
+    }
+
+    @Test
     void unknownOrOutstandingInputIsRejectedBeforeDeterminismDispatch() {
         ArrayDeque<Runnable> queue = new ArrayDeque<>();
         AgentRuntime runtime = runtime(queue, new long[] {0}, new ArrayList<>(), false);
@@ -243,6 +340,32 @@ final class SimulationDeterminismRegistryTest {
                         spec(List.of()), "blocked-by-input", Duration.ofSeconds(1)));
         assertEquals(RuntimeErrorCode.INVALID_LIFECYCLE, outstanding.code());
         assertEquals(1, queue.size());
+    }
+
+    @Test
+    void rejectsOversizedSimulationRequestBeforeApplicationDispatch() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("simulation-determinism-request-bound"))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .determinismLimits(new DeterminismLimits(
+                        1, 2, 3, 10, 20, 128, Duration.ofSeconds(1).toNanos()))
+                .build();
+        registerRuntime(runtime, new long[] {0}, new long[] {8}, new boolean[] {true},
+                delta -> delta, context -> {});
+        runtime.start();
+        SimulationDeterminismSpec oversized = new SimulationDeterminismSpec(
+                execution(STEP), List.of(), List.of(new SimulationConfigurationRequirement(
+                        EntityId.of("box2d.world.main"), "large",
+                        RuntimeValues.string("x".repeat(4_096)))), List.of(), List.of());
+
+        AgentRuntimeException failure = assertThrows(AgentRuntimeException.class,
+                () -> runtime.determinism().checkSimulation(
+                        oversized, "oversized-request", Duration.ofSeconds(1)));
+
+        assertEquals(RuntimeErrorCode.LIMIT_EXCEEDED, failure.code());
+        assertTrue(queue.isEmpty());
     }
 
     @Test

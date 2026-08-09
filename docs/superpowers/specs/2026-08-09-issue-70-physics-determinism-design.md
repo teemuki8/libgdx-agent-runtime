@@ -125,7 +125,7 @@ The builder:
 - selects stable `box2d.body.*`, `box2d.fixture.*`, and `box2d.joint.*` entities and properties;
 - optionally selects `box2d.contacts.<worldId>.activeContacts` and requires its `complete` property;
 - optionally selects the four `box2d.contact.*` event types and requires contact completeness;
-- adds the world entity to the selected scope so reset/rebind absence cannot be hidden;
+- keeps world settings as exact baseline/reset requirements without broadening the selected scope;
 - compiles the result to the generic JDK-only `SimulationDeterminismSpec`.
 
 Configuration requirements use the same canonical values published by the adapter, including
@@ -151,7 +151,8 @@ Protocol 2.4 adds a distinct `simulationDeterminismCheck` command and
 evidence. Protocol 1.13 through 2.2 determinism shapes remain unchanged. Every JSON object rejects
 unknown fields and versions before execution.
 
-MCP adds `runtime_simulation_determinism_check` with the same natural-value request contract.
+MCP adds `runtime_simulation_determinism_check` with bounded natural JSON and reserved closed
+enum/vector tags for exact configuration testimony.
 Capability discovery reports `simulation-determinism`, protocol 2.4, hard input/configuration/
 requirement/event limits, and dependencies on scenario reset, controlled acknowledged ticks, the
 simulation timeline, and completed immutable frames.
@@ -162,6 +163,9 @@ simulation timeline, and completed immutable frames.
 same application, JVM, libGDX/Box2D native build, platform, scenario, acknowledged configuration,
 fixed step, solver settings, and controlled input script. It is not proof of whole-program,
 cross-platform, rendering, unregistered-state, future replay, or causal determinism.
+Runtime-owned correlation attributes (`executionEpochId`, `simulationTickId`, and
+`runtimeFrameId`) are excluded from selected event comparison under the existing
+`EXCLUDE_RUNTIME_IDENTIFIERS` rule; `epochTick` and semantic event attributes remain comparable.
 
 ## Verification and documentation
 

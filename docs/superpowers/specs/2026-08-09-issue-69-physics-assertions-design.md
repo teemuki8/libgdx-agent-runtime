@@ -155,7 +155,8 @@ simulationAssert:
 
 The tagged assertion union mirrors the Java records. Every object uses
 `additionalProperties: false`; unknown tags and fields fail before evaluation. Protocol runtime
-values use the existing tagged `valueType` mapping; MCP inputs use bounded natural JSON values.
+values use the existing tagged `valueType` mapping; MCP inputs use bounded natural JSON plus
+reserved closed enum/vector tags when exact `RuntimeValue` types must be preserved.
 The response is a distinct `simulationAssertion` result carrying `SimulationAssertionResult`.
 
 MCP exposes `runtime_simulation_assert` with the same schema. Capability discovery reports

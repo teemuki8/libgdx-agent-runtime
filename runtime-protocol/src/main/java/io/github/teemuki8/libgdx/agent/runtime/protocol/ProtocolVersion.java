@@ -38,8 +38,10 @@ public record ProtocolVersion(int major, int minor) {
     public static final ProtocolVersion V2_2 = new ProtocolVersion(2, 2);
     /** Simulation-scoped declarative assertion protocol version. */
     public static final ProtocolVersion V2_3 = new ProtocolVersion(2, 3);
+    /** Tick-aware simulation determinism protocol version. */
+    public static final ProtocolVersion V2_4 = new ProtocolVersion(2, 4);
     /** Latest implemented protocol version. */
-    public static final ProtocolVersion CURRENT = V2_3;
+    public static final ProtocolVersion CURRENT = V2_4;
 
     /** Validates version components. */
     public ProtocolVersion {
@@ -70,6 +72,9 @@ public record ProtocolVersion(int major, int minor) {
      */
     public boolean capability(RuntimeCommand command) {
         if (isV2()) {
+            if (command instanceof RuntimeCommand.SimulationDeterminismCheck) {
+                return minor() >= 4;
+            }
             if (command instanceof RuntimeCommand.SimulationAssert) {
                 return minor() >= 3;
             }
@@ -88,8 +93,10 @@ public record ProtocolVersion(int major, int minor) {
             return false;
         }
         return switch (command) {
+            case RuntimeCommand.SimulationDeterminismCheck _ -> false;
+            case RuntimeCommand.SimulationAssert _ -> false;
             case RuntimeCommand.FixedStep _, RuntimeCommand.FixedStepUpdates _,
-                    RuntimeCommand.SimulationAdvance _, RuntimeCommand.SimulationAssert _ -> false;
+                    RuntimeCommand.SimulationAdvance _ -> false;
             case RuntimeCommand.Simulation _, RuntimeCommand.SimulationTicks _ -> false;
             case RuntimeCommand.EntityHistory _ -> false;
             case RuntimeCommand.CommandStatus _, RuntimeCommand.CommandCancel _ -> minor() >= 2;
@@ -115,6 +122,8 @@ public record ProtocolVersion(int major, int minor) {
     /** Returns the exact required-version message for one unsupported command. */
     public String requiredVersionMessage(RuntimeCommand command) {
         return switch (command) {
+            case RuntimeCommand.SimulationDeterminismCheck _ ->
+                    "command requires protocol version 2.4";
             case RuntimeCommand.SimulationAssert _ ->
                     "command requires protocol version 2.3";
             case RuntimeCommand.FixedStep _, RuntimeCommand.FixedStepUpdates _,

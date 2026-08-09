@@ -110,10 +110,12 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         @JsonSubTypes.Type(value = Result.EntityHistory.class, name = "entityHistory"),
         @JsonSubTypes.Type(value = Result.Simulation.class, name = "simulation"),
         @JsonSubTypes.Type(value = Result.SimulationTicks.class, name = "simulationTicks"),
-        @JsonSubTypes.Type(value = Result.FixedStep.class, name = "fixedStep"),
-        @JsonSubTypes.Type(value = Result.FixedStepUpdates.class, name = "fixedStepUpdates"),
         @JsonSubTypes.Type(value = Result.SimulationAssertion.class,
-                name = "simulationAssertion")
+                name = "simulationAssertion"),
+        @JsonSubTypes.Type(value = Result.SimulationDeterminism.class,
+                name = "simulationDeterminism"),
+        @JsonSubTypes.Type(value = Result.FixedStep.class, name = "fixedStep"),
+        @JsonSubTypes.Type(value = Result.FixedStepUpdates.class, name = "fixedStepUpdates")
     })
     sealed interface Result permits Result.Sessions, Result.Capabilities, Result.Frames,
             Result.Snapshot, Result.Entity, Result.Changes, Result.Events, Result.Decisions,
@@ -122,8 +124,9 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
             Result.Control, Result.Inputs, Result.Input, Result.Checkpoints, Result.Checkpoint,
             Result.UiBindings, Result.UiFrames, Result.RecordingOperationResult,
             Result.RecordingChunkResult, Result.Determinism, Result.EntityHistory,
-            Result.Simulation, Result.SimulationTicks, Result.FixedStep,
-            Result.FixedStepUpdates, Result.SimulationAssertion {
+            Result.Simulation, Result.SimulationTicks, Result.SimulationAssertion,
+            Result.SimulationDeterminism, Result.FixedStep,
+            Result.FixedStepUpdates {
         /** Published session catalog. */
         record Sessions(List<SessionInfo> sessions) implements Result {
             /** Copies sessions. */
@@ -444,6 +447,18 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
             }
 
             public Determinism {
+                Objects.requireNonNull(operation, "operation");
+                applicationFailure = Objects.requireNonNull(
+                        applicationFailure, "applicationFailure");
+            }
+        }
+
+        /** Bounded exact simulation-tick determinism operation evidence. */
+        record SimulationDeterminism(
+                io.github.teemuki8.libgdx.agent.runtime.core.SimulationDeterminismOperation operation,
+                @JsonInclude(JsonInclude.Include.NON_ABSENT)
+                Optional<ApplicationFailureEvidence> applicationFailure) implements Result {
+            public SimulationDeterminism {
                 Objects.requireNonNull(operation, "operation");
                 applicationFailure = Objects.requireNonNull(
                         applicationFailure, "applicationFailure");

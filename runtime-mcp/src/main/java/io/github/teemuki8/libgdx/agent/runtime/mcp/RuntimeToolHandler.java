@@ -12,6 +12,7 @@ import io.github.teemuki8.libgdx.agent.runtime.core.ActionDescriptor;
 import io.github.teemuki8.libgdx.agent.runtime.core.ActionParameter;
 import io.github.teemuki8.libgdx.agent.runtime.core.DecisionType;
 import io.github.teemuki8.libgdx.agent.runtime.core.DeterminismProfile;
+import io.github.teemuki8.libgdx.agent.runtime.core.DeterminismSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityType;
 import io.github.teemuki8.libgdx.agent.runtime.core.EventType;
@@ -23,6 +24,9 @@ import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertion;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationEvidenceRequirement;
+import io.github.teemuki8.libgdx.agent.runtime.core.SimulationConfigurationRequirement;
+import io.github.teemuki8.libgdx.agent.runtime.core.SimulationDeterminismInput;
+import io.github.teemuki8.libgdx.agent.runtime.core.SimulationDeterminismSpec;
 import io.modelcontextprotocol.json.McpJsonDefaults;
 import io.modelcontextprotocol.spec.McpSchema;
 import java.util.ArrayList;
@@ -232,11 +236,23 @@ public final class RuntimeToolHandler implements AutoCloseable {
                     number(arguments, "deltaNanos", -1),
                     determinismProfile(arguments.get("profile")),
                     number(arguments, "timeoutNanos", -1));
+            case "runtime_simulation_determinism_check" ->
+                    new RuntimeCommand.SimulationDeterminismCheck(
+                            string(arguments, "determinismRequestId"),
+                            simulationDeterminism(arguments),
+                            number(arguments, "timeoutNanos", -1));
             case "runtime_simulation" -> new RuntimeCommand.Simulation();
             case "runtime_simulation_ticks" -> new RuntimeCommand.SimulationTicks(
                     number(arguments, "executionEpochId", -1),
                     number(arguments, "fromEpochTick", -1),
                     number(arguments, "toEpochTick", -1), limit);
+            case "runtime_simulation_assert" -> new RuntimeCommand.SimulationAssert(
+                    simulationAssertion(arguments.get("assertion")),
+                    simulationEvidenceRequirements(arguments.get("evidenceRequirements")),
+                    number(arguments, "executionEpochId", -1),
+                    number(arguments, "fromEpochTick", -1),
+                    number(arguments, "toEpochTick", -1),
+                    Math.toIntExact(number(arguments, "evidenceLimit", -1)));
             case "runtime_fixed_step" -> new RuntimeCommand.FixedStep();
             case "runtime_fixed_step_updates" -> new RuntimeCommand.FixedStepUpdates(
                     number(arguments, "fromSequence", -1),
@@ -245,13 +261,6 @@ public final class RuntimeToolHandler implements AutoCloseable {
                     string(arguments, "controlRequestId"),
                     Math.toIntExact(number(arguments, "ticks", -1)),
                     number(arguments, "timeoutNanos", -1));
-            case "runtime_simulation_assert" -> new RuntimeCommand.SimulationAssert(
-                    simulationAssertion(arguments.get("assertion")),
-                    simulationEvidenceRequirements(arguments.get("evidenceRequirements")),
-                    number(arguments, "executionEpochId", -1),
-                    number(arguments, "fromEpochTick", -1),
-                    number(arguments, "toEpochTick", -1),
-                    Math.toIntExact(number(arguments, "evidenceLimit", -1)));
             default -> throw new IllegalArgumentException("unknown runtime tool");
         };
         ProtocolVersion version = switch (toolName) {
@@ -261,6 +270,7 @@ public final class RuntimeToolHandler implements AutoCloseable {
             case "runtime_fixed_step", "runtime_fixed_step_updates",
                     "runtime_simulation_advance" -> ProtocolVersion.V2_2;
             case "runtime_simulation_assert" -> ProtocolVersion.V2_3;
+            case "runtime_simulation_determinism_check" -> ProtocolVersion.V2_4;
             default -> ProtocolVersion.V2;
         };
         return new RuntimeRequest(version,
@@ -679,6 +689,54 @@ public final class RuntimeToolHandler implements AutoCloseable {
         return new DeterminismProfile(
                 comparisonScope(values.get("comparisonScope")),
                 bool(values, "includeUiCorrelations"));
+    }
+
+    private SimulationDeterminismSpec simulationDeterminism(Map<String, Object> values) {
+        DeterminismSpec execution = new DeterminismSpec(
+                string(values, "scenarioId"), number(values, "randomSeed", Long.MIN_VALUE),
+                recordingConfiguration(values.get("configuration")),
+                Math.toIntExact(number(values, "repeatCount", -1)),
+                Math.toIntExact(number(values, "ticksPerRepeat", -1)),
+                number(values, "deltaNanos", -1), determinismProfile(values.get("profile")));
+        return new SimulationDeterminismSpec(execution,
+                simulationDeterminismInputs(values.get("inputs")),
+                simulationConfigurationRequirements(values.get("configurationRequirements")),
+                simulationEvidenceRequirements(values.get("evidenceRequirements")),
+                strings(values.get("eventTypes")).stream().map(EventType::of).toList());
+    }
+
+    private List<SimulationDeterminismInput> simulationDeterminismInputs(Object raw) {
+        if (!(raw instanceof List<?> values)) {
+            throw new IllegalArgumentException("determinism inputs must be an array");
+        }
+        return values.stream().map(value -> {
+            Map<String, Object> fields = stringMap(value, "determinism input");
+            if (!fields.keySet().equals(java.util.Set.of(
+                    "epochTick", "inputId", "parameters"))) {
+                throw new IllegalArgumentException("determinism input is invalid");
+            }
+            String inputId = string(fields, "inputId");
+            return new SimulationDeterminismInput(
+                    number(fields, "epochTick", -1), inputId,
+                    inputParameters(inputId, fields.get("parameters")));
+        }).toList();
+    }
+
+    private static List<SimulationConfigurationRequirement>
+            simulationConfigurationRequirements(Object raw) {
+        if (!(raw instanceof List<?> values)) {
+            throw new IllegalArgumentException(
+                    "simulation configuration requirements must be an array");
+        }
+        return values.stream().map(value -> {
+            Map<String, Object> fields = stringMap(value, "configuration requirement");
+            if (!fields.keySet().equals(java.util.Set.of("entityId", "property", "expected"))) {
+                throw new IllegalArgumentException("configuration requirement is invalid");
+            }
+            return new SimulationConfigurationRequirement(
+                    EntityId.of(string(fields, "entityId")), string(fields, "property"),
+                    simulationValue(fields.get("expected")));
+        }).toList();
     }
 
     private static List<String> strings(Object raw) {

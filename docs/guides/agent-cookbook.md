@@ -5,7 +5,8 @@ the runtime. Every public Java API, protocol/MCP contract, dependency, or agent-
 change must update its affected recipe in the same pull request. Examples are exercised by the
 repository fixture tests.
 
-The simulation timeline, fixed-step, and assertion APIs and protocols 2.1-2.3 described below are
+The simulation timeline, fixed-step, assertion, and determinism APIs and protocols 2.1-2.4
+described below are
 development-version APIs until a release containing them is published. The current published
 2.0.0 artifacts do not contain them.
 
@@ -92,6 +93,11 @@ The equivalent MCP tool is `runtime_simulation_advance`. Scheduled registered in
 the controlled callback. Controlled ticks bypass and preserve the render accumulator remainder.
 The legacy unacknowledged registration form remains available only when configuration explicitly
 allows it and produces `UNACKNOWLEDGED` timeline evidence.
+
+`runtime.controls().pauseStateKnown()` distinguishes the last successfully applied pause value
+from an application callback whose mutation may be partial. A failed pause/resume callback makes
+this value false. Determinism then returns sanitized `INCONCLUSIVE` restore/pause evidence and will
+not execute another comparison until an explicit application-dispatched pause or resume succeeds.
 
 From a scenario reset or checkpoint restore callback, explicitly clear or restore accumulator
 state before the new epoch baseline:
@@ -912,3 +918,239 @@ evaluated as an ordinary object or silently normalized to another runtime type.
 Treat `PASS` as a statement only about the selected registered evidence and exact requested ticks.
 It is not proof of whole-program determinism, cross-platform Box2D callback equivalence, or semantic
 causality such as landing, damage, or death.
+
+## Compare deterministic Box2D runs
+
+Use this recipe to repeat one registered scenario with the same seed, configuration, fixed step,
+registered inputs, and exact tick count. It extends the existing determinism engine; it is not a
+second replay mechanism. The application must register a fixed `SimulationTimelineSpec`, an
+`acknowledgedTick` controller, an application dispatcher, and a deterministic scenario reset. The
+reset must recreate or restore the Box2D world and rebind every selected adapter handle before its
+new epoch baseline is captured. Do not leave an ordinary injected input queued when starting the
+operation.
+
+### Build and run a Box2D comparison in Java
+
+`Box2dDeterminism` reads no native object. It compiles stable IDs, selected top-level properties,
+exact world testimony, contact-completeness requirements, and scheduled registered inputs into the
+JDK-only `SimulationDeterminismSpec`:
+
+```java
+long stepNanos = 16_666_667L;
+SimulationDeterminismSpec spec = Box2dDeterminism.builder(
+        "main",
+        new Box2dDeterminism.WorldSettings(
+                stepNanos, new Box2dVector(0.0, -9.8),
+                8, 3, true, true, true),
+        "player-move", 7L,
+        RuntimeValues.object(RuntimeValues.field("level", RuntimeValues.string("one"))),
+        2, 60)
+        .body("player", "position", "linearVelocity", "awake")
+        .fixture("player-shape", "shapeType", "sensor", "categoryBits", "maskBits")
+        .joint("player-joint", "jointType", "anchorA", "anchorB")
+        .activeContacts()
+        .contactEvents()
+        .input(1, "move-right", RuntimeValues.object(
+                RuntimeValues.field("pressed", RuntimeValues.bool(true))))
+        .build();
+
+SimulationDeterminismOperation queued = runtime.determinism().checkSimulation(
+        spec, "player-move-repeat", Duration.ofSeconds(5));
+// Continue servicing the application-owned dispatcher. Poll with the identical ID and spec.
+SimulationDeterminismResult result = runtime.determinism().checkSimulation(
+        spec, "player-move-repeat", Duration.ofSeconds(5)).result().orElseThrow();
+```
+
+Inputs are invoked through their existing closed `InputSpec` handlers immediately before the
+selected epoch tick, after ordinary controlled-input processing and before the acknowledged tick
+callback. Same-tick entries preserve caller order; the full ordered script is repeated for every
+run. The comparison covers epoch ticks 1 through `ticksPerRepeat`; the reset baseline validates
+configuration and selected registrations but is not itself compared.
+
+`EQUAL` has no divergence. A `DIVERGED` result identifies the first differing epoch tick with both
+monotonic session tick IDs, both execution epochs, both correlated runtime frames, and the existing
+typed first difference:
+
+```text
+status: DIVERGED
+epochTick: 183
+leftSimulationTickId: 183
+rightSimulationTickId: 366
+leftExecutionEpochId: 41
+rightExecutionEpochId: 42
+leftFrameId: 902
+rightFrameId: 1085
+difference:
+  kind: PROPERTY
+  fact: box2d.body.player:position
+  left:  {x: 4.155, y: 1.003}
+  right: {x: 4.172, y: 1.003}
+```
+
+### Closed Java contract and bounds
+
+The additive public records have these exact components:
+
+| Record | Components |
+| --- | --- |
+| `SimulationDeterminismSpec` | `execution`, `inputs`, `configurationRequirements`, `evidenceRequirements`, `eventTypes` |
+| `SimulationDeterminismInput` | `epochTick`, `inputId`, `parameters` (`ObjectValue`) |
+| `SimulationConfigurationRequirement` | `entityId`, `property`, `expected` |
+| `SimulationEvidenceRequirement` | `entityId`, `property` (must be an exact `true` boolean at every compared tick) |
+| `SimulationDeterminismOperation` | `spec`, `requestId`, `command`, optional `result` |
+| `SimulationDeterminismResult` | `status`, `message`, `profile`, optional `divergence`, `bounds`, optional `applicationFailure` |
+| `SimulationDeterminismDivergence` | `epochTick`, left/right `simulationTickId`, left/right `executionEpochId`, left/right `frameId`, `difference` |
+
+One request accepts at most 256 inputs, 32 configuration requirements, eight evidence requirements,
+and 16 event types. Existing `DeterminismLimits`, request-value bounds, at-most-once request IDs,
+timeouts, evidence byte limits, and operation retention apply unchanged. Configuration requirements
+are exact facts checked before dispatch and again after every reset. Evidence requirements are
+exact boolean completeness facts checked on every tick. Every selected entity must exist and be
+untruncated, and every selected property name must exist on at least one selected entity; an empty
+selection caused by a typo is rejected rather than reported equal.
+
+### Protocol 2.4
+
+The transport-neutral command tag is `simulationDeterminismCheck`. Protocol values use tagged
+`RuntimeValue` objects and ID records exactly as shown:
+
+```json
+{
+  "version": {"major": 2, "minor": 4},
+  "requestId": "submit-player-repeat",
+  "sessionId": "game",
+  "command": {
+    "type": "simulationDeterminismCheck",
+    "determinismRequestId": "player-repeat",
+    "spec": {
+      "execution": {
+        "scenarioId": "player-move",
+        "randomSeed": 7,
+        "configuration": {"valueType": "object", "fields": []},
+        "repeatCount": 2,
+        "ticksPerRepeat": 60,
+        "deltaNanos": 16666667,
+        "profile": {
+          "comparisonScope": {
+            "entityIds": [{"value": "box2d.body.player"}],
+            "properties": ["position", "linearVelocity"],
+            "excludedProperties": [],
+            "includeEvents": false,
+            "includeDecisions": false
+          },
+          "includeUiCorrelations": false
+        }
+      },
+      "inputs": [{
+        "epochTick": 1,
+        "inputId": "move-right",
+        "parameters": {"valueType": "object", "fields": [{
+          "name": "pressed", "value": {"valueType": "boolean", "value": true}
+        }]}
+      }],
+      "configurationRequirements": [{
+        "entityId": {"value": "box2d.world.main"},
+        "property": "fixedStepNanos",
+        "expected": {"valueType": "integer", "value": 16666667}
+      }],
+      "evidenceRequirements": [{
+        "entityId": {"value": "box2d.contacts.main"}, "property": "complete"
+      }],
+      "eventTypes": []
+    },
+    "timeoutNanos": 5000000000
+  }
+}
+```
+
+The result tag is `simulationDeterminism`; its `operation` uses the exact Java component names
+above. The optional structured `applicationFailure` is projected beside the operation. Protocol
+2.3 rejects this command with `command requires protocol version 2.4`; prior commands and result
+shapes remain unchanged.
+
+### MCP request
+
+`runtime_simulation_determinism_check` uses bounded natural JSON values and registered
+input-specific closed parameter schemas. Configuration requirements use the same reserved exact
+enum/vector tags as simulation assertions:
+
+```json
+{"$runtimeValue": "enum", "value": "CONTINUOUS"}
+{"$runtimeValue": "vector2", "x": 0, "y": -9.8}
+```
+
+The handler preflights the complete value before constructing immutable evidence: maximum depth
+16, 1,024 total nodes, 256 items or fields per collection, and 4,096 code units per string.
+Malformed tags and oversized values are rejected before dispatch.
+
+Example request:
+
+```json
+{
+  "name": "runtime_simulation_determinism_check",
+  "arguments": {
+    "sessionId": "game",
+    "determinismRequestId": "player-repeat",
+    "scenarioId": "player-move",
+    "randomSeed": 7,
+    "configuration": [{"name": "level", "value": "one"}],
+    "repeatCount": 2,
+    "ticksPerRepeat": 60,
+    "deltaNanos": 16666667,
+    "profile": {
+      "comparisonScope": {
+        "entityIds": ["box2d.body.player"],
+        "properties": ["position", "linearVelocity"],
+        "excludedProperties": [],
+        "includeEvents": false,
+        "includeDecisions": false
+      },
+      "includeUiCorrelations": false
+    },
+    "inputs": [{
+      "epochTick": 1,
+      "inputId": "move-right",
+      "parameters": {"pressed": true}
+    }],
+    "configurationRequirements": [{
+      "entityId": "box2d.world.main",
+      "property": "fixedStepNanos",
+      "expected": 16666667
+    }],
+    "evidenceRequirements": [{
+      "entityId": "box2d.contacts.main", "property": "complete"
+    }],
+    "eventTypes": [],
+    "timeoutNanos": 5000000000
+  }
+}
+```
+
+Every object is closed. Unknown request fields, unknown registered inputs, and unknown or mistyped
+input parameters are rejected before dispatch. The tool appears only when a published runtime has
+the fixed timeline, acknowledged controller, scenario, and command-dispatch capabilities required
+to run it.
+
+### Evidence honesty and claim boundary
+
+The result is `INCONCLUSIVE`, never `EQUAL`, when any relevant baseline or tick has a missing
+selected entity/property, configuration or rebind drift, a false/missing completeness requirement,
+wrong epoch, failed/unknown/unacknowledged tick, executed-delta mismatch, missing resulting-frame
+correlation, capture diagnostic, nested or frame truncation, partial eviction, timeout, callback
+failure, or evidence-limit exhaustion. A preflight timing/solver/configuration conflict is rejected
+before dispatch. The application must reset after any failure that leaves mutation unknown.
+
+For selected events, the fixed `EXCLUDE_RUNTIME_IDENTIFIERS` normalization removes only
+runtime-owned absolute correlation attributes named `executionEpochId`, `simulationTickId`, or
+`runtimeFrameId` (along with the existing frame/event/decision identifiers). `epochTick`, contact
+endpoints, impulses, and application semantic attributes remain exact comparison evidence. This
+normalization changes only the comparable copy; inspected runtime events retain the full schema.
+
+`EQUAL` means only that the explicitly selected immutable evidence matched under the same
+application-reported setup in this operation. It is not whole-program determinism, semantic
+causality, or a promise that another CPU, platform, libGDX version, or Box2D native version produces
+identical floating-point state or callback order.
+
+When any public Java API, protocol/MCP contract, dependency, or agent-visible behavior changes,
+update the affected cookbook schema and runnable recipe in that same pull request. Do not defer the
+agent example to a later documentation issue.

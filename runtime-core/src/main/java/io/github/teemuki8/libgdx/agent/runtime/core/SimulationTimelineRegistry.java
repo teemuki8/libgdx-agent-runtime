@@ -149,8 +149,16 @@ public final class SimulationTimelineRegistry {
     SimulationTick tickControlled(long runtimeSuppliedDeltaNanos, long controlledTick,
             Optional<SimulationTickCallback> acknowledgedCallback,
             java.util.function.LongConsumer legacyCallback) {
+        return tickControlled(runtimeSuppliedDeltaNanos, controlledTick,
+                acknowledgedCallback, legacyCallback, () -> {});
+    }
+
+    SimulationTick tickControlled(long runtimeSuppliedDeltaNanos, long controlledTick,
+            Optional<SimulationTickCallback> acknowledgedCallback,
+            java.util.function.LongConsumer legacyCallback, Runnable beforeSimulation) {
         Objects.requireNonNull(acknowledgedCallback, "acknowledgedCallback");
         Objects.requireNonNull(legacyCallback, "legacyCallback");
+        Objects.requireNonNull(beforeSimulation, "beforeSimulation");
         if (!runtime.prepareSimulationTick()) {
             legacyCallback.accept(runtimeSuppliedDeltaNanos);
             throw new IllegalStateException("disabled runtime cannot retain controlled tick evidence");
@@ -160,7 +168,8 @@ public final class SimulationTimelineRegistry {
             return supplied;
         });
         TickExecution execution = execute(runtimeSuppliedDeltaNanos, SimulationTickSource.PAUSED,
-                OptionalLong.of(controlledTick), callback, acknowledgedCallback.isPresent());
+                OptionalLong.of(controlledTick), callback, acknowledgedCallback.isPresent(),
+                beforeSimulation);
         rethrow(execution);
         return execution.tick().orElseThrow();
     }
@@ -182,6 +191,13 @@ public final class SimulationTimelineRegistry {
 
     private TickExecution execute(long suppliedDeltaNanos, SimulationTickSource source,
             OptionalLong controlledTick, SimulationTickCallback callback, boolean acknowledged) {
+        return execute(suppliedDeltaNanos, source, controlledTick, callback, acknowledged,
+                () -> {});
+    }
+
+    private TickExecution execute(long suppliedDeltaNanos, SimulationTickSource source,
+            OptionalLong controlledTick, SimulationTickCallback callback, boolean acknowledged,
+            Runnable beforeSimulation) {
         validateSuppliedDelta(suppliedDeltaNanos);
         Attempt attempt = beginAttempt();
         FrameId expected = runtime.latestFrame().map(frame -> incrementFrame(frame.frameId()))
@@ -199,6 +215,7 @@ public final class SimulationTimelineRegistry {
                         runtime.inputs().executeTick(
                                 controlledTick.orElseThrow(), attempt.executionEpochId());
                     }
+                    beforeSimulation.run();
                     reported[0] = callback.simulate(suppliedDeltaNanos);
                 } catch (Throwable thrown) {
                     applicationFailure[0] = thrown;

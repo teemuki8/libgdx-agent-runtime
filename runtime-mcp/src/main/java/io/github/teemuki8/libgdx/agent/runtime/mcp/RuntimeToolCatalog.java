@@ -14,6 +14,7 @@ import io.github.teemuki8.libgdx.agent.runtime.core.InputDescriptor;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertion;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertionScope;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertionSpec;
+import io.github.teemuki8.libgdx.agent.runtime.core.SimulationDeterminismSpec;
 
 /** Immutable catalog of the closed base tools and registered optional tools. */
 public final class RuntimeToolCatalog {
@@ -270,6 +271,11 @@ public final class RuntimeToolCatalog {
                     "Repeat one seeded scenario and report the first configured observable divergence",
                     determinismInput()));
         }
+        if (supported.contains("runtime_simulation_determinism_check")) {
+            selected.add(tool("runtime_simulation_determinism_check",
+                    "Repeat exact simulation ticks and report the first selected divergence",
+                    simulationDeterminismInput()));
+        }
         if (supported.contains("runtime_simulation")) {
             selected.add(tool("runtime_simulation",
                     "Read application-reported simulation timing and current tick state",
@@ -284,6 +290,11 @@ public final class RuntimeToolCatalog {
                             "toEpochTick", integer(1, Long.MAX_VALUE),
                             "limit", integer(1, MAX_RESULTS)),
                             List.of("executionEpochId", "fromEpochTick", "toEpochTick", "limit"))));
+        }
+        if (supported.contains("runtime_simulation_assert")) {
+            selected.add(tool("runtime_simulation_assert",
+                    "Evaluate one bounded closed assertion over exact immutable simulation ticks",
+                    simulationAssertionInput()));
         }
         if (supported.contains("runtime_fixed_step")) {
             selected.add(tool("runtime_fixed_step",
@@ -307,11 +318,6 @@ public final class RuntimeToolCatalog {
                             "ticks", integer(1, MAX_RESULTS),
                             "timeoutNanos", integer(1, Long.MAX_VALUE)),
                             List.of("controlRequestId", "ticks", "timeoutNanos"))));
-        }
-        if (supported.contains("runtime_simulation_assert")) {
-            selected.add(tool("runtime_simulation_assert",
-                    "Evaluate one bounded closed assertion over exact immutable simulation ticks",
-                    simulationAssertionInput()));
         }
         selected.removeIf(tool -> !supported.contains(tool.name()));
         tools = List.copyOf(selected);
@@ -520,6 +526,67 @@ public final class RuntimeToolCatalog {
         return sessionInput(properties, List.of(
                 "determinismRequestId", "scenarioId", "randomSeed", "configuration",
                 "repeatCount", "ticksPerRepeat", "deltaNanos", "profile", "timeoutNanos"));
+    }
+
+    private Map<String, Object> simulationDeterminismInput() {
+        Map<String, Object> configurationEntry = object(
+                Map.of("name", string(), "value", naturalValue()),
+                List.of("name", "value"));
+        Map<String, Object> profile = object(Map.of(
+                "comparisonScope", comparisonScope(),
+                "includeUiCorrelations", bool()),
+                List.of("comparisonScope", "includeUiCorrelations"));
+        Map<String, Object> configurationRequirement = object(Map.of(
+                "entityId", string(), "property", string(), "expected",
+                simulationValueSchema("simulationDeterminismValue")),
+                List.of("entityId", "property", "expected"));
+        Map<String, Object> evidenceRequirement = object(Map.of(
+                "entityId", string(), "property", string()),
+                List.of("entityId", "property"));
+        List<Map<String, Object>> inputVariants = inputs.values().stream()
+                .map(descriptor -> object(Map.of(
+                        "epochTick", integer(1, Long.MAX_VALUE),
+                        "inputId", Map.of("type", "string", "const", descriptor.id()),
+                        "parameters", inputParameterObject(descriptor)),
+                        List.of("epochTick", "inputId", "parameters")))
+                .toList();
+        if (inputVariants.isEmpty()) {
+            inputVariants = List.of(object(Map.of(
+                    "epochTick", integer(1, Long.MAX_VALUE),
+                    "inputId", Map.of("type", "string", "const", "__no_registered_input__"),
+                    "parameters", object(Map.of(), List.of())),
+                    List.of("epochTick", "inputId", "parameters")));
+        }
+        LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
+        properties.put("determinismRequestId", string());
+        properties.put("scenarioId", string());
+        properties.put("randomSeed", integer(Long.MIN_VALUE, Long.MAX_VALUE));
+        properties.put("configuration", Map.of("type", "array", "items", configurationEntry,
+                "maxItems", 100));
+        properties.put("repeatCount", integer(2, 100));
+        properties.put("ticksPerRepeat", integer(1, Integer.MAX_VALUE));
+        properties.put("deltaNanos", integer(1, Long.MAX_VALUE));
+        properties.put("profile", profile);
+        properties.put("inputs", Map.of("type", "array",
+                "items", Map.of("oneOf", inputVariants),
+                "maxItems", SimulationDeterminismSpec.MAX_INPUTS));
+        properties.put("configurationRequirements", Map.of("type", "array",
+                "items", configurationRequirement,
+                "maxItems", SimulationDeterminismSpec.MAX_CONFIGURATION_REQUIREMENTS));
+        properties.put("evidenceRequirements", Map.of("type", "array",
+                "items", evidenceRequirement,
+                "maxItems", SimulationDeterminismSpec.MAX_EVIDENCE_REQUIREMENTS));
+        properties.put("eventTypes", Map.of("type", "array", "items", string(),
+                "maxItems", SimulationDeterminismSpec.MAX_EVENT_TYPES));
+        properties.put("timeoutNanos", integer(1, Long.MAX_VALUE));
+        LinkedHashMap<String, Object> schema = new LinkedHashMap<>(sessionInput(properties, List.of(
+                "determinismRequestId", "scenarioId", "randomSeed", "configuration",
+                "repeatCount", "ticksPerRepeat", "deltaNanos", "profile", "inputs",
+                "configurationRequirements", "evidenceRequirements", "eventTypes",
+                "timeoutNanos")));
+        schema.put("$defs", Map.of("simulationDeterminismValue",
+                simulationValueSchema("simulationDeterminismValue")));
+        return Map.copyOf(schema);
     }
 
     private static Map<String, Object> assertionInput() {
@@ -752,7 +819,11 @@ public final class RuntimeToolCatalog {
     }
 
     private static Map<String, Object> simulationValueSchema() {
-        Map<String, Object> child = Map.of("$ref", "#/$defs/simulationAssertionValue");
+        return simulationValueSchema("simulationAssertionValue");
+    }
+
+    private static Map<String, Object> simulationValueSchema(String definitionName) {
+        Map<String, Object> child = Map.of("$ref", "#/$defs/" + definitionName);
         ArrayList<Map<String, Object>> alternatives = new ArrayList<>(List.of(
                 Map.of("type", "null"), bool(), Map.of("type", "integer"), number(),
                 Map.of("type", "string", "maxLength", 4_096),

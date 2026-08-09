@@ -18,6 +18,7 @@ public final class SimulationControlRegistry {
     private LinkedHashMap<String, BooleanSupplier> conditionPredicates =
             new LinkedHashMap<>();
     private boolean paused;
+    private boolean pauseStateKnown = true;
     private long currentTick;
 
     SimulationControlRegistry(AgentRuntime runtime, ControlLimits limits) {
@@ -56,9 +57,18 @@ public final class SimulationControlRegistry {
         return controller != null;
     }
 
+    synchronized boolean acknowledgedTicksAvailable() {
+        return controller != null && controller.acknowledgedTick().isPresent();
+    }
+
     /** Reports the last successfully applied pause state. */
     public synchronized boolean paused() {
         return paused;
+    }
+
+    /** Reports whether the application pause state is known after the latest callback. */
+    public synchronized boolean pauseStateKnown() {
+        return pauseStateKnown;
     }
 
     /** Returns registered semantic conditions in stable registration order. */
@@ -96,6 +106,7 @@ public final class SimulationControlRegistry {
         conditionPredicates.clear();
         operations.clear();
         paused = false;
+        pauseStateKnown = true;
     }
 
     /** Returns the number of successfully completed application-defined controlled ticks. */
@@ -127,11 +138,13 @@ public final class SimulationControlRegistry {
                 (pause ? spec.pause() : spec.resume()).run();
                 synchronized (this) {
                     paused = pause;
+                    pauseStateKnown = true;
                     evidence.paused = pause;
                     evidence.stopReason = ControlStopReason.COMPLETED;
                 }
             } catch (RuntimeException | Error failure) {
                 synchronized (this) {
+                    pauseStateKnown = false;
                     evidence.stopReason = ControlStopReason.CALLBACK_FAILED;
                 }
                 throw failure;
@@ -257,13 +270,22 @@ public final class SimulationControlRegistry {
     boolean pauseForDeterminism() {
         SimulationControllerSpec spec = requireController();
         synchronized (this) {
+            requireKnownPauseState();
             if (paused) {
                 return true;
             }
         }
-        spec.pause().run();
+        try {
+            spec.pause().run();
+        } catch (RuntimeException | Error failure) {
+            synchronized (this) {
+                pauseStateKnown = false;
+            }
+            throw failure;
+        }
         synchronized (this) {
             paused = true;
+            pauseStateKnown = true;
         }
         return false;
     }
@@ -273,14 +295,33 @@ public final class SimulationControlRegistry {
             return;
         }
         SimulationControllerSpec spec = requireController();
-        spec.resume().run();
+        try {
+            spec.resume().run();
+        } catch (RuntimeException | Error failure) {
+            synchronized (this) {
+                pauseStateKnown = false;
+            }
+            throw failure;
+        }
         synchronized (this) {
             paused = false;
+            pauseStateKnown = true;
         }
     }
 
     FrameSnapshot tickForDeterminism(long deltaNanos) {
+        return tickForDeterminism(deltaNanos, List.of(), false).frame();
+    }
+
+    DeterminismTickEvidence tickForDeterminism(
+            long deltaNanos, List<SimulationDeterminismInput> inputsForTick) {
+        return tickForDeterminism(deltaNanos, inputsForTick, true);
+    }
+
+    private DeterminismTickEvidence tickForDeterminism(
+            long deltaNanos, List<SimulationDeterminismInput> inputsForTick, boolean scripted) {
         SimulationControllerSpec spec = requireController();
+        Objects.requireNonNull(inputsForTick, "inputsForTick");
         long tick;
         synchronized (this) {
             if (!paused) {
@@ -293,7 +334,9 @@ public final class SimulationControlRegistry {
         SimulationTick simulationTick;
         try {
             simulationTick = runtime.simulation().tickControlled(
-                    deltaNanos, tick, spec.acknowledgedTick(), spec.tick());
+                    deltaNanos, tick, spec.acknowledgedTick(), spec.tick(),
+                    scripted ? () -> runtime.inputs().executeDeterminismInputs(inputsForTick)
+                            : () -> {});
         } catch (RuntimeException | Error failure) {
             throw failure;
         }
@@ -304,7 +347,8 @@ public final class SimulationControlRegistry {
         }
         runtime.recordings().recordTick(
                 tick, deltaNanos, runtime.currentEpoch(), resultingFrame);
-        return runtime.frame(resultingFrame).orElseThrow();
+        return new DeterminismTickEvidence(
+                simulationTick, runtime.frame(resultingFrame).orElseThrow());
     }
 
     private boolean satisfied(Evidence evidence, Signature signature) {
@@ -379,9 +423,17 @@ public final class SimulationControlRegistry {
 
 
     private synchronized void requirePausedDuringExecution(Evidence evidence) {
+        requireKnownPauseState();
         if (!paused) {
             evidence.stopReason = ControlStopReason.INVALID_STATE;
             throw new IllegalStateException("simulation resumed before tick advancement");
+        }
+    }
+
+    private void requireKnownPauseState() {
+        if (!pauseStateKnown) {
+            throw new AgentRuntimeException(RuntimeErrorCode.INVALID_LIFECYCLE,
+                    "simulation pause state is unknown; apply an explicit pause or resume control");
         }
     }
 
@@ -451,6 +503,13 @@ public final class SimulationControlRegistry {
             this.signature = signature;
             this.paused = paused;
             this.submittedFrameId = submittedFrameId;
+        }
+    }
+
+    record DeterminismTickEvidence(SimulationTick tick, FrameSnapshot frame) {
+        DeterminismTickEvidence {
+            Objects.requireNonNull(tick, "tick");
+            Objects.requireNonNull(frame, "frame");
         }
     }
 }

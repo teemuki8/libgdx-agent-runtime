@@ -23,6 +23,7 @@ public final class InputRegistry {
     private final TreeMap<Long, ArrayDeque<Evidence>> scheduled = new TreeMap<>();
     private final Map<Long, List<Evidence>> executedByTick = new LinkedHashMap<>();
     private int outstanding;
+    private boolean determinismExecuting;
 
     InputRegistry(AgentRuntime runtime, InputLimits limits) {
         this.runtime = runtime;
@@ -80,6 +81,7 @@ public final class InputRegistry {
                 scheduled.clear();
                 executedByTick.clear();
                 outstanding = 0;
+                determinismExecuting = false;
             }
         }
     }
@@ -112,6 +114,10 @@ public final class InputRegistry {
         Evidence evidence;
         boolean existing;
         synchronized (this) {
+            if (determinismExecuting) {
+                throw new AgentRuntimeException(RuntimeErrorCode.INVALID_LIFECYCLE,
+                        "input injection is unavailable during determinism execution");
+            }
             descriptor = inputs.get(inputId);
             if (descriptor == null) {
                 throw new IllegalArgumentException("unknown input id");
@@ -209,6 +215,63 @@ public final class InputRegistry {
         }
         if (firstRuntimeFailure != null) {
             throw firstRuntimeFailure;
+        }
+    }
+
+    void beginDeterminism(List<SimulationDeterminismInput> script) {
+        Objects.requireNonNull(script, "script");
+        synchronized (submissionLock) {
+            synchronized (this) {
+                if (determinismExecuting) {
+                    throw new IllegalStateException("determinism input execution is already active");
+                }
+                if (outstanding != 0 || !scheduled.isEmpty() || !executedByTick.isEmpty()) {
+                    throw new AgentRuntimeException(RuntimeErrorCode.INVALID_LIFECYCLE,
+                            "determinism execution requires an empty ordinary input queue");
+                }
+                validateDeterminismScript(script);
+                determinismExecuting = true;
+            }
+        }
+    }
+
+    synchronized void validateDeterminismInputs(List<SimulationDeterminismInput> script) {
+        Objects.requireNonNull(script, "script");
+        if (outstanding != 0 || !scheduled.isEmpty() || !executedByTick.isEmpty()) {
+            throw new AgentRuntimeException(RuntimeErrorCode.INVALID_LIFECYCLE,
+                    "determinism execution requires an empty ordinary input queue");
+        }
+        validateDeterminismScript(script);
+    }
+
+    private void validateDeterminismScript(List<SimulationDeterminismInput> script) {
+        for (SimulationDeterminismInput input : script) {
+            InputDescriptor descriptor = inputs.get(input.inputId());
+            if (descriptor == null || handlers.get(input.inputId()) == null) {
+                throw new IllegalArgumentException("unknown determinism input id");
+            }
+            validate(descriptor, input.parameters());
+        }
+    }
+
+    synchronized void executeDeterminismInputs(List<SimulationDeterminismInput> inputsForTick) {
+        if (!determinismExecuting) {
+            throw new IllegalStateException("determinism input execution is not active");
+        }
+        for (SimulationDeterminismInput input : inputsForTick) {
+            Consumer<InputParameters> handler = handlers.get(input.inputId());
+            if (handler == null) {
+                throw new IllegalStateException("registered determinism input is unavailable");
+            }
+            handler.accept(new InputParameters(input.parameters()));
+        }
+    }
+
+    void endDeterminism() {
+        synchronized (submissionLock) {
+            synchronized (this) {
+                determinismExecuting = false;
+            }
         }
     }
 

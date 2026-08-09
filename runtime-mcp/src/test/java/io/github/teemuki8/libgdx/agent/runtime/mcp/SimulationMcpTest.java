@@ -130,7 +130,9 @@ final class SimulationMcpTest {
                             "entityId", "ball", "property", "angle", "expected", 0,
                             "period", 6.28, "absoluteTolerance", 0),
                     Map.of("assertionType", "eventCount", "eventType", "missing.event",
-                            "attributes", Map.of(), "expectation", "NONE", "exactCount", 0),
+                            "attributes", Map.of("key", Map.of(
+                                    "fixtureAId", "ball", "childIndexA", 0)),
+                            "expectation", "NONE", "exactCount", 0),
                     Map.of("assertionType", "objectListContains", "entityId", "ball",
                             "property", "contacts", "selector", Map.of("sensor", false),
                             "extent", "FINAL"),

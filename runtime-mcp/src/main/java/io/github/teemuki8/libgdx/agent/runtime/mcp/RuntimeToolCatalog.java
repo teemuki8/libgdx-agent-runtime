@@ -664,8 +664,8 @@ public final class RuntimeToolCatalog {
 
     private static Map<String, Object> selectorObject(int depth) {
         List<Map<String, Object>> values = new ArrayList<>(List.of(
-                Map.of("type", "null"), bool(), integer(Long.MIN_VALUE, Long.MAX_VALUE),
-                number(), Map.of("type", "string", "maxLength", 1_024), vector()));
+                Map.of("type", "null"), bool(), number(),
+                Map.of("type", "string", "maxLength", 1_024)));
         if (depth < 4) {
             values = new ArrayList<>(values);
             values.add(selectorObject(depth + 1));

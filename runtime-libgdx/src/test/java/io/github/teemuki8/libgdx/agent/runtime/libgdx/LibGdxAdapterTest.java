@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.badlogic.gdx.math.Vector2;
+import io.github.teemuki8.libgdx.agent.runtime.core.FixedStepDropPolicy;
+import io.github.teemuki8.libgdx.agent.runtime.core.FixedStepSimulationConfiguration;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutionException;
@@ -40,5 +42,32 @@ final class LibGdxAdapterTest {
                 .commandDispatcher(applicationQueue::addLast)
                 .build();
         assertTrue(runtime.commands().isPresent());
+    }
+
+    @Test
+    void fixedStepFacadeConvertsFiniteFloatOnceAndDelegatesToCoreAccumulator() {
+        var runtime = LibGdxAgentRuntime.builder().build();
+        var configuration = new FixedStepSimulationConfiguration(
+                10_000_000L, 30_000_000L, 30_000_000L, 3, 4,
+                FixedStepDropPolicy.DROP_WHOLE_TICKS_KEEP_REMAINDER, true);
+        float[] observedSeconds = {0};
+        LibGdxFixedStepSimulation simulation = LibGdxFixedStepSimulation.acknowledged(
+                runtime, configuration, tick -> {
+                    observedSeconds[0] = tick.fixedStepSeconds();
+                    return tick.fixedStepNanos();
+                });
+        runtime.start();
+
+        var report = simulation.update(0.025f);
+
+        assertEquals(2, report.ticksCompleted());
+        assertEquals(5_000_000L, report.accumulatorRemainderNanos());
+        assertEquals(0.01f, simulation.fixedStepSeconds());
+        assertEquals(simulation.fixedStepSeconds(), observedSeconds[0]);
+        assertEquals(0.5, simulation.interpolationAlpha());
+        assertThrows(IllegalArgumentException.class, () -> simulation.update(Float.NaN));
+        assertThrows(IllegalArgumentException.class,
+                () -> simulation.update(Float.POSITIVE_INFINITY));
+        assertThrows(IllegalArgumentException.class, () -> simulation.update(-0.1f));
     }
 }

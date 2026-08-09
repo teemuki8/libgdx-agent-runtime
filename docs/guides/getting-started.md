@@ -31,27 +31,26 @@ V1 requires Java 25. It qualifies LWJGL3 desktop only; Android, iOS, and web are
 ## Capture a fixed-step simulation
 
 Create and register state on the render thread, declare the authoritative fixed step, and call
-`start()`. The application still owns its accumulator and render loop:
+`start()`. The application calls the canonical accumulator and still owns the render loop:
 
 ```java
 runtime = LibGdxAgentRuntime.builder()
         .captureThread(Thread.currentThread())
         .configuration(RuntimeConfiguration.developmentDefaults())
         .build();
-runtime.simulation().register(SimulationTimelineSpec.fixedStep(16_666_667L));
+FixedStepSimulationConfiguration fixedStep =
+        FixedStepSimulationConfiguration.developmentDefaults(16_666_667L);
+LibGdxFixedStepSimulation simulation = LibGdxFixedStepSimulation.acknowledged(
+        runtime, fixedStep, tick -> {
+            updateFixedStep(tick.fixedStepSeconds());
+            return tick.fixedStepNanos(); // explicit application testimony
+        });
 registerInspectableState(runtime);
 runtime.start();
 
 // render()
-accumulatorNanos += boundedRenderDeltaNanos();
-while (accumulatorNanos >= 16_666_667L) {
-    runtime.simulation().tick(16_666_667L, suppliedDeltaNanos -> {
-        updateFixedStep(suppliedDeltaNanos);
-        return 16_666_667L; // explicit application testimony
-    });
-    accumulatorNanos -= 16_666_667L;
-}
-renderGame();
+simulation.update(Gdx.graphics.getDeltaTime());
+renderGame(simulation.interpolationAlpha());
 ```
 
 `start()` captures baseline frame 0, which is not a simulation tick. The first tick has session ID
@@ -59,6 +58,15 @@ renderGame();
 application actually executed; a mismatch with the supplied or configured step is typed evidence,
 not a successful fixed-step claim. A callback exception is rethrown after retaining honest attempted
 tick and any completed frame evidence.
+
+The helper clamps render time, bounds accumulated time, limits catch-up ticks, and reports every
+dropped nanosecond and whole tick. It never calls render, sleeps, starts a thread, or changes
+authoritative state when interpolation alpha is read. Call `clearAccumulator()` from an
+application-owned scenario-reset/checkpoint-restore callback, or restore an explicit sub-step
+remainder with `restoreAccumulator(...)`.
+
+`FixedStepFixtureApplication` exercises this exact facade from a real hidden LWJGL3
+`ApplicationAdapter.render()` loop and verifies paused configured-step advancement under Xvfb.
 
 State-driven applications that do not have a simulation timeline may continue to use
 `runtime.frame(deltaNanos, callback)` directly. A runtime frame is capture evidence, not proof of a

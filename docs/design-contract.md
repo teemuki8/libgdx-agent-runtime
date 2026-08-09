@@ -150,3 +150,12 @@ Disabled runtimes retain no providers or frames and perform no serialization.
     never claim fixed-step success. Timeline retention and queries are bounded with explicit
     pagination, partial eviction, and not-yet-executed status. Protocol 2.1 adds the closed
     `simulation` and `simulationTicks` commands without changing protocols 1.0-1.13 or 2.0.
+35. The canonical fixed-step accumulator is application-invoked and uses integer nanoseconds.
+    Render delta clamping, accumulated-time loss, catch-up tick drops, attempted/completed ticks,
+    interpolation remainder, and tick/frame correlation are retained as bounded typed reports.
+    Pause freezes normal accumulation; exact controlled advancement derives its delta only from the
+    registered fixed step and does not consume the render accumulator. Callback failure consumes the
+    attempted quantum and explicitly drops remaining whole time so it is never silently retried.
+    The helper creates no thread, timer, scheduler, sleep, render call, or disposal ownership.
+    Protocol 2.2 adds fixed-step state/report inspection and configured-step advance while leaving
+    protocols 1.0-1.13, 2.0, and 2.1 closed and unchanged.

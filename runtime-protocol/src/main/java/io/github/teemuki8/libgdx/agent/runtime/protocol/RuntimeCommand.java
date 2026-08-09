@@ -41,7 +41,10 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
     @JsonSubTypes.Type(value = RuntimeCommand.DeterminismCheck.class, name = "determinismCheck"),
     @JsonSubTypes.Type(value = RuntimeCommand.EntityHistory.class, name = "entityHistory"),
     @JsonSubTypes.Type(value = RuntimeCommand.Simulation.class, name = "simulation"),
-    @JsonSubTypes.Type(value = RuntimeCommand.SimulationTicks.class, name = "simulationTicks")
+    @JsonSubTypes.Type(value = RuntimeCommand.SimulationTicks.class, name = "simulationTicks"),
+    @JsonSubTypes.Type(value = RuntimeCommand.FixedStep.class, name = "fixedStep"),
+    @JsonSubTypes.Type(value = RuntimeCommand.FixedStepUpdates.class, name = "fixedStepUpdates"),
+    @JsonSubTypes.Type(value = RuntimeCommand.SimulationAdvance.class, name = "simulationAdvance")
 })
 public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeCommand.Capabilities,
         RuntimeCommand.Frames, RuntimeCommand.Snapshot, RuntimeCommand.Entity,
@@ -56,7 +59,9 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
         RuntimeCommand.UiBindings, RuntimeCommand.UiFrames,
         RuntimeCommand.RecordingStart, RuntimeCommand.RecordingStop,
         RuntimeCommand.RecordingGet, RuntimeCommand.DeterminismCheck,
-        RuntimeCommand.EntityHistory, RuntimeCommand.Simulation, RuntimeCommand.SimulationTicks {
+        RuntimeCommand.EntityHistory, RuntimeCommand.Simulation, RuntimeCommand.SimulationTicks,
+        RuntimeCommand.FixedStep, RuntimeCommand.FixedStepUpdates,
+        RuntimeCommand.SimulationAdvance {
     /** Lists published sessions. */
     record Sessions() implements RuntimeCommand {}
 
@@ -132,6 +137,32 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
                 throw new IllegalArgumentException("simulation tick range is invalid");
             }
             validateLimit(limit);
+        }
+    }
+
+    /** Reads current canonical fixed-step accumulator state. */
+    record FixedStep() implements RuntimeCommand {}
+
+    /** Reads one bounded inclusive fixed-step update-report range. */
+    record FixedStepUpdates(long fromSequence, long toSequence, int limit)
+            implements RuntimeCommand {
+        /** Validates update range and page size. */
+        public FixedStepUpdates {
+            if (fromSequence <= 0 || toSequence < fromSequence) {
+                throw new IllegalArgumentException("fixed-step update range is invalid");
+            }
+            validateLimit(limit);
+        }
+    }
+
+    /** Advances using only the registered fixed step while simulation is paused. */
+    record SimulationAdvance(String controlRequestId, int ticks, long timeoutNanos)
+            implements RuntimeCommand {
+        /** Validates correlation, tick count, and timeout without accepting a delta. */
+        public SimulationAdvance {
+            ProtocolJson.requireIdentifier(controlRequestId, "controlRequestId");
+            requirePositive(ticks, "ticks");
+            requirePositive(timeoutNanos, "timeoutNanos");
         }
     }
 

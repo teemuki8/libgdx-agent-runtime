@@ -30,9 +30,10 @@ V1 includes registered entities, bounded immutable values, baseline/frame captur
 events, decisions, completed-frame queries, execution epochs, explicit attribution, typed actions,
 and declarative assertions. Optional application-owned capabilities add scenarios, exact-tick
 control, registered input, opaque checkpoints, runtime/UI correlation, recording, and determinism
-comparison through closed protocol 1.0-1.13, 2.0, and 2.1 stdio MCP surfaces. Protocol 2.1 adds
-application-reported simulation timing and tick-to-frame evidence. A deterministic LWJGL3 fixture
-qualifies the full workflow.
+comparison through closed protocol 1.0-1.13 and additive 2.x stdio MCP surfaces. Protocol 2.1 adds
+application-reported simulation timing and tick-to-frame evidence; 2.2 adds the canonical fixed-step
+accumulator, loss reports, and configured-step advance. A deterministic LWJGL3 fixture qualifies
+the full workflow.
 
 V1 excludes replay execution, reflection, instrumentation, mutation interception, networking, ECS
 adapters, hot reload, visual debugging, natural-language queries, and automatic causality.
@@ -44,8 +45,8 @@ Version 1.0 establishes the stable Java and exact-version protocol contracts des
 ```java
 public final class GameApplication extends ApplicationAdapter {
     private AgentRuntime runtime;
+    private LibGdxFixedStepSimulation simulation;
     private Enemy enemy;
-    private long accumulatorNanos;
 
     @Override public void create() {
         enemy = new Enemy("enemy-1", 100);
@@ -54,8 +55,11 @@ public final class GameApplication extends ApplicationAdapter {
                 .configuration(RuntimeConfiguration.developmentDefaults())
                 .commandDispatcher(Gdx.app::postRunnable)
                 .build();
-        runtime.simulation().register(
-                SimulationTimelineSpec.fixedStep(16_666_667L));
+        var fixedStep = FixedStepSimulationConfiguration.developmentDefaults(16_666_667L);
+        simulation = LibGdxFixedStepSimulation.acknowledged(runtime, fixedStep, tick -> {
+            updateFixedStep(tick.fixedStepSeconds());
+            return tick.fixedStepNanos(); // the delta actually executed
+        });
         runtime.entities().register(
                 EntityId.of(enemy.id()),
                 EntityType.of("enemy"),
@@ -68,15 +72,8 @@ public final class GameApplication extends ApplicationAdapter {
     }
 
     @Override public void render() {
-        accumulatorNanos += Math.min(LibGdxTime.deltaNanos(), 250_000_000L);
-        while (accumulatorNanos >= 16_666_667L) {
-            runtime.simulation().tick(16_666_667L, suppliedDeltaNanos -> {
-                updateFixedStep(suppliedDeltaNanos);
-                return 16_666_667L; // the delta actually executed
-            });
-            accumulatorNanos -= 16_666_667L;
-        }
-        renderGame();
+        simulation.update(Gdx.graphics.getDeltaTime());
+        renderGame(simulation.interpolationAlpha());
     }
 
     @Override public void dispose() {

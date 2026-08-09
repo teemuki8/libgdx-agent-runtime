@@ -243,3 +243,389 @@ changing the registration.
 Authors of other adapter modules that change an object behind an already registered entity provider
 must call `runtime.entities().requireProviderMutationAllowed()` immediately before the swap. This
 public guard preserves capture-thread ownership and rejects open-frame or closed-runtime mutation.
+
+## Capture and inspect Box2D contacts
+
+Use this development-version API when collision callbacks must be correlated with an authoritative
+fixed simulation tick. Register both bodies and fixtures before registering contacts. There may be
+one live contact registration per registered world:
+
+```java
+Box2dContacts contacts = physics.registerContacts(
+        "main",
+        Box2dContactLimits.developmentDefaults(),
+        Box2dContactPolicy.developmentDefaults());
+
+// The application installs the returned listener. Registration and listener() do not.
+world.setContactListener(contacts.listener());
+```
+
+The defaults are an exact public contract:
+
+```java
+new Box2dContactLimits(
+        128,  // callbackRecordsPerTick
+        256,  // activeContactsPerTick
+        2,    // pointsPerContact
+        2,    // impulsesPerContact
+        2,    // oldManifoldPointsPerContact
+        8,    // diagnosticsPerTick
+        1_024,// retainedContactTicks
+        256); // queryPageSize
+
+new Box2dContactPolicy(
+        true,  // begin
+        true,  // end
+        false, // preSolve
+        true); // postSolve
+```
+
+All contact limits are positive hard bounds. `queryPageSize` cannot exceed
+`retainedContactTicks`. Supply an explicit `Box2dContactPolicy` to enable pre-solve or omit another
+phase. Active-contact maintenance still processes native callbacks whose phase is not retained as a
+record.
+
+### Compose an existing application listener
+
+If the game already has one listener, install the evidence-first, application-second composition:
+
+```java
+ContactListener combined = contacts.compose(gameContactListener);
+world.setContactListener(combined);
+```
+
+`compose` accepts one application listener once and rejects composing the evidence listener with
+itself. If the application listener throws, the adapter retains only the closed
+`APPLICATION_LISTENER_FAILED` diagnostic and rethrows the original unchecked failure. It never
+copies the exception message or stack trace, and the simulation tick cannot silently report a
+successful callback.
+
+### Capture the authoritative step
+
+Wrap exactly one application-owned step inside the existing acknowledged tick callback:
+
+```java
+runtime.simulation().tick(FIXED_STEP_NANOS, suppliedDeltaNanos -> {
+    processScheduledInput();
+    contacts.captureStep(() -> world.step(
+            suppliedDeltaNanos / 1_000_000_000f,
+            worldSpec.velocityIterations(),
+            worldSpec.positionIterations()));
+    gameLogicAfterPhysics();
+    return suppliedDeltaNanos;
+});
+
+renderGame();
+```
+
+`captureStep` requires the adapter's application thread, an active timeline-owned runtime frame,
+and at most one captured step for that world in the simulation tick. It finalizes bounded contact
+evidence before the frame closes and then rethrows an application step or listener failure. It
+does not sleep, render, step again, install a listener, or create a loop or thread. Do not also step
+the world from `render(delta)`.
+
+The generic `runtime.simulation().activeTick()` API is the transient integration context used by
+the adapter. While the timeline-owned frame is open on the capture thread, including the simulation
+callback and provider capture, it returns:
+
+```text
+ActiveSimulationTick
+  simulationTickId
+  executionEpochId
+  epochTick
+  suppliedDeltaNanos
+  source
+  runtimeFrameId
+```
+
+It is empty before `tick`, after `tick` returns, and on every other thread, including while the
+callback is active. `source` is the closed `RUNNING` or `PAUSED` testimony. The context is cleared
+after success or failure. Do not retain it or treat it as completed tick evidence; query
+`SimulationTick` for the executed delta, outcome, elapsed simulation time, and final frame
+correlation.
+
+### Inspect typed Java evidence
+
+Completed contact history is safe to query from another thread:
+
+```java
+Box2dContactTickPage page = contacts.ticks(1, 60, 60);
+for (Box2dContactTick tick : page.ticks()) {
+    if (!tick.complete()) {
+        inspect(tick.diagnostics(), tick.truncations());
+    }
+    inspect(tick.records(), tick.activeContacts());
+}
+```
+
+The range is inclusive and uses session-monotonic `SimulationTickId` values, not epoch-relative
+ticks or render frames. `limit` must not exceed `queryPageSize`. `Box2dContactTickPage` exposes
+`ticks`, `hasMore`, `rangeStatus`, `oldestRetainedTickId`, and `newestRetainedTickId`. Its closed
+range statuses are `COMPLETE`, `PAGINATED`, `PARTIALLY_EVICTED`, and `NOT_YET_CAPTURED`. A missing
+tick inside the requested retained range is `NOT_YET_CAPTURED`, never an invented complete page.
+
+Each immutable `Box2dContactTick` exposes:
+
+```text
+simulationTickId, executionEpochId, epochTick, runtimeFrameId,
+records, activeContacts,
+callbackRecordsObserved, callbackRecordsRetained, callbackRecordLimit,
+activeContactsObserved, activeContactsRetained, activeContactLimit,
+unmappedContactsObserved, diagnostics, truncations, complete
+```
+
+Each `Box2dContactRecord` exposes `phase`, `key`, `endpointA`, `endpointB`, combined `sensor`,
+`touching`, `enabled`, `availability`, `points`, optional `normal`, `impulses`, optional
+`oldManifold`, `occurrence`, and `truncations`. Its closed phases are `BEGIN`, `END`, `PRE_SOLVE`,
+and `POST_SOLVE`; availability is respectively `ENDPOINTS_ONLY`,
+`CURRENT_AND_OLD_MANIFOLD`, or
+`CURRENT_MANIFOLD_AND_IMPULSES`. `OldManifold` has a closed type of `CIRCLES`, `FACE_A`, or
+`FACE_B` and bounded `OldManifoldPoint(id, normalImpulse, tangentImpulse)` values. Impulses are
+`Impulse(normal, tangent)` values. `ActiveContact` exposes the latest bounded key/endpoints,
+combined sensor and touching/enabled state, points, optional normal, impulses, and truncations.
+
+The stable key is `Key(fixtureAId, childIndexA, fixtureBId, childIndexB)`. It is ordered by the
+application fixture ID and then child index; native pointer and Java identity never appear. Each
+endpoint adds its registered `bodyId`, `fixtureId`, `childIndex`, and copied `sensor` state. When
+native A/B is reversed, the adapter swaps the endpoint facts, negates the world normal and signed
+tangent impulses, preserves normal impulse magnitude, and leaves world points unchanged.
+
+### Exact runtime entity schema
+
+The current completed contact tick is the ordinary runtime entity
+`box2d.contacts.<worldId>` with type `box2d.contacts`. Its exact top-level property set is:
+
+```text
+worldId
+runtimeEntityId
+policy
+limits
+latestTick
+records
+activeContacts
+callbackCounts
+activeCounts
+unmappedContacts
+diagnostics
+truncations
+complete
+```
+
+Runtime properties and object fields are serialized in canonical name order. The exact nested
+closed schemas are:
+
+```text
+policy:
+  begin, end, preSolve, postSolve
+
+limits:
+  callbackRecordsPerTick, activeContactsPerTick, pointsPerContact,
+  impulsesPerContact, oldManifoldPointsPerContact, diagnosticsPerTick,
+  retainedContactTicks, queryPageSize
+
+latestTick:
+  simulationTickId, executionEpochId, epochTick, runtimeFrameId
+
+callbackCounts | activeCounts:
+  observed, retained, limit
+
+key:
+  fixtureAId, childIndexA, fixtureBId, childIndexB
+
+endpointA | endpointB:
+  bodyId, fixtureId, childIndex, sensor
+
+record:
+  phase, key, endpointA, endpointB, sensor, touching, enabled, availability,
+  points, normal, impulses, oldManifold, occurrence, truncations
+
+activeContact:
+  key, endpointA, endpointB, sensor, touching, enabled,
+  points, normal, impulses, truncations
+
+impulse:
+  normal, tangent
+
+oldManifold:
+  type, points
+
+oldManifoldPoint:
+  id, normalImpulse, tangentImpulse
+
+diagnostic:
+  code, observed
+
+truncation:
+  dimension, observed, retained, limit
+```
+
+The combined `sensor` field is true when either endpoint fixture is a sensor; the endpoint fields
+preserve which fixture supplied that state. `points` is a list of runtime `vector2` values.
+`normal` is a `vector2` or an explicit runtime `null`. `oldManifold` is an object or explicit
+runtime `null`. Begin/end records have `normal=null`, `oldManifold=null`, and empty `points` and
+`impulses`. Pre-solve records have current points/normal, an old-manifold object, and empty
+`impulses`. Post-solve records have current points/normal and impulses, with
+`oldManifold=null`. Zero is never substituted for an unavailable phase value.
+
+A representative begin record is:
+
+```text
+phase: BEGIN
+key: {fixtureAId: ball, childIndexA: 0, fixtureBId: ground, childIndexB: 0}
+endpointA: {bodyId: ball-body, fixtureId: ball, childIndex: 0, sensor: false}
+endpointB: {bodyId: ground-body, fixtureId: ground, childIndex: 0, sensor: false}
+sensor: false
+touching: true
+enabled: true
+availability: ENDPOINTS_ONLY
+points: []
+normal: null
+impulses: []
+oldManifold: null
+occurrence: 1
+truncations: []
+```
+
+Before the first captured step, and after a reset baseline, `latestTick` is explicit null,
+`records` and `activeContacts` are empty, and `complete` is false. Only a completed tick with
+`complete=true`, no relevant core snapshot truncation, and an empty exact active/record set can
+support a negative contact conclusion.
+
+### Exact contact event schema
+
+Each retained record emits one of:
+
+```text
+box2d.contact.begin
+box2d.contact.end
+box2d.contact.preSolve
+box2d.contact.postSolve
+```
+
+The event type supplies the phase. Canonical body A is `subject`; canonical body B is `source`. The
+event's own `frameId` is the runtime-frame correlation. Its exact attribute set is the record field
+set without `phase`, plus world/tick correlation:
+
+```text
+worldId
+simulationTickId
+executionEpochId
+epochTick
+key
+endpointA
+endpointB
+sensor
+touching
+enabled
+availability
+points
+normal
+impulses
+oldManifold
+occurrence
+truncations
+```
+
+There is deliberately no duplicate `runtimeFrameId` attribute. Explicit null rules and every nested
+schema are identical to the entity record. Records and emitted events use stable phase/key/occurrence
+ordering after selecting the configured bounded native-delivery prefix.
+
+### Query through protocol and MCP
+
+No Box2D command or transport dependency is added. Use the existing exact entity, entity-history,
+and event commands. MCP examples:
+
+```json
+{"name":"runtime_entity","arguments":{"sessionId":"game","entityId":"box2d.contacts.main","fromFrame":0,"toFrame":60,"limit":60}}
+```
+
+```json
+{"name":"runtime_entity_history","arguments":{"sessionId":"game","entityId":"box2d.contacts.main","fromFrame":0,"toFrame":60,"versionOffset":0,"versionLimit":60}}
+```
+
+```json
+{"name":"runtime_events","arguments":{"sessionId":"game","fromFrame":1,"toFrame":60,"eventType":"box2d.contact.begin","subject":"box2d.body.ball-body","source":"box2d.body.ground-body","limit":60}}
+```
+
+The equivalent transport-neutral protocol commands are `RuntimeCommand.Entity`,
+`RuntimeCommand.EntityHistory`, and `RuntimeCommand.Events`. Protocol 2.0 or 2.1 is required for
+entity history; the existing frozen entity/event command shapes remain unchanged. Protocol/MCP
+responses carry the same closed `RuntimeValue` objects described above. Check both adapter-level
+`complete`/`truncations` and the enclosing `EntitySnapshot.truncations` or query retention metadata.
+
+### Bounds, diagnostics, and failure handling
+
+The adapter selects a bounded callback prefix, bounds every retained callback value, and then sorts
+the retained evidence. It does not promise that different Box2D native versions or platforms
+deliver callbacks in the same order. The deterministic claim is limited to selected observations
+under the same native library, platform, configuration, initial state, fixed step, and scheduled
+input.
+
+Contact-level truncation dimensions are closed strings:
+
+```text
+box2d.contact.records
+box2d.contact.active
+box2d.contact.points
+box2d.contact.impulses
+box2d.contact.oldManifoldPoints
+box2d.contact.diagnostics
+```
+
+Each truncation contains `dimension`, saturating `observed`, `retained`, and `limit`. Relevant
+diagnostics make `complete=false`. The closed diagnostic codes are:
+
+```text
+UNMAPPED_ENDPOINT
+CALLBACK_OUTSIDE_TICK
+CALLBACK_AFTER_CLOSE
+RECORD_LIMIT_REACHED
+ACTIVE_LIMIT_REACHED
+POINT_LIMIT_REACHED
+IMPULSE_LIMIT_REACHED
+OLD_MANIFOLD_LIMIT_REACHED
+ENDPOINT_CHANGED
+MISSING_CORRELATION
+APPLICATION_LISTENER_FAILED
+PHASE_VALUE_UNAVAILABLE
+STEP_FAILED
+EPOCH_RESET
+WORLD_REBOUND
+```
+
+An unregistered callback endpoint increments `unmappedContacts` and `UNMAPPED_ENDPOINT` but exposes
+no partial endpoint identity. A callback outside `captureStep` copies no native endpoint detail.
+An application listener or step failure is rethrown after bounded finalization. Agent logic should
+surface the structured facts instead of treating an empty list as success, for example:
+
+```text
+expected contact ball-body <-> ground-body
+no complete contact evidence observed
+
+contact entity:
+  simulationTickId: 42
+  callbackCounts: {observed: 129, retained: 128, limit: 128}
+  complete: false
+  diagnostics: [{code: RECORD_LIMIT_REACHED, observed: 1}]
+  truncations:
+    [{dimension: box2d.contact.records, observed: 129, retained: 128, limit: 128}]
+```
+
+### Reset, rebind, and close
+
+A scenario reset or checkpoint restore starts a new execution epoch. Its baseline clears the active
+set and typed `Box2dContacts.ticks` history, publishes `latestTick=null`, and reports `EPOCH_RESET`;
+session simulation tick IDs still are not reused. World rebind clears contact evidence and reports
+`WORLD_REBOUND`. Install the same explicit listener or composition on the replacement world before
+stepping it. Fixture rebind/unregister clears affected active keys and reports `ENDPOINT_CHANGED`.
+These operations retain incomplete evidence instead of silently preserving a stale native contact.
+
+Close `Box2dContacts` or its parent `Box2dInspection` on the application thread and outside an open
+frame or captured step. Close is idempotent, removes live contact providers and listener-composition
+references, clears typed contact history, and never calls a native dispose operation. Calls through
+the closed handle fail with stable lifecycle errors. Completed runtime frames and events already
+copied into core remain immutable until ordinary core retention evicts them.
+
+Contact events state only that Box2D delivered a callback for registered endpoints. The runtime
+never infers that a player landed, took damage, died, scored, or caused another gameplay outcome.
+Emit an application semantic event or explicit attribution when an agent needs that causality.

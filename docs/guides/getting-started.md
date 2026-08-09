@@ -88,6 +88,11 @@ box2d.registerWorld("main", world, new Box2dWorldSpec(
         new Box2dUnitTransform(100))); // 100 render units per physics metre
 ballRegistration = box2d.registerBody("ball", "main", ballBody);
 box2d.registerFixture("ball-shape", "ball", ballFixture);
+contacts = box2d.registerContacts(
+        "main",
+        Box2dContactLimits.developmentDefaults(),
+        Box2dContactPolicy.developmentDefaults());
+world.setContactListener(contacts.listener()); // explicit application-owned installation
 ```
 
 Register before `runtime.start()` so frame 0 contains the initial physics state. The adapter exposes
@@ -96,13 +101,32 @@ protocol, and MCP entity queries need no Box2D-specific transport command. Regis
 before their joint. For a chain fixture, supply `Box2dFixtureSpec.chainLoop(boolean)` because the
 libGDX wrapper cannot reliably recover that Java-side construction choice.
 
+Capture the application-owned step inside the acknowledged fixed-step callback. Do not also call
+`world.step` from render delta:
+
+```java
+runtime.simulation().tick(16_666_667L, suppliedDeltaNanos -> {
+    contacts.captureStep(() -> world.step(
+            suppliedDeltaNanos / 1_000_000_000f, 6, 2));
+    gameLogicAfterPhysics();
+    return suppliedDeltaNanos;
+});
+```
+
+Registration and `listener()` never install anything on the native world. If the game already has a
+listener, install `contacts.compose(gameContactListener)` instead; evidence runs first and the
+application listener runs second. The default policy retains begin, end, and post-solve evidence and
+omits pre-solve. Contact state appears as `box2d.contacts.main`, while retained callbacks appear as
+`box2d.contact.*` events through the existing entity/history/event queries.
+
 The application still owns `World.step`, rendering, native destruction, and disposal. Before
 destroying/recreating a selected object, close descendants as required or call the stable
 registration's `rebind` method with its replacement. Close the adapter on the capture thread; it
 unregisters providers and releases weak references but never disposes Box2D objects.
 
 See [Inspect registered Box2D state](agent-cookbook.md#inspect-registered-box2d-state) for the
-complete schemas, bounds, queries, and failure recipe.
+registered-object schemas. See [Capture and inspect Box2D contacts](agent-cookbook.md#capture-and-inspect-box2d-contacts)
+for the complete contact API, exact schemas, bounds, queries, lifecycle, and failure recipes.
 
 ## Disabled runtime
 

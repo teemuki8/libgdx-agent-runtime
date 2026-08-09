@@ -192,7 +192,7 @@ Commit: `feat: add Box2D assertion factories`
 - [ ] **Step 1: Write RED protocol tests**
 
 Round-trip every assertion tag at 2.3, assert canonical JSON, invoke the real evaluator through the
-service, and assert 2.1 rejection with the exact required-version message. Send unknown assertion
+service, and assert 2.2 rejection with the exact required-version message. Send unknown assertion
 tags, unknown top-level/nested fields, oversized selectors/requirements, and malformed numeric
 values and assert typed invalid-request failures before evaluation. Re-run frozen 1.7 assertion
 goldens unchanged.

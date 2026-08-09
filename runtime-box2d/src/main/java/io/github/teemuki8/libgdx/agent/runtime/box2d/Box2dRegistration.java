@@ -13,9 +13,9 @@ public interface Box2dRegistration<T> extends AutoCloseable {
     /**
      * Rebinds this stable registration to a recreated application-owned native object.
      *
-     * <p>The call requires the application/capture thread and no open runtime frame. Fixture
-     * registrations retain their original explicit metadata; unregister and register again when
-     * that testimony changes.
+     * <p>The call requires the application/capture thread and no open runtime frame. World and
+     * fixture registrations retain their original explicit metadata; unregister and register
+     * again when that testimony changes.
      */
     void rebind(T value);
 

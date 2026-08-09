@@ -235,9 +235,10 @@ The adapter stores weak native references and owns neither discovery nor lifecyc
 a native object, remove dependent fixture/joint registrations as required and call `rebind` on the
 stable registration. Close registrations from leaves to roots, or close `Box2dInspection` to remove
 all providers. The adapter never calls `World.dispose`, `Shape.dispose`, or any native destroy
-operation; application code remains responsible for those objects. Fixture rebind preserves its
-registered `Box2dFixtureSpec`; unregister and register again when chain loop testimony changes.
-Rebind and close reject an open runtime frame without changing the registration.
+operation; application code remains responsible for those objects. World and fixture rebind
+preserve their registered `Box2dWorldSpec` or `Box2dFixtureSpec`; unregister and register again when
+solver/unit or chain-loop testimony changes. Rebind and close reject an open runtime frame without
+changing the registration.
 
 Authors of other adapter modules that change an object behind an already registered entity provider
 must call `runtime.entities().requireProviderMutationAllowed()` immediately before the swap. This

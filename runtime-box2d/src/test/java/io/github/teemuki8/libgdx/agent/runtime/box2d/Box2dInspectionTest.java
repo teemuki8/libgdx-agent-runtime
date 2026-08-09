@@ -202,6 +202,8 @@ final class Box2dInspectionTest {
             assertEquals(EntityId.of("box2d.world.main"), registration.runtimeEntityId());
             assertEquals(RuntimeValues.vector2(2, -8), property(runtime.entity(
                     registration.runtimeEntityId()).orElseThrow(), "gravity"));
+            assertEquals(RuntimeValues.decimal(100), property(runtime.entity(
+                    registration.runtimeEntityId()).orElseThrow(), "renderUnitsPerMeter"));
         } finally {
             runtime.close();
             inspection.close();

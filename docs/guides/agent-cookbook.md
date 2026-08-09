@@ -1174,7 +1174,7 @@ The fixture also locks down the negative matrix agents need when a game is broke
 | 100 render units/metre violates an application-supplied 10-unit extent | assertion `FAIL` with observed `renderPosition` |
 | polygon vertices and contact callbacks exceed configured limits | `SHAPE_VERTICES_TRUNCATED`, `RECORD_LIMIT_REACHED`, and `complete=false` |
 | colliding fixture endpoint is not registered | `UNMAPPED_ENDPOINT`, `complete=false`, and contact assertion `INCONCLUSIVE` |
-| one repeat changes scheduled input testimony | `DIVERGED` at epoch tick 1 with `linearVelocity` as the first differing fact |
+| fault mode alters application handling of the same scheduled input on one repeat | `DIVERGED` at epoch tick 1 with `linearVelocity` as the first differing fact |
 
 These faults are separate fixtures/configurations. Do not combine incomplete evidence with a
 successful claim or infer a scale meaning that the application did not supply.

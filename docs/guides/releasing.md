@@ -53,7 +53,7 @@ published.
 
 The protected `Manage Maven Central` workflow can inspect Portal deployments or perform the final
 publish/drop operation. Run it from a temporary `v*` management tag so the workflow can access the
-protected environment. Publishing verifies the exact four coordinates, `VALIDATED` state, embedded
+protected environment. Publishing verifies the exact five coordinates, `VALIDATED` state, embedded
 license and notice, and maintainer metadata before calling Sonatype's immutable publish endpoint.
 
 Use `inspect` first and copy the corrected candidate's deployment UUID. Use `publish` only for the

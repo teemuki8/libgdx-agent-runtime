@@ -18,6 +18,7 @@ dependencyResolutionManagement {
 
 include(
     "runtime-core",
+    "runtime-box2d",
     "runtime-libgdx",
     "runtime-protocol",
     "runtime-mcp",

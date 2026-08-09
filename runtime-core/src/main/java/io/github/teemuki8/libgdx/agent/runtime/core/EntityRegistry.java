@@ -13,6 +13,17 @@ public final class EntityRegistry {
         this.runtime = runtime;
     }
 
+    /**
+     * Validates that an adapter may mutate the target behind an existing provider now.
+     *
+     * <p>This performs no mutation. Adapter registration handles use it to preserve the runtime's
+     * capture-thread, open-frame, and closed-runtime guarantees while rebinding application-owned
+     * objects.
+     */
+    public void requireProviderMutationAllowed() {
+        runtime.requireMutableRegistration();
+    }
+
     /** Registers one stable entity provider. */
     public EntityRegistration register(EntityId id, EntityType type, Supplier<String> displayName,
             Consumer<EntityInspector> declaration) {

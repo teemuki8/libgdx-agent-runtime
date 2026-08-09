@@ -169,3 +169,140 @@ before retrying or resetting.
 
 Close the runtime on its capture thread. Completed immutable tick pages remain queryable after
 close; no new tick is accepted.
+
+## Inspect registered Box2D state
+
+Use this development-version API when an agent needs authoritative physics evidence without
+reflection or native-pointer identities. Add `agent-runtime-box2d`, create the adapter on the
+runtime capture thread, and explicitly register the useful subset before `runtime.start()`:
+
+```java
+Box2dInspection physics = new Box2dInspection(
+        runtime, Box2dAdapterLimits.developmentDefaults());
+Box2dRegistration<World> mainWorld = physics.registerWorld(
+        "main", world, new Box2dWorldSpec(
+                true, true, true, 6, 2, OptionalDouble.of(60),
+                new Box2dUnitTransform(100)));
+Box2dRegistration<Body> ball = physics.registerBody("ball", "main", ballBody);
+Box2dRegistration<Fixture> ballShape = physics.registerFixture(
+        "ball-shape", "ball", ballFixture);
+Box2dRegistration<Joint> spring = physics.registerJoint(
+        "spring", "main", springJoint); // register both endpoint bodies first
+```
+
+`Box2dUnitTransform(100)` explicitly means one physics metre equals 100 application render units.
+Use `physicsToRender` and `renderToPhysics` for finite scalar or `Box2dVector` conversion. The
+runtime never assumes that render units are pixels and does not invent a globally correct scale.
+
+Registration produces ordinary runtime entities with stable IDs and exact closed property sets:
+
+```text
+box2d.world.<id> / box2d.world
+  id, runtimeEntityId, gravity, sleepingAllowed, warmStarting, continuousPhysics,
+  velocityIterations, positionIterations, fixedStepNanos,
+  registeredBodyCount, registeredFixtureCount, registeredJointCount,
+  totalBodyCount, totalFixtureCount, totalJointCount, totalContactCount,
+  locked, renderUnitsPerMeter
+
+box2d.body.<id> / box2d.body
+  id, runtimeEntityId, worldId, bodyType, position, angleRadians,
+  linearVelocity, angularVelocity, mass, inertia, gravityScale,
+  linearDamping, angularDamping, awake, active, bullet, fixedRotation,
+  sleepingAllowed, registeredFixtureCount, totalFixtureCount
+
+box2d.fixture.<id> / box2d.fixture
+  id, runtimeEntityId, bodyId, shapeType, sensor, density, friction,
+  restitution, categoryBits, maskBits, groupIndex, geometry, diagnostics
+
+box2d.joint.<id> / box2d.joint
+  id, runtimeEntityId, worldId, jointType, bodyAId, bodyBId,
+  anchorA, anchorB, active, collideConnected, reactionForce,
+  reactionTorque, detail
+```
+
+The closed `geometry` variants are:
+
+```text
+CIRCLE:  type, radius, localCenter
+POLYGON: type, vertices, observedVertices, retainedVertices, vertexLimit, truncated
+EDGE:    type, endpoint1, endpoint2, hasAdjacent0, adjacent0,
+         hasAdjacent3, adjacent3
+CHAIN:   type, vertices, observedVertices, retainedVertices, vertexLimit, truncated, loop
+```
+
+`vertices` is the ordered bounded native prefix. Missing edge-adjacent vertices are explicit
+`null`. Chain registration must supply `Box2dFixtureSpec.chainLoop(true|false)`. A truncated polygon
+or chain also adds `SHAPE_VERTICES_TRUNCATED` to the bounded fixture `diagnostics` list.
+
+The joint `detail` object is also closed:
+
+```text
+DISTANCE:  type, localAnchorA, localAnchorB, length, frequency, dampingRatio
+REVOLUTE:  type, localAnchorA, localAnchorB, referenceAngle, jointAngle, jointSpeed,
+           limitEnabled, lowerLimit, upperLimit, motorEnabled, motorSpeed, maxMotorTorque
+PRISMATIC: type, localAnchorA, localAnchorB, localAxisA, referenceAngle, translation,
+           jointSpeed, limitEnabled, lowerLimit, upperLimit, motorEnabled, motorSpeed,
+           maxMotorForce
+GENERIC:   type, nativeJointType
+```
+
+Reaction force and torque are runtime `null` unless `Box2dWorldSpec.inverseStep` explicitly supplies
+a positive finite value representable by Box2D's float API.
+
+Inspect the result through the existing tool:
+
+```json
+{"name":"runtime_entity","arguments":{"sessionId":"game","entityId":"box2d.body.ball","fromFrame":0,"toFrame":60,"limit":60}}
+```
+
+A representative structured `latest` fragment is:
+
+```json
+{
+  "id": {"value": "box2d.body.ball"},
+  "type": {"value": "box2d.body"},
+  "properties": [
+    {"name": "active", "value": {"valueType": "boolean", "value": true}},
+    {"name": "angleRadians", "value": {"valueType": "decimal", "value": 0}},
+    {"name": "bodyType", "value": {"valueType": "enum", "value": "DYNAMIC"}},
+    {"name": "position", "value": {
+      "valueType": "vector2",
+      "x": {"valueType": "decimal", "value": 5},
+      "y": {"valueType": "decimal", "value": 0.51}
+    }}
+  ],
+  "truncations": []
+}
+```
+
+Properties are sorted by name in actual responses; the fragment omits unchanged keys only for
+readability. Query `truncations` before trusting a negative or complete-state conclusion.
+
+For a fixed-step game, capture happens after `world.step` inside the acknowledged simulation tick:
+
+```java
+runtime.simulation().tick(FIXED_STEP_NANOS, supplied -> {
+    world.step((float) (supplied / 1_000_000_000.0), 6, 2);
+    gameLogicAfterPhysics();
+    return supplied;
+});
+```
+
+`Box2dAdapterLimits` bounds worlds, bodies, fixtures, joints, copied shape vertices, the largest
+closed property schema, and diagnostics. Core capture limits still apply afterward; always inspect
+`EntitySnapshot.truncations()` as well as fixture diagnostics. Capacity overflow, duplicate IDs or
+native wrappers, missing parents/endpoints, wrong-world relationships, missing chain-loop
+testimony, wrong-thread use, and use after close fail explicitly.
+
+The adapter stores weak native references and owns neither discovery nor lifecycle. Before replacing
+a native object, remove dependent fixture/joint registrations as required and call `rebind` on the
+stable registration. Close registrations from leaves to roots, or close `Box2dInspection` to remove
+all providers. The adapter never calls `World.dispose`, `Shape.dispose`, or any native destroy
+operation; application code remains responsible for those objects. World and fixture rebind
+preserve their registered `Box2dWorldSpec` or `Box2dFixtureSpec`; unregister and register again when
+solver/unit or chain-loop testimony changes. Rebind and close reject an open runtime frame without
+changing the registration.
+
+Authors of other adapter modules that change an object behind an already registered entity provider
+must call `runtime.entities().requireProviderMutationAllowed()` immediately before the swap. This
+public guard preserves capture-thread ownership and rejects open-frame or closed-runtime mutation.

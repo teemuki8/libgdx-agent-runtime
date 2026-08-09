@@ -27,6 +27,9 @@ dependencies {
 ```
 
 V1 requires Java 25. It qualifies LWJGL3 desktop only; Android, iOS, and web are not release claims.
+The development-version Box2D adapter can be added with
+`io.github.teemuki8:agent-runtime-box2d:2.0.1-SNAPSHOT`; it is not part of the published 2.0.0
+release.
 
 ## Capture a fixed-step simulation
 
@@ -80,6 +83,34 @@ rendered frame — see [Frame correlation](frame-correlation.md).
 
 See the [agent cookbook](agent-cookbook.md#fixed-step-simulation-ticks) for inspection and failure
 recipes.
+
+## Register selected Box2D state
+
+Create `Box2dInspection` on the runtime capture thread and register only the native objects an agent
+should see. IDs are application-owned and remain stable across native object replacement:
+
+```java
+box2d = new Box2dInspection(runtime, Box2dAdapterLimits.developmentDefaults());
+box2d.registerWorld("main", world, new Box2dWorldSpec(
+        true, true, true, 6, 2, OptionalDouble.of(60),
+        new Box2dUnitTransform(100))); // 100 render units per physics metre
+ballRegistration = box2d.registerBody("ball", "main", ballBody);
+box2d.registerFixture("ball-shape", "ball", ballFixture);
+```
+
+Register before `runtime.start()` so frame 0 contains the initial physics state. The adapter exposes
+the entities as `box2d.world.main`, `box2d.body.ball`, and `box2d.fixture.ball-shape`; existing Java,
+protocol, and MCP entity queries need no Box2D-specific transport command. Register joint endpoints
+before their joint. For a chain fixture, supply `Box2dFixtureSpec.chainLoop(boolean)` because the
+libGDX wrapper cannot reliably recover that Java-side construction choice.
+
+The application still owns `World.step`, rendering, native destruction, and disposal. Before
+destroying/recreating a selected object, close descendants as required or call the stable
+registration's `rebind` method with its replacement. Close the adapter on the capture thread; it
+unregisters providers and releases weak references but never disposes Box2D objects.
+
+See [Inspect registered Box2D state](agent-cookbook.md#inspect-registered-box2d-state) for the
+complete schemas, bounds, queries, and failure recipe.
 
 ## Disabled runtime
 

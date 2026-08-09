@@ -159,3 +159,15 @@ Disabled runtimes retain no providers or frames and perform no serialization.
     The helper creates no thread, timer, scheduler, sleep, render call, or disposal ownership.
     Protocol 2.2 adds fixed-step state/report inspection and configured-step advance while leaving
     protocols 1.0-1.13, 2.0, and 2.1 closed and unchanged.
+36. Box2D inspection is an optional adapter module directed toward `runtime-core`; core, protocol,
+    and MCP have no Box2D dependency. Applications explicitly register selected worlds, bodies,
+    fixtures, and joints under stable IDs. The adapter publishes closed `box2d.*` entity schemas
+    through existing snapshot/entity paths, retains only weak native references, bounds every
+    registration class, shape vertex list, property schema, and diagnostic list, and reports
+    adapter-level vertex truncation. Application testimony supplies solver settings, chain-loop
+    state, reaction-force inverse step, and the physics-metre/render-unit transform. The adapter
+    never reflects, traverses a world for discovery, owns stepping/rendering, disposes native
+    objects, infers pixel semantics, or hides runtime capture truncation.
+    `EntityRegistry.requireProviderMutationAllowed()` is the generic no-mutation preflight for an
+    adapter that rebinds an existing provider target; it preserves the same capture-thread,
+    open-frame, and closed-runtime lifecycle as provider registration.

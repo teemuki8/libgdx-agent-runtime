@@ -78,6 +78,11 @@ public record Box2dContactTick(SimulationTickId simulationTickId,
         @Override public int compareTo(ActiveContact other) {
             return key.compareTo(other.key);
         }
+
+        /** Returns whether either immediately copied endpoint was a sensor. */
+        public boolean sensor() {
+            return endpointA.sensor() || endpointB.sensor();
+        }
     }
 
     /** Closed agent-facing contact diagnostic code. */

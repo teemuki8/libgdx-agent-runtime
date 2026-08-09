@@ -33,6 +33,7 @@ public final class Box2dInspection implements AutoCloseable {
     private final LinkedHashMap<String, FixtureEntry> fixtures = new LinkedHashMap<>();
     private final LinkedHashMap<String, JointEntry> joints = new LinkedHashMap<>();
     private final LinkedHashMap<String, Box2dContacts> contacts = new LinkedHashMap<>();
+    private final LinkedHashMap<String, Long> callbacksAfterClose = new LinkedHashMap<>();
     private boolean closed;
 
     /** Creates an adapter owned by the calling application/capture thread. */
@@ -141,6 +142,7 @@ public final class Box2dInspection implements AutoCloseable {
         }
         Box2dContacts registration = new Box2dContacts(
                 runtime, this, id, contactLimits, policy, ownerThread);
+        registration.registerEntity();
         contacts.put(id, registration);
         return registration;
     }
@@ -167,6 +169,7 @@ public final class Box2dInspection implements AutoCloseable {
             worlds.values().forEach(Entry::closeProvider);
         }
         contacts.clear();
+        callbacksAfterClose.clear();
         closed = true;
         clearEntries(joints);
         clearEntries(fixtures);
@@ -317,6 +320,7 @@ public final class Box2dInspection implements AutoCloseable {
             }
             requireUniqueNative(value, joints, entry);
         }
+        notifyContactMutation(entry);
         entry.rebind(value);
     }
 
@@ -337,9 +341,13 @@ public final class Box2dInspection implements AutoCloseable {
         if (runtime.status() != RuntimeStatus.CLOSED) {
             entry.closeProvider();
         }
+        notifyContactMutation(entry);
         entry.closed = true;
         entry.reference.clear();
         map(entry).remove(entry.id, entry);
+        if (entry instanceof WorldEntry) {
+            callbacksAfterClose.remove(entry.id);
+        }
     }
 
     Optional<ContactMapping> contactMapping(String worldId, Fixture nativeA, int childA,
@@ -373,6 +381,36 @@ public final class Box2dInspection implements AutoCloseable {
 
     void unregisterContacts(String worldId, Box2dContacts registration) {
         contacts.remove(worldId, registration);
+    }
+
+    void callbackAfterContactsClosed(String worldId) {
+        if (!worlds.containsKey(worldId)) {
+            return;
+        }
+        callbacksAfterClose.compute(worldId, (ignored, count) ->
+                count == null ? 1L : count == Long.MAX_VALUE ? count : count + 1);
+    }
+
+    long takeCallbacksAfterClose(String worldId) {
+        Long observed = callbacksAfterClose.remove(worldId);
+        return observed == null ? 0 : observed;
+    }
+
+    private void notifyContactMutation(Entry<?> entry) {
+        if (entry instanceof WorldEntry) {
+            Box2dContacts registration = contacts.get(entry.id);
+            if (registration != null) {
+                registration.worldChanged();
+            }
+        } else if (entry instanceof FixtureEntry fixture) {
+            BodyEntry body = bodies.get(fixture.parentId);
+            if (body != null) {
+                Box2dContacts registration = contacts.get(body.parentId);
+                if (registration != null) {
+                    registration.fixtureChanged();
+                }
+            }
+        }
     }
 
     private FixtureEntry fixtureEntry(Fixture fixture) {

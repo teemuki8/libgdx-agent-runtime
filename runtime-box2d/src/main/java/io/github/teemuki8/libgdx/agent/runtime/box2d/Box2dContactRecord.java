@@ -52,6 +52,11 @@ public record Box2dContactRecord(Phase phase, Key key, Endpoint endpointA, Endpo
         return keyOrder != 0 ? keyOrder : Long.compare(occurrence, other.occurrence);
     }
 
+    /** Returns whether either immediately copied endpoint was a sensor. */
+    public boolean sensor() {
+        return endpointA.sensor() || endpointB.sensor();
+    }
+
     /** Native callback phase. */
     public enum Phase {
         /** A contact began. */ BEGIN,

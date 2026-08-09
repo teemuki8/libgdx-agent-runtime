@@ -6,6 +6,12 @@ import com.badlogic.gdx.physics.box2d.ContactListener;
 import com.badlogic.gdx.physics.box2d.Manifold;
 import io.github.teemuki8.libgdx.agent.runtime.core.ActiveSimulationTick;
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
+import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
+import io.github.teemuki8.libgdx.agent.runtime.core.EntityInspector;
+import io.github.teemuki8.libgdx.agent.runtime.core.EntityRegistration;
+import io.github.teemuki8.libgdx.agent.runtime.core.EntityType;
+import io.github.teemuki8.libgdx.agent.runtime.core.ExecutionEpochId;
+import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationTickId;
 import io.github.teemuki8.libgdx.agent.runtime.core.Truncation;
 import java.util.ArrayDeque;
@@ -29,10 +35,15 @@ public final class Box2dContacts implements AutoCloseable {
     private final ArrayDeque<Box2dContactTick> history = new ArrayDeque<>();
     private final TreeMap<Box2dContactRecord.Key, Box2dContactTick.ActiveContact> active =
             new TreeMap<>();
+    private final EnumMap<Box2dContactTick.DiagnosticCode, Long> lifecycleDiagnostics =
+            new EnumMap<>(Box2dContactTick.DiagnosticCode.class);
     private ContactListener applicationListener;
     private ContactListener composedListener;
+    private EntityRegistration entityRegistration;
     private Capture capture;
     private SimulationTickId lastCapturedTick;
+    private Box2dContactTick latestTick;
+    private ExecutionEpochId observedEpoch;
     private long activeObserved;
     private long outsideCallbacks;
     private boolean closed;
@@ -45,6 +56,13 @@ public final class Box2dContacts implements AutoCloseable {
         this.limits = Objects.requireNonNull(limits, "limits");
         this.policy = Objects.requireNonNull(policy, "policy");
         this.ownerThread = Objects.requireNonNull(ownerThread, "ownerThread");
+        observedEpoch = runtime.currentEpoch();
+    }
+
+    void registerEntity() {
+        EntityId entityId = EntityId.of("box2d.contacts." + worldId);
+        entityRegistration = runtime.entities().register(entityId, EntityType.of("box2d.contacts"),
+                () -> worldId, this::declareEntity);
     }
 
     /** Returns the evidence listener without installing it on the application-owned world. */
@@ -83,6 +101,13 @@ public final class Box2dContacts implements AutoCloseable {
                     "Box2D contact capture allows one world step per simulation tick");
         }
         Capture next = new Capture(activeTick);
+        lifecycleDiagnostics.forEach(next::diagnostic);
+        lifecycleDiagnostics.clear();
+        long afterCloseCallbacks = inspection.takeCallbacksAfterClose(worldId);
+        if (afterCloseCallbacks > 0) {
+            next.diagnostic(Box2dContactTick.DiagnosticCode.CALLBACK_AFTER_CLOSE,
+                    afterCloseCallbacks);
+        }
         if (outsideCallbacks > 0) {
             next.diagnostic(Box2dContactTick.DiagnosticCode.CALLBACK_OUTSIDE_TICK,
                     outsideCallbacks);
@@ -169,6 +194,25 @@ public final class Box2dContacts implements AutoCloseable {
         closeInternal(false);
     }
 
+    void worldChanged() {
+        requireOwnerOpen();
+        resetCurrentEvidence(Box2dContactTick.DiagnosticCode.WORLD_REBOUND);
+    }
+
+    void fixtureChanged() {
+        requireOwnerOpen();
+        resetCurrentEvidence(Box2dContactTick.DiagnosticCode.ENDPOINT_CHANGED);
+    }
+
+    private void resetCurrentEvidence(Box2dContactTick.DiagnosticCode code) {
+        latestTick = null;
+        active.clear();
+        activeObserved = 0;
+        outsideCallbacks = 0;
+        lifecycleDiagnostics.clear();
+        lifecycleDiagnostics.put(code, 1L);
+    }
+
     private void closeInternal(boolean unregister) {
         if (closed) {
             return;
@@ -176,14 +220,24 @@ public final class Box2dContacts implements AutoCloseable {
         if (capture != null) {
             throw new IllegalStateException("cannot close Box2D contacts during world-step capture");
         }
+        if (runtime.status()
+                != io.github.teemuki8.libgdx.agent.runtime.core.RuntimeStatus.CLOSED) {
+            runtime.entities().requireProviderMutationAllowed();
+        }
         closed = true;
         applicationListener = null;
         composedListener = null;
         active.clear();
         activeObserved = 0;
+        latestTick = null;
         synchronized (historyLock) {
             history.clear();
         }
+        if (entityRegistration != null
+                && runtime.status() != io.github.teemuki8.libgdx.agent.runtime.core.RuntimeStatus.CLOSED) {
+            entityRegistration.close();
+        }
+        entityRegistration = null;
         if (unregister) {
             inspection.unregisterContacts(worldId, this);
         }
@@ -191,7 +245,9 @@ public final class Box2dContacts implements AutoCloseable {
 
     private void callback(Box2dContactRecord.Phase phase, Contact contact,
             Manifold oldManifold, ContactImpulse impulse) {
+        requireOwner();
         if (closed) {
+            inspection.callbackAfterContactsClosed(worldId);
             return;
         }
         Capture current = capture;
@@ -242,6 +298,8 @@ public final class Box2dContacts implements AutoCloseable {
             old = Optional.of(oldCopy.value());
             truncations.addAll(manifold.truncations());
             truncations.addAll(oldCopy.truncations());
+            oldCopy.truncations().forEach(
+                    truncation -> current.diagnostic(diagnosticFor(truncation), 1));
             availability = Box2dContactRecord.Availability.CURRENT_AND_OLD_MANIFOLD;
         } else if (phase == Box2dContactRecord.Phase.POST_SOLVE) {
             Box2dContactCopies.CurrentManifold manifold = Box2dContactCopies.current(
@@ -353,6 +411,83 @@ public final class Box2dContacts implements AutoCloseable {
             }
             history.addLast(tick);
         }
+        latestTick = tick;
+        tick.records().forEach(record -> runtime.emit(
+                Box2dContactValues.event(worldId, tick, record)));
+    }
+
+    private void declareEntity(EntityInspector inspector) {
+        inspector.property("worldId", () -> {
+            prepareProviderCapture();
+            var value = RuntimeValues.string(worldId);
+            lifecycleDiagnostics.clear();
+            return value;
+        })
+                .property("runtimeEntityId",
+                        () -> RuntimeValues.string("box2d.contacts." + worldId))
+                .property("policy", () -> Box2dContactValues.policy(policy))
+                .property("limits", () -> Box2dContactValues.limits(limits))
+                .property("latestTick", () -> Box2dContactValues.latestTick(latestTick))
+                .property("records", () -> Box2dContactValues.records(
+                        latestTick == null ? List.of() : latestTick.records()))
+                .property("activeContacts", () -> {
+                    prepareProviderCapture();
+                    return Box2dContactValues.activeContacts(
+                            latestTick == null ? List.of() : latestTick.activeContacts());
+                })
+                .property("callbackCounts", () -> Box2dContactValues.counts(
+                        latestTick == null ? 0 : latestTick.callbackRecordsObserved(),
+                        latestTick == null ? 0 : latestTick.callbackRecordsRetained(),
+                        limits.callbackRecordsPerTick()))
+                .property("activeCounts", () -> Box2dContactValues.counts(
+                        latestTick == null ? 0 : latestTick.activeContactsObserved(),
+                        latestTick == null ? 0 : latestTick.activeContactsRetained(),
+                        limits.activeContactsPerTick()))
+                .property("unmappedContacts", () -> latestTick == null
+                        ? 0 : latestTick.unmappedContactsObserved())
+                .property("diagnostics", () -> Box2dContactValues.diagnostics(
+                        currentDiagnostics()))
+                .property("truncations", () -> Box2dContactValues.truncations(
+                        currentTruncations()))
+                .property("complete", () -> latestTick != null && latestTick.complete());
+    }
+
+    private void prepareProviderCapture() {
+        ExecutionEpochId epoch = runtime.currentEpoch();
+        if (epoch.equals(observedEpoch)) {
+            return;
+        }
+        observedEpoch = epoch;
+        latestTick = null;
+        lastCapturedTick = null;
+        active.clear();
+        activeObserved = 0;
+        outsideCallbacks = 0;
+        lifecycleDiagnostics.clear();
+        lifecycleDiagnostics.put(Box2dContactTick.DiagnosticCode.EPOCH_RESET, 1L);
+        synchronized (historyLock) {
+            history.clear();
+        }
+    }
+
+    private List<Box2dContactTick.Diagnostic> currentDiagnostics() {
+        if (latestTick != null) {
+            return latestTick.diagnostics();
+        }
+        return lifecycleDiagnostics.entrySet().stream().limit(limits.diagnosticsPerTick())
+                .map(entry -> new Box2dContactTick.Diagnostic(entry.getKey(), entry.getValue()))
+                .toList();
+    }
+
+    private List<Truncation> currentTruncations() {
+        if (latestTick != null) {
+            return latestTick.truncations();
+        }
+        int retained = Math.min(lifecycleDiagnostics.size(), limits.diagnosticsPerTick());
+        return lifecycleDiagnostics.size() > retained
+                ? List.of(new Truncation("box2d.contact.diagnostics",
+                        lifecycleDiagnostics.size(), retained, limits.diagnosticsPerTick()))
+                : List.of();
     }
 
     private boolean retained(Box2dContactRecord.Phase phase) {

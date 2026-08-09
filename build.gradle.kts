@@ -14,12 +14,14 @@ import java.util.zip.ZipFile
 
 val publishedModules = setOf(
     "runtime-core",
+    "runtime-box2d",
     "runtime-libgdx",
     "runtime-protocol",
     "runtime-mcp",
 )
 val artifactNames = mapOf(
     "runtime-core" to "agent-runtime-core",
+    "runtime-box2d" to "agent-runtime-box2d",
     "runtime-libgdx" to "agent-runtime-libgdx",
     "runtime-protocol" to "agent-runtime-protocol",
     "runtime-mcp" to "agent-runtime-mcp",

@@ -32,10 +32,13 @@ import io.github.teemuki8.libgdx.agent.runtime.core.InputSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeAssertion;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import io.github.teemuki8.libgdx.agent.runtime.core.SessionId;
+import io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertion;
+import io.github.teemuki8.libgdx.agent.runtime.core.SimulationEvidenceRequirement;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationControllerSpec;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayDeque;
@@ -112,9 +115,9 @@ final class RuntimeProtocolTest {
         RuntimeProtocolService service = new RuntimeProtocolService(new RuntimeRegistry());
         RuntimeResponse.Failure version = assertInstanceOf(RuntimeResponse.Failure.class,
                 service.execute(new RuntimeRequest(
-                        new ProtocolVersion(2, 3), "v", null, new RuntimeCommand.Sessions())));
+                        new ProtocolVersion(2, 4), "v", null, new RuntimeCommand.Sessions())));
         assertEquals(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED, version.error().code());
-        assertEquals("1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10,1.11,1.12,1.13,2.0,2.1,2.2",
+        assertEquals("1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10,1.11,1.12,1.13,2.0,2.1,2.2,2.3",
                 version.error().details().get("supported"));
 
         RuntimeResponse.Failure future = assertInstanceOf(RuntimeResponse.Failure.class,
@@ -557,6 +560,129 @@ final class RuntimeProtocolTest {
                              "entityId":{"value":"enemy-1"},"unknown":true}}}
                             """).getBytes(StandardCharsets.UTF_8)));
         }
+    }
+
+    @Test
+    void simulationAssertionUsesAdditiveTwoThreeSchemaAndExactTickEvaluation() {
+        boolean[] awake = {true};
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("simulation-assertion"))
+                .clock(new java.util.concurrent.atomic.AtomicLong()::incrementAndGet)
+                .build();
+        runtime.entities().register(EntityId.of("ball"), EntityType.of("body"), () -> "ball",
+                inspector -> inspector.property("awake", () -> awake[0]));
+        runtime.start();
+        runtime.simulation().tick(1, supplied -> supplied);
+        RuntimeCommand.SimulationAssert command = new RuntimeCommand.SimulationAssert(
+                new SimulationAssertion.PropertyEquals(
+                        EntityId.of("ball"), "awake", RuntimeValues.bool(true)),
+                List.<SimulationEvidenceRequirement>of(), 0, 1, 1, 8);
+
+        RuntimeCommand.SimulationAssert decoded = assertInstanceOf(
+                RuntimeCommand.SimulationAssert.class,
+                ProtocolJson.decodeRequest(ProtocolJson.encode(new RuntimeRequest(
+                        ProtocolVersion.V2_3, "simulation-assert-roundtrip",
+                        "simulation-assertion", command))).command());
+        assertEquals(command, decoded);
+
+        SimulationAssertion.Area area = new SimulationAssertion.Area(
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.TEN, BigDecimal.TEN);
+        SimulationAssertion.EventSelector eventSelector = new SimulationAssertion.EventSelector(
+                EventType.of("contact.begin"), Optional.of(EntityId.of("ball")), Optional.empty(),
+                RuntimeValues.object(RuntimeValues.field("sensor", RuntimeValues.bool(false))));
+        List<SimulationAssertion> variants = List.of(
+                new SimulationAssertion.EntityExists(EntityId.of("ball")),
+                command.assertion(),
+                new SimulationAssertion.ScalarApproximatelyEquals(EntityId.of("ball"), "angle",
+                        BigDecimal.ZERO, new BigDecimal("0.01")),
+                new SimulationAssertion.VectorApproximatelyEquals(EntityId.of("ball"),
+                        "position", RuntimeValues.vector2(1, 2), new BigDecimal("0.01"),
+                        SimulationAssertion.VectorToleranceMode.EUCLIDEAN),
+                new SimulationAssertion.VectorInArea(EntityId.of("ball"), "position", area,
+                        SimulationAssertion.AreaRelation.INSIDE,
+                        SimulationAssertion.Extent.EVERY_TICK),
+                new SimulationAssertion.VectorMagnitudeAtMost(EntityId.of("ball"), "velocity",
+                        BigDecimal.TEN, SimulationAssertion.Extent.FINAL),
+                new SimulationAssertion.VectorDistanceApproximatelyEquals(EntityId.of("ball"),
+                        "position", EntityId.of("ground"), "position", BigDecimal.ONE,
+                        new BigDecimal("0.1")),
+                new SimulationAssertion.WrappedAngleApproximatelyEquals(EntityId.of("ball"),
+                        "angle", BigDecimal.ZERO, new BigDecimal("6.283185307179586"),
+                        new BigDecimal("0.01")),
+                new SimulationAssertion.EventCount(eventSelector,
+                        SimulationAssertion.EventExpectation.EXACT, 1),
+                new SimulationAssertion.ObjectListContains(EntityId.of("contacts"), "active",
+                        RuntimeValues.object(RuntimeValues.field(
+                                "sensor", RuntimeValues.bool(false))),
+                        SimulationAssertion.Extent.FINAL),
+                new SimulationAssertion.AllOf(List.of(
+                        new SimulationAssertion.EntityExists(EntityId.of("ball")),
+                        command.assertion())));
+        for (SimulationAssertion variant : variants) {
+            RuntimeCommand.SimulationAssert variantCommand = new RuntimeCommand.SimulationAssert(
+                    variant, List.of(), 0, 1, 1, 8);
+            RuntimeCommand.SimulationAssert roundTripped = assertInstanceOf(
+                    RuntimeCommand.SimulationAssert.class,
+                    ProtocolJson.decodeRequest(ProtocolJson.encode(new RuntimeRequest(
+                            ProtocolVersion.V2_3, "variant", "simulation-assertion",
+                            variantCommand))).command());
+            assertEquals(variantCommand, roundTripped);
+        }
+
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime)) {
+            RuntimeProtocolService service = new RuntimeProtocolService(registry);
+            RuntimeResponse.Result.SimulationAssertion result = assertInstanceOf(
+                    RuntimeResponse.Result.SimulationAssertion.class,
+                    assertInstanceOf(RuntimeResponse.Success.class, service.execute(
+                            new RuntimeRequest(ProtocolVersion.V2_3, "simulation-assert",
+                                    "simulation-assertion", decoded))).result());
+            assertEquals(AssertionStatus.PASS, result.result().status());
+
+            RuntimeResponse.Failure oldVersion = assertInstanceOf(RuntimeResponse.Failure.class,
+                    service.execute(new RuntimeRequest(ProtocolVersion.V2_2,
+                            "simulation-assert-old", "simulation-assertion", command)));
+            assertEquals(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
+                    oldVersion.error().code());
+            assertEquals("command requires protocol version 2.3", oldVersion.error().message());
+
+            RuntimeResponse.Result.Capabilities capabilities = capabilities(
+                    service, ProtocolVersion.V2_3, "simulation-assert-capabilities",
+                    "simulation-assertion");
+            assertTrue(capabilities.supportedTools().contains("runtime_simulation_assert"));
+            assertTrue(capabilities.capabilityReport().orElseThrow().capabilities().stream()
+                    .anyMatch(value -> value.id().equals("simulation-assertions")
+                            && value.capabilityVersion().equals(ProtocolVersion.V2_3)));
+        }
+
+        assertThrows(ProtocolJson.ProtocolJsonException.class, () ->
+                ProtocolJson.decodeRequest(("""
+                        {"version":{"major":2,"minor":3},"requestId":"bad",
+                         "sessionId":"simulation-assertion","command":{
+                         "type":"simulationAssert","executionEpochId":0,
+                         "fromEpochTick":1,"toEpochTick":1,"evidenceLimit":8,
+                         "evidenceRequirements":[],"assertion":{
+                         "assertionType":"entityExists","entityId":{"value":"ball"},
+                         "unknown":true}}}
+                        """).getBytes(StandardCharsets.UTF_8)));
+        assertEquals(ProtocolVersion.V2_3, ProtocolVersion.CURRENT);
+    }
+
+    @Test
+    void simulationAssertionRejectsOversizedRequirementsBeforeCopyingCallerCollection() {
+        List<SimulationEvidenceRequirement> oversized = new java.util.AbstractList<>() {
+            @Override public SimulationEvidenceRequirement get(int index) {
+                throw new AssertionError("oversized requirements must not be traversed");
+            }
+
+            @Override public int size() {
+                return 9;
+            }
+        };
+
+        assertThrows(IllegalArgumentException.class, () -> new RuntimeCommand.SimulationAssert(
+                new SimulationAssertion.EntityExists(EntityId.of("ball")), oversized,
+                0, 1, 1, 1));
     }
 
     @Test

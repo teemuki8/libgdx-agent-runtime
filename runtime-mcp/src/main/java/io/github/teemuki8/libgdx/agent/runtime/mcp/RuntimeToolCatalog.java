@@ -11,6 +11,9 @@ import io.github.teemuki8.libgdx.agent.runtime.core.ActionParameter;
 import io.github.teemuki8.libgdx.agent.runtime.core.ActionParameterType;
 import io.github.teemuki8.libgdx.agent.runtime.core.AssertionScope;
 import io.github.teemuki8.libgdx.agent.runtime.core.InputDescriptor;
+import io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertion;
+import io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertionScope;
+import io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertionSpec;
 
 /** Immutable catalog of the closed base tools and registered optional tools. */
 public final class RuntimeToolCatalog {
@@ -305,6 +308,11 @@ public final class RuntimeToolCatalog {
                             "timeoutNanos", integer(1, Long.MAX_VALUE)),
                             List.of("controlRequestId", "ticks", "timeoutNanos"))));
         }
+        if (supported.contains("runtime_simulation_assert")) {
+            selected.add(tool("runtime_simulation_assert",
+                    "Evaluate one bounded closed assertion over exact immutable simulation ticks",
+                    simulationAssertionInput()));
+        }
         selected.removeIf(tool -> !supported.contains(tool.name()));
         tools = List.copyOf(selected);
         LinkedHashMap<String, McpSchema.Tool> index = new LinkedHashMap<>();
@@ -582,6 +590,138 @@ public final class RuntimeToolCatalog {
                         List.of("leftFrameId", "rightFrameId", "comparisonScope")));
     }
 
+    private static Map<String, Object> simulationAssertionInput() {
+        Map<String, Object> requirement = object(Map.of(
+                "entityId", string(), "property", string()),
+                List.of("entityId", "property"));
+        LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
+        properties.put("sessionId", string());
+        properties.put("executionEpochId", integer(0, Long.MAX_VALUE));
+        properties.put("fromEpochTick", integer(1, Long.MAX_VALUE));
+        properties.put("toEpochTick", integer(1, Long.MAX_VALUE));
+        properties.put("evidenceLimit", integer(1, SimulationAssertionScope.MAX_EVIDENCE));
+        properties.put("evidenceRequirements", Map.of(
+                "type", "array", "items", requirement,
+                "maxItems", SimulationAssertionSpec.MAX_REQUIREMENTS));
+        properties.put("assertion", Map.of("oneOf", simulationAssertionSchemas()));
+        LinkedHashMap<String, Object> schema = new LinkedHashMap<>(object(properties, List.of(
+                "sessionId", "executionEpochId", "fromEpochTick", "toEpochTick",
+                "evidenceLimit", "evidenceRequirements", "assertion")));
+        schema.put("$defs", Map.of("simulationAssertionValue", simulationValueSchema()));
+        return Map.copyOf(schema);
+    }
+
+    private static List<Map<String, Object>> simulationAssertionSchemas() {
+        ArrayList<Map<String, Object>> leaves = new ArrayList<>();
+        leaves.add(discriminated("entityExists", Map.of("entityId", string()),
+                List.of("entityId")));
+        leaves.add(discriminated("propertyEquals", Map.of(
+                "entityId", string(), "property", string(),
+                "expected", simulationValueSchema()),
+                List.of("entityId", "property", "expected")));
+        leaves.add(discriminated("scalarApproximatelyEquals", Map.of(
+                "entityId", string(), "property", string(),
+                "expected", number(), "absoluteTolerance", nonNegativeNumber()),
+                List.of("entityId", "property", "expected", "absoluteTolerance")));
+        Map<String, Object> vector = vector();
+        leaves.add(discriminated("vectorApproximatelyEquals", Map.of(
+                "entityId", string(), "property", string(), "expected", vector,
+                "absoluteTolerance", nonNegativeNumber(),
+                "toleranceMode", enumeration("COMPONENT", "EUCLIDEAN")),
+                List.of("entityId", "property", "expected", "absoluteTolerance",
+                        "toleranceMode")));
+        leaves.add(discriminated("vectorInArea", Map.of(
+                "entityId", string(), "property", string(), "area", area(),
+                "relation", enumeration("INSIDE", "OUTSIDE"),
+                "extent", enumeration("FINAL", "EVERY_TICK")),
+                List.of("entityId", "property", "area", "relation", "extent")));
+        leaves.add(discriminated("vectorMagnitudeAtMost", Map.of(
+                "entityId", string(), "property", string(), "maximum", nonNegativeNumber(),
+                "extent", enumeration("FINAL", "EVERY_TICK")),
+                List.of("entityId", "property", "maximum", "extent")));
+        LinkedHashMap<String, Object> distance = new LinkedHashMap<>();
+        distance.put("leftEntityId", string());
+        distance.put("leftProperty", string());
+        distance.put("rightEntityId", string());
+        distance.put("rightProperty", string());
+        distance.put("expectedDistance", nonNegativeNumber());
+        distance.put("absoluteTolerance", nonNegativeNumber());
+        leaves.add(discriminated("vectorDistanceApproximatelyEquals", distance,
+                List.copyOf(distance.keySet())));
+        LinkedHashMap<String, Object> angle = new LinkedHashMap<>();
+        angle.put("entityId", string());
+        angle.put("property", string());
+        angle.put("expected", number());
+        angle.put("period", Map.of("type", "number", "exclusiveMinimum", 0));
+        angle.put("absoluteTolerance", nonNegativeNumber());
+        leaves.add(discriminated("wrappedAngleApproximatelyEquals", angle,
+                List.copyOf(angle.keySet())));
+        LinkedHashMap<String, Object> event = new LinkedHashMap<>();
+        event.put("eventType", string());
+        event.put("subject", string());
+        event.put("source", string());
+        event.put("attributes", selectorObject(1));
+        event.put("expectation", enumeration("AT_LEAST_ONE", "NONE", "EXACT"));
+        event.put("exactCount", integer(0, 1_000_000));
+        leaves.add(discriminated("eventCount", event,
+                List.of("eventType", "attributes", "expectation", "exactCount")));
+        leaves.add(discriminated("objectListContains", Map.of(
+                "entityId", string(), "property", string(), "selector", selectorObject(1),
+                "extent", enumeration("FINAL", "EVERY_TICK")),
+                List.of("entityId", "property", "selector", "extent")));
+
+        ArrayList<Map<String, Object>> result = new ArrayList<>(leaves);
+        result.add(discriminated("allOf", Map.of("terms", Map.of(
+                "type", "array", "items", Map.of("oneOf", List.copyOf(leaves)),
+                "minItems", 2, "maxItems", SimulationAssertion.MAX_TERMS)),
+                List.of("terms")));
+        return List.copyOf(result);
+    }
+
+    private static Map<String, Object> area() {
+        return object(Map.of(
+                "minimumX", number(), "minimumY", number(),
+                "maximumX", number(), "maximumY", number()),
+                List.of("minimumX", "minimumY", "maximumX", "maximumY"));
+    }
+
+    private static Map<String, Object> vector() {
+        return object(Map.of("x", number(), "y", number()), List.of("x", "y"));
+    }
+
+    private static Map<String, Object> selectorObject(int depth) {
+        List<Map<String, Object>> values = new ArrayList<>(List.of(
+                Map.of("type", "null"), bool(), number(),
+                Map.of("type", "string", "maxLength", 1_024),
+                taggedEnum(1_024), taggedVector()));
+        if (depth < 4) {
+            values = new ArrayList<>(values);
+            values.add(selectorObject(depth + 1));
+        }
+        LinkedHashMap<String, Object> schema = new LinkedHashMap<>();
+        schema.put("type", "object");
+        schema.put("additionalProperties", Map.of("oneOf", List.copyOf(values)));
+        schema.put("maxProperties", 16);
+        schema.put("propertyNames", reservedTagExclusion());
+        if (depth == 1) {
+            schema.put("x-runtime-maxNodes", 32);
+            schema.put("x-runtime-maxDepth", 4);
+        }
+        return Map.copyOf(schema);
+    }
+
+    private static Map<String, Object> number() {
+        return Map.of("type", "number");
+    }
+
+    private static Map<String, Object> nonNegativeNumber() {
+        return Map.of("type", "number", "minimum", 0);
+    }
+
+    private static Map<String, Object> enumeration(String... values) {
+        return Map.of("type", "string", "enum", List.of(values));
+    }
+
     private static Map<String, Object> discriminated(String type,
             Map<String, Object> additions, List<String> required) {
         LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
@@ -609,6 +749,44 @@ public final class RuntimeToolCatalog {
     private static Map<String, Object> naturalValue() {
         return Map.of("type", List.of(
                 "null", "boolean", "integer", "number", "string", "array", "object"));
+    }
+
+    private static Map<String, Object> simulationValueSchema() {
+        Map<String, Object> child = Map.of("$ref", "#/$defs/simulationAssertionValue");
+        ArrayList<Map<String, Object>> alternatives = new ArrayList<>(List.of(
+                Map.of("type", "null"), bool(), Map.of("type", "integer"), number(),
+                Map.of("type", "string", "maxLength", 4_096),
+                taggedEnum(4_096), taggedVector()));
+        alternatives.add(Map.of(
+                "type", "array", "items", child, "maxItems", 256));
+        LinkedHashMap<String, Object> object = new LinkedHashMap<>();
+        object.put("type", "object");
+        object.put("additionalProperties", child);
+        object.put("maxProperties", 256);
+        object.put("propertyNames", reservedTagExclusion());
+        alternatives.add(Map.copyOf(object));
+        return Map.of(
+                "anyOf", List.copyOf(alternatives),
+                "x-runtime-maxDepth", 16,
+                "x-runtime-maxNodes", 1_024);
+    }
+
+    private static Map<String, Object> taggedEnum(int maximumLength) {
+        return object(Map.of(
+                "$runtimeValue", Map.of("type", "string", "const", "enum"),
+                "value", Map.of("type", "string", "maxLength", maximumLength)),
+                List.of("$runtimeValue", "value"));
+    }
+
+    private static Map<String, Object> taggedVector() {
+        return object(Map.of(
+                "$runtimeValue", Map.of("type", "string", "const", "vector2"),
+                "x", number(), "y", number()),
+                List.of("$runtimeValue", "x", "y"));
+    }
+
+    private static Map<String, Object> reservedTagExclusion() {
+        return Map.of("not", Map.of("const", "$runtimeValue"));
     }
 
     private static Map<String, Object> parameterObject(ActionDescriptor descriptor) {

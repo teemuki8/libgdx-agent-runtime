@@ -22,6 +22,7 @@ import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntitySnapshot;
 import io.github.teemuki8.libgdx.agent.runtime.core.FrameId;
 import io.github.teemuki8.libgdx.agent.runtime.core.FrameSnapshot;
+import io.github.teemuki8.libgdx.agent.runtime.core.MonotonicClock;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeEvent;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
@@ -244,7 +245,94 @@ final class Box2dContactEvidenceTest {
             assertTrue(list(property(reset, "activeContacts")).values().isEmpty());
             assertEquals(RuntimeValues.bool(false), property(reset, "complete"));
             assertDiagnostic(reset, "EPOCH_RESET");
-            assertTrue(contacts.ticks(1, 1, 16).ticks().isEmpty());
+            Box2dContactTickPage evicted = contacts.ticks(1, 1, 16);
+            assertTrue(evicted.ticks().isEmpty());
+            assertEquals(Box2dContactTickPage.RangeStatus.PARTIALLY_EVICTED,
+                    evicted.rangeStatus());
+
+            scene.separate();
+            scene.tick(contacts);
+            Box2dContactTick afterReset = contacts.ticks(2, 2, 16).ticks().getFirst();
+            assertTrue(afterReset.complete());
+            assertTrue(afterReset.activeContacts().isEmpty());
+        }
+    }
+
+    @Test
+    void nestedActiveTruncationRemainsIncompleteWithoutAnotherCallback() {
+        try (Scene scene = new Scene("contact-evidence-sticky-truncation")) {
+            Box2dContacts contacts = scene.registerContacts(
+                    new Box2dContactLimits(64, 8, 1, 2, 2, 8, 8, 8),
+                    Box2dContactPolicy.developmentDefaults());
+            scene.world.setContactListener(contacts.listener());
+            scene.start();
+            scene.tick(contacts);
+            scene.runtime.simulation().tick(STEP_NANOS, supplied -> {
+                contacts.captureStep(() -> {});
+                return supplied;
+            });
+
+            Box2dContactTick later = contacts.ticks(2, 2, 8).ticks().getFirst();
+            assertTrue(later.activeContacts().stream()
+                    .anyMatch(value -> !value.truncations().isEmpty()));
+            assertFalse(later.complete());
+            assertEquals(RuntimeValues.bool(false), property(
+                    scene.runtime.entity(CONTACTS_ID).orElseThrow(), "complete"));
+        }
+    }
+
+    @Test
+    void captureFailureMarksTypedHistoryAsMissingItsClaimedRuntimeFrame() {
+        long[] clockCalls = {0};
+        Scene scene = new Scene("contact-evidence-capture-failure",
+                () -> clockCalls[0]++ == 0 ? 1 : -1);
+        try {
+            Box2dContacts contacts = scene.registerContacts(
+                    Box2dContactLimits.developmentDefaults(),
+                    Box2dContactPolicy.developmentDefaults());
+            scene.world.setContactListener(contacts.listener());
+            scene.start();
+
+            assertThrows(IllegalStateException.class, () -> scene.tick(contacts));
+
+            Box2dContactTick failed = contacts.ticks(1, 1, 16).ticks().getFirst();
+            assertFalse(failed.complete());
+            assertTrue(failed.diagnostics().stream().anyMatch(value ->
+                    value.code() == Box2dContactTick.DiagnosticCode.MISSING_CORRELATION));
+            assertTrue(scene.runtime.frame(new FrameId(1)).isEmpty());
+        } finally {
+            // A deliberate end-frame failure leaves core's frame open by contract.
+            scene.world.dispose();
+        }
+    }
+
+    @Test
+    void fixtureMutationPreservesUnrelatedRetainedActiveContacts() {
+        try (Scene scene = new Scene("contact-evidence-scoped-fixture-reset")) {
+            scene.addSecondBox();
+            Box2dContacts contacts = scene.registerContacts(
+                    Box2dContactLimits.developmentDefaults(),
+                    Box2dContactPolicy.developmentDefaults());
+            scene.world.setContactListener(contacts.listener());
+            scene.start();
+            scene.tick(contacts);
+            assertEquals(2, contacts.ticks(1, 1, 16).ticks().getFirst()
+                    .activeContacts().size());
+
+            scene.ballFixtureRegistration.rebind(scene.createBallFixture());
+            scene.runtime.simulation().tick(STEP_NANOS, supplied -> {
+                contacts.captureStep(() -> {});
+                return supplied;
+            });
+
+            Box2dContactTick after = contacts.ticks(2, 2, 16).ticks().getFirst();
+            assertEquals(1, after.activeContacts().size());
+            assertTrue(after.activeContacts().getFirst().key().fixtureAId().equals("ground")
+                    || after.activeContacts().getFirst().key().fixtureBId().equals("ground"));
+            assertTrue(after.activeContacts().getFirst().key().fixtureAId().equals("second")
+                    || after.activeContacts().getFirst().key().fixtureBId().equals("second"));
+            assertTrue(after.diagnostics().stream().anyMatch(value ->
+                    value.code() == Box2dContactTick.DiagnosticCode.ENDPOINT_CHANGED));
         }
     }
 
@@ -542,6 +630,10 @@ final class Box2dContactEvidenceTest {
         private boolean started;
 
         Scene(String sessionId) {
+            this(sessionId, MonotonicClock.system());
+        }
+
+        Scene(String sessionId, MonotonicClock clock) {
             BodyDef groundDefinition = new BodyDef();
             ground = world.createBody(groundDefinition);
             PolygonShape groundShape = new PolygonShape();
@@ -556,7 +648,8 @@ final class Box2dContactEvidenceTest {
             ballFixture = createBoxFixture(ball);
             ball.setLinearVelocity(0, -2);
 
-            runtime = AgentRuntime.builder().sessionId(SessionId.of(sessionId)).build();
+            runtime = AgentRuntime.builder().sessionId(SessionId.of(sessionId))
+                    .clock(clock).build();
             inspection = new Box2dInspection(runtime, Box2dAdapterLimits.developmentDefaults());
         }
 

@@ -178,3 +178,12 @@ Disabled runtimes retain no providers or frames and perform no serialization.
     Close releases adapter evidence and references without disposing native objects; completed core
     frames retain their normal immutable lifetime. Contact adjacency never implies gameplay
     causality, and canonical order is not a cross-platform or whole-program determinism claim.
+37. Contact active-state incompleteness is sticky across quiet ticks for outside, late, unmapped,
+    missing-begin, and failed-step callbacks; only an authoritative epoch/world baseline clears the
+    unknown state. Nested record/active truncation participates in `complete`. Typed contact ticks
+    become queryable only after the simulation timeline confirms their resulting runtime frame;
+    failed correlation is retained as typed incomplete evidence. Typed history retains an eviction
+    watermark across deque eviction and epoch reset. Disabled capture executes the application step
+    and forwards its listener without evidence. Fixture mutation removes only affected retained
+    contact keys, and public evidence values reject oversized or open truncation structures before
+    copying them.

@@ -48,6 +48,11 @@ and limit counters plus typed diagnostics and truncations. `complete=false` prev
 unmapped, reset, failed, or otherwise incomplete evidence from being read as proof that no contact
 occurred.
 
+Unknown active state is sticky across quiet ticks. Outside, late, unmapped, missing-begin, or failed
+step evidence remains incomplete until an execution-epoch or world baseline authoritatively clears
+it. Nested active-value truncation also participates in completeness. Public evidence constructors
+preflight their hard sizes and closed truncation dimensions before copying caller collections.
+
 Each completed captured step publishes the closed entity `box2d.contacts.<worldId>` and emits the
 retained callback records as `box2d.contact.begin`, `.end`, `.preSolve`, or `.postSolve` events in
 canonical order. The canonical body A is the event subject, body B is the source, and the event's
@@ -60,6 +65,12 @@ replacement world still requires the application to install the listener explici
 the entity provider, composition reference, staged state, active set, and typed history without
 disposing application objects; already completed runtime frames remain immutable under core
 retention.
+
+Typed contact ticks are staged inside the simulation callback but enter queryable history only
+after the simulation timeline confirms the resulting runtime frame. A failed frame is retained as
+incomplete `MISSING_CORRELATION` evidence. Bounded history keeps an eviction watermark across deque
+eviction and epoch reset, so old ranges are never reported as not-yet-captured. A disabled runtime
+still executes the application step and composed application listener while retaining no evidence.
 
 ## Consequences
 

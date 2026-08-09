@@ -2,6 +2,7 @@ package io.github.teemuki8.libgdx.agent.runtime.box2d;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -21,6 +22,7 @@ import com.badlogic.gdx.physics.box2d.World;
 import com.badlogic.gdx.physics.box2d.WorldManifold;
 import com.badlogic.gdx.utils.GdxNativesLoader;
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
+import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeConfiguration;
 import io.github.teemuki8.libgdx.agent.runtime.core.SessionId;
 import io.github.teemuki8.libgdx.agent.runtime.core.Truncation;
 import java.util.ArrayList;
@@ -183,6 +185,10 @@ final class Box2dContactsTest {
             scene.inspection.registerFixture("ball", "ball-body", scene.ballFixture);
             scene.separate();
             scene.tick(contacts);
+            Box2dContactTick stillTainted = contacts.ticks(2, 2, 2).ticks().getFirst();
+            assertTrue(stillTainted.diagnostics().stream().anyMatch(value ->
+                    value.code() == Box2dContactTick.DiagnosticCode.UNMAPPED_ENDPOINT));
+            assertFalse(stillTainted.complete());
             scene.collide();
             scene.tick(contacts);
             scene.tick(contacts);
@@ -259,6 +265,35 @@ final class Box2dContactsTest {
                     value.code() == Box2dContactTick.DiagnosticCode.CALLBACK_OUTSIDE_TICK
                             && value.observed() > 0));
             assertFalse(tick.complete());
+
+            scene.runtime.simulation().tick(STEP_NANOS, supplied -> {
+                contacts.captureStep(() -> {});
+                return supplied;
+            });
+            Box2dContactTick later = contacts.ticks(2, 2, 16).ticks().getFirst();
+            assertTrue(later.diagnostics().stream().anyMatch(value ->
+                    value.code() == Box2dContactTick.DiagnosticCode.CALLBACK_OUTSIDE_TICK));
+            assertFalse(later.complete());
+        }
+    }
+
+    @Test
+    void disabledRuntimeExecutesTheStepAndForwardsTheApplicationListenerWithoutEvidence() {
+        try (Scene scene = new Scene(
+                "contact-disabled", RuntimeConfiguration.disabled())) {
+            AtomicInteger applicationBegins = new AtomicInteger();
+            Box2dContacts contacts = scene.registerContacts(
+                    Box2dContactPolicy.developmentDefaults());
+            scene.world.setContactListener(contacts.compose(
+                    listener(applicationBegins::incrementAndGet)));
+            scene.start();
+            float before = scene.ball.getPosition().y;
+
+            scene.tick(contacts);
+
+            assertNotEquals(before, scene.ball.getPosition().y);
+            assertEquals(1, applicationBegins.get());
+            assertTrue(contacts.ticks(1, 1, 16).ticks().isEmpty());
         }
     }
 
@@ -397,6 +432,10 @@ final class Box2dContactsTest {
         private boolean started;
 
         Scene(String sessionId) {
+            this(sessionId, RuntimeConfiguration.developmentDefaults());
+        }
+
+        Scene(String sessionId, RuntimeConfiguration configuration) {
             BodyDef groundDef = new BodyDef();
             ground = world.createBody(groundDef);
             PolygonShape floor = new PolygonShape();
@@ -416,7 +455,8 @@ final class Box2dContactsTest {
             circle.dispose();
             ball.setLinearVelocity(5, -1);
 
-            runtime = AgentRuntime.builder().sessionId(SessionId.of(sessionId)).build();
+            runtime = AgentRuntime.builder().sessionId(SessionId.of(sessionId))
+                    .configuration(configuration).build();
             inspection = new Box2dInspection(runtime, Box2dAdapterLimits.developmentDefaults());
         }
 

@@ -11,6 +11,10 @@ public record Box2dContactTickPage(List<Box2dContactTick> ticks, boolean hasMore
         Optional<SimulationTickId> newestRetainedTickId) {
     /** Validates stable order, range metadata, and defensive copies. */
     public Box2dContactTickPage {
+        Objects.requireNonNull(ticks, "ticks");
+        if (ticks.size() > Box2dContactLimits.MAX_ITEMS) {
+            throw new IllegalArgumentException("contact tick page exceeds its hard bound");
+        }
         ticks = List.copyOf(ticks);
         Objects.requireNonNull(rangeStatus, "rangeStatus");
         oldestRetainedTickId = Objects.requireNonNull(
@@ -24,8 +28,16 @@ public record Box2dContactTickPage(List<Box2dContactTick> ticks, boolean hasMore
             }
         }
         if (oldestRetainedTickId.isPresent() != newestRetainedTickId.isPresent()
-                || rangeStatus == RangeStatus.COMPLETE && hasMore
-                || !ticks.isEmpty() && oldestRetainedTickId.isEmpty()) {
+                || oldestRetainedTickId.isPresent()
+                        && oldestRetainedTickId.orElseThrow().compareTo(
+                                newestRetainedTickId.orElseThrow()) > 0
+                || rangeStatus == RangeStatus.COMPLETE && (hasMore || ticks.isEmpty())
+                || rangeStatus == RangeStatus.PAGINATED && !hasMore
+                || !ticks.isEmpty() && oldestRetainedTickId.isEmpty()
+                || !ticks.isEmpty() && (ticks.getFirst().simulationTickId().compareTo(
+                        oldestRetainedTickId.orElseThrow()) < 0
+                        || ticks.getLast().simulationTickId().compareTo(
+                                newestRetainedTickId.orElseThrow()) > 0)) {
             throw new IllegalArgumentException("contact tick page metadata is inconsistent");
         }
     }

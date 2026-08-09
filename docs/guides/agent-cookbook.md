@@ -295,10 +295,10 @@ world.setContactListener(combined);
 ```
 
 `compose` accepts one application listener once and rejects composing the evidence listener with
-itself. If the application listener throws, the adapter retains only the closed
-`APPLICATION_LISTENER_FAILED` diagnostic and rethrows the original unchecked failure. It never
-copies the exception message or stack trace, and the simulation tick cannot silently report a
-successful callback.
+itself. If the application listener throws, the adapter retains the closed
+`APPLICATION_LISTENER_FAILED` and `STEP_FAILED` diagnostics and rethrows the original unchecked
+failure. It never copies the exception message or stack trace, and the simulation tick cannot
+silently report a successful callback.
 
 ### Capture the authoritative step
 
@@ -323,6 +323,10 @@ and at most one captured step for that world in the simulation tick. It finalize
 evidence before the frame closes and then rethrows an application step or listener failure. It
 does not sleep, render, step again, install a listener, or create a loop or thread. Do not also step
 the world from `render(delta)`.
+
+With `RuntimeConfiguration.disabled()`, the same wrapper still invokes the application-owned step
+exactly once and a composed listener still forwards to the application listener. It retains no
+contact callbacks, history, entity, or events, so disabling observation never disables physics.
 
 The generic `runtime.simulation().activeTick()` API is the transient integration context used by
 the adapter. While the timeline-owned frame is open on the capture thread, including the simulation
@@ -363,6 +367,11 @@ ticks or render frames. `limit` must not exceed `queryPageSize`. `Box2dContactTi
 `ticks`, `hasMore`, `rangeStatus`, `oldestRetainedTickId`, and `newestRetainedTickId`. Its closed
 range statuses are `COMPLETE`, `PAGINATED`, `PARTIALLY_EVICTED`, and `NOT_YET_CAPTURED`. A missing
 tick inside the requested retained range is `NOT_YET_CAPTURED`, never an invented complete page.
+The adapter confirms the simulation timeline's resulting frame before moving a captured contact
+tick into typed history. A query made while that frame is pending omits it; a failed frame is
+retained with `MISSING_CORRELATION` and `complete=false`. Paging allocates at most the requested
+page, while an eviction watermark distinguishes old evidence from future evidence even when a
+reset leaves the retained deque empty.
 
 Each immutable `Box2dContactTick` exposes:
 
@@ -491,6 +500,13 @@ Before the first captured step, and after a reset baseline, `latestTick` is expl
 `complete=true`, no relevant core snapshot truncation, and an empty exact active/record set can
 support a negative contact conclusion.
 
+Adapter incompleteness is sticky when a callback arrived outside capture, after close, with an
+unmapped endpoint, without a known begin, or during a failed step. Later quiet ticks remain
+incomplete because silence cannot reconstruct the active set. A scenario/epoch reset or world
+replacement supplies the authoritative clean baseline that clears this taint. Nested record or
+active-contact truncations also force `complete=false` until the affected active value is replaced
+by complete evidence or ends.
+
 ### Exact contact event schema
 
 Each retained record emits one of:
@@ -575,6 +591,10 @@ box2d.contact.diagnostics
 Each truncation contains `dimension`, saturating `observed`, `retained`, and `limit`. Relevant
 diagnostics make `complete=false`. The closed diagnostic codes are:
 
+Public contact record, active-contact, tick, and page constructors preflight their documented hard
+sizes and closed truncation dimensions before copying a caller collection. They cannot be used to
+construct an oversized or open-schema value that only appears bounded.
+
 ```text
 UNMAPPED_ENDPOINT
 CALLBACK_OUTSIDE_TICK
@@ -615,9 +635,11 @@ contact entity:
 
 A scenario reset or checkpoint restore starts a new execution epoch. Its baseline clears the active
 set and typed `Box2dContacts.ticks` history, publishes `latestTick=null`, and reports `EPOCH_RESET`;
-session simulation tick IDs still are not reused. World rebind clears contact evidence and reports
+session simulation tick IDs still are not reused, and old typed queries report
+`PARTIALLY_EVICTED`. World rebind clears contact evidence and reports
 `WORLD_REBOUND`. Install the same explicit listener or composition on the replacement world before
-stepping it. Fixture rebind/unregister clears affected active keys and reports `ENDPOINT_CHANGED`.
+stepping it. Fixture rebind/unregister clears only affected retained active keys, preserves
+unrelated contacts, and reports `ENDPOINT_CHANGED`.
 These operations retain incomplete evidence instead of silently preserving a stale native contact.
 
 Close `Box2dContacts` or its parent `Box2dInspection` on the application thread and outside an open

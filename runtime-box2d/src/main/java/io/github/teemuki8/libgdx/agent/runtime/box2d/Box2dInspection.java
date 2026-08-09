@@ -407,7 +407,7 @@ public final class Box2dInspection implements AutoCloseable {
             if (body != null) {
                 Box2dContacts registration = contacts.get(body.parentId);
                 if (registration != null) {
-                    registration.fixtureChanged();
+                    registration.fixtureChanged(fixture.id);
                 }
             }
         }

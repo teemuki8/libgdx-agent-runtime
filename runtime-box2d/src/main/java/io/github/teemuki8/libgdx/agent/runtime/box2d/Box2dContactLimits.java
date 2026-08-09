@@ -4,9 +4,9 @@ package io.github.teemuki8.libgdx.agent.runtime.box2d;
 public record Box2dContactLimits(int callbackRecordsPerTick, int activeContactsPerTick,
         int pointsPerContact, int impulsesPerContact, int oldManifoldPointsPerContact,
         int diagnosticsPerTick, int retainedContactTicks, int queryPageSize) {
-    private static final int MAX_ITEMS = 1_000_000;
-    private static final int MAX_CONTACT_VALUES = 64;
-    private static final int MAX_DIAGNOSTICS = 64;
+    static final int MAX_ITEMS = 1_000_000;
+    static final int MAX_CONTACT_VALUES = 64;
+    static final int MAX_DIAGNOSTICS = 64;
 
     /** Validates positive finite allocation bounds. */
     public Box2dContactLimits {

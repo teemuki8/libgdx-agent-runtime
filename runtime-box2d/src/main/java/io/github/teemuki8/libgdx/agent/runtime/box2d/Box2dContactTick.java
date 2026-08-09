@@ -21,18 +21,31 @@ public record Box2dContactTick(SimulationTickId simulationTickId,
         Objects.requireNonNull(simulationTickId, "simulationTickId");
         Objects.requireNonNull(executionEpochId, "executionEpochId");
         Objects.requireNonNull(runtimeFrameId, "runtimeFrameId");
+        Objects.requireNonNull(records, "records");
+        Objects.requireNonNull(activeContacts, "activeContacts");
+        Objects.requireNonNull(diagnostics, "diagnostics");
+        Objects.requireNonNull(truncations, "truncations");
+        if (records.size() > Box2dContactLimits.MAX_ITEMS
+                || activeContacts.size() > Box2dContactLimits.MAX_ITEMS
+                || diagnostics.size() > Box2dContactLimits.MAX_DIAGNOSTICS
+                || truncations.size() > 3) {
+            throw new IllegalArgumentException("contact tick exceeds its hard bound");
+        }
         records = List.copyOf(records);
         activeContacts = List.copyOf(activeContacts);
         diagnostics = List.copyOf(diagnostics);
         truncations = List.copyOf(truncations);
         if (epochTick <= 0 || callbackRecordsObserved < 0 || callbackRecordsRetained < 0
                 || callbackRecordLimit <= 0 || callbackRecordsRetained != records.size()
+                || callbackRecordLimit > Box2dContactLimits.MAX_ITEMS
                 || callbackRecordsRetained > callbackRecordsObserved
                 || callbackRecordsRetained > callbackRecordLimit || activeContactsObserved < 0
                 || activeContactsRetained < 0 || activeContactLimit <= 0
+                || activeContactLimit > Box2dContactLimits.MAX_ITEMS
                 || activeContactsRetained != activeContacts.size()
                 || activeContactsRetained > activeContactsObserved
-                || activeContactsRetained > activeContactLimit || unmappedContactsObserved < 0) {
+                || activeContactsRetained > activeContactLimit || unmappedContactsObserved < 0
+                || diagnostics.size() > Box2dContactLimits.MAX_DIAGNOSTICS) {
             throw new IllegalArgumentException("contact tick counters are inconsistent");
         }
         requireSorted(records);
@@ -41,6 +54,11 @@ public record Box2dContactTick(SimulationTickId simulationTickId,
         requireTruncationsSorted(truncations);
         boolean recordsTruncated = callbackRecordsObserved > callbackRecordsRetained;
         boolean activeTruncated = activeContactsObserved > activeContactsRetained;
+        boolean nestedTruncated = records.stream().anyMatch(value -> !value.truncations().isEmpty())
+                || activeContacts.stream().anyMatch(value -> !value.truncations().isEmpty());
+        boolean expectedComplete = !recordsTruncated && !activeTruncated && !nestedTruncated
+                && unmappedContactsObserved == 0 && diagnostics.isEmpty()
+                && truncations.isEmpty();
         if (recordsTruncated != hasTruncation(truncations, "box2d.contact.records",
                         callbackRecordsObserved, callbackRecordsRetained, callbackRecordLimit)
                 || activeTruncated != hasTruncation(truncations, "box2d.contact.active",
@@ -48,9 +66,7 @@ public record Box2dContactTick(SimulationTickId simulationTickId,
                 || unmappedContactsObserved > 0
                         && diagnostics.stream().noneMatch(value ->
                                 value.code() == DiagnosticCode.UNMAPPED_ENDPOINT)
-                || complete && (recordsTruncated || activeTruncated
-                        || unmappedContactsObserved > 0 || !diagnostics.isEmpty()
-                        || !truncations.isEmpty())) {
+                || complete != expectedComplete) {
             throw new IllegalArgumentException("contact tick completeness is inconsistent");
         }
     }
@@ -69,10 +85,19 @@ public record Box2dContactTick(SimulationTickId simulationTickId,
             if (!key.matches(endpointA, endpointB)) {
                 throw new IllegalArgumentException("active contact key and endpoints disagree");
             }
-            points = List.copyOf(points);
+            Objects.requireNonNull(points, "points");
             normal = Objects.requireNonNull(normal, "normal");
+            Objects.requireNonNull(impulses, "impulses");
+            Objects.requireNonNull(truncations, "truncations");
+            if (points.size() > Box2dContactLimits.MAX_CONTACT_VALUES
+                    || impulses.size() > Box2dContactLimits.MAX_CONTACT_VALUES
+                    || truncations.size() > 2) {
+                throw new IllegalArgumentException("active contact exceeds its hard bound");
+            }
+            points = List.copyOf(points);
             impulses = List.copyOf(impulses);
             truncations = List.copyOf(truncations);
+            requireActiveTruncations(truncations);
         }
 
         @Override public int compareTo(ActiveContact other) {
@@ -141,6 +166,27 @@ public record Box2dContactTick(SimulationTickId simulationTickId,
             if (values.get(index - 1).dimension().compareTo(values.get(index).dimension()) >= 0) {
                 throw new IllegalArgumentException("contact truncations are not strictly sorted");
             }
+        }
+        for (Truncation value : values) {
+            if (!value.dimension().equals("box2d.contact.records")
+                    && !value.dimension().equals("box2d.contact.active")
+                    && !value.dimension().equals("box2d.contact.diagnostics")) {
+                throw new IllegalArgumentException("contact tick truncation dimension is open");
+            }
+        }
+    }
+
+    private static void requireActiveTruncations(List<Truncation> values) {
+        String previous = null;
+        for (Truncation value : values) {
+            String dimension = value.dimension();
+            if (!dimension.equals("box2d.contact.points")
+                    && !dimension.equals("box2d.contact.impulses")
+                    || previous != null && previous.compareTo(dimension) >= 0) {
+                throw new IllegalArgumentException(
+                        "active contact truncations are not closed and sorted");
+            }
+            previous = dimension;
         }
     }
 

@@ -18,11 +18,20 @@ public record Box2dContactRecord(Phase phase, Key key, Endpoint endpointA, Endpo
         Objects.requireNonNull(endpointA, "endpointA");
         Objects.requireNonNull(endpointB, "endpointB");
         Objects.requireNonNull(availability, "availability");
+        Objects.requireNonNull(points, "points");
+        Objects.requireNonNull(impulses, "impulses");
+        Objects.requireNonNull(truncations, "truncations");
+        if (points.size() > Box2dContactLimits.MAX_CONTACT_VALUES
+                || impulses.size() > Box2dContactLimits.MAX_CONTACT_VALUES
+                || truncations.size() > 2) {
+            throw new IllegalArgumentException("contact record exceeds its hard bound");
+        }
         points = List.copyOf(points);
         normal = Objects.requireNonNull(normal, "normal");
         impulses = List.copyOf(impulses);
         oldManifold = Objects.requireNonNull(oldManifold, "oldManifold");
         truncations = List.copyOf(truncations);
+        requireTruncations(truncations, phase);
         if (occurrence <= 0) {
             throw new IllegalArgumentException("contact callback occurrence must be positive");
         }
@@ -157,7 +166,29 @@ public record Box2dContactRecord(Phase phase, Key key, Endpoint endpointA, Endpo
         /** Defensively copies old points. */
         public OldManifold {
             Objects.requireNonNull(type, "type");
+            Objects.requireNonNull(points, "points");
+            if (points.size() > Box2dContactLimits.MAX_CONTACT_VALUES) {
+                throw new IllegalArgumentException("old manifold exceeds its hard bound");
+            }
             points = List.copyOf(points);
+        }
+    }
+
+    private static void requireTruncations(List<Truncation> values, Phase phase) {
+        String previous = null;
+        for (Truncation value : values) {
+            String dimension = value.dimension();
+            boolean supported = (phase == Phase.PRE_SOLVE || phase == Phase.POST_SOLVE)
+                            && dimension.equals("box2d.contact.points")
+                    || phase == Phase.POST_SOLVE
+                            && dimension.equals("box2d.contact.impulses")
+                    || phase == Phase.PRE_SOLVE
+                            && dimension.equals("box2d.contact.oldManifoldPoints");
+            if (!supported || previous != null && previous.compareTo(dimension) >= 0) {
+                throw new IllegalArgumentException(
+                        "contact record truncations are not closed and sorted");
+            }
+            previous = dimension;
         }
     }
 

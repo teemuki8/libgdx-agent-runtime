@@ -8,6 +8,7 @@ import io.github.teemuki8.libgdx.agent.runtime.core.FrameId;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationTickId;
 import io.github.teemuki8.libgdx.agent.runtime.core.Truncation;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
@@ -139,6 +140,52 @@ final class Box2dContactContractTest {
         assertThrows(IllegalArgumentException.class, () -> new Box2dContactTickPage(
                 List.of(), true, Box2dContactTickPage.RangeStatus.COMPLETE,
                 Optional.empty(), Optional.empty()));
+    }
+
+    @Test
+    void publicEvidenceRejectsOversizedAndOpenEndedNestedValues() {
+        Box2dContactRecord.Endpoint first = endpoint("a");
+        Box2dContactRecord.Endpoint second = endpoint("b");
+        Box2dContactRecord.Key key = key("a", "b");
+        List<Box2dVector> tooManyPoints = Collections.nCopies(
+                65, new Box2dVector(0, 0));
+        assertThrows(IllegalArgumentException.class, () -> new Box2dContactRecord(
+                Box2dContactRecord.Phase.PRE_SOLVE, key, first, second, true, true,
+                Box2dContactRecord.Availability.CURRENT_AND_OLD_MANIFOLD,
+                tooManyPoints, Optional.of(new Box2dVector(0, 1)), List.of(),
+                Optional.of(new Box2dContactRecord.OldManifold(
+                        Box2dContactRecord.ManifoldType.CIRCLES, List.of())),
+                1, List.of()));
+        assertThrows(IllegalArgumentException.class, () -> new Box2dContactRecord.OldManifold(
+                Box2dContactRecord.ManifoldType.CIRCLES,
+                Collections.nCopies(65,
+                        new Box2dContactRecord.OldManifoldPoint(1, 0, 0))));
+        assertThrows(IllegalArgumentException.class, () -> new Box2dContactRecord(
+                Box2dContactRecord.Phase.BEGIN, key, first, second, true, true,
+                Box2dContactRecord.Availability.ENDPOINTS_ONLY, List.of(), Optional.empty(),
+                List.of(), Optional.empty(), 1,
+                List.of(new Truncation("application.value", 2, 1, 1))));
+        assertThrows(IllegalArgumentException.class, () -> new Box2dContactTick.ActiveContact(
+                key, first, second, true, true, List.of(), Optional.empty(), List.of(),
+                List.of(new Truncation("application.value", 2, 1, 1))));
+        assertThrows(IllegalArgumentException.class, () -> new Box2dContactTick(
+                new SimulationTickId(1), new ExecutionEpochId(0), 1, new FrameId(1),
+                List.of(), List.of(), 0, 0, 1_000_001, 0, 0, 1, 0,
+                List.of(), List.of(), true));
+    }
+
+    @Test
+    void completeTicksRejectNestedTruncation() {
+        Box2dContactRecord.Endpoint first = endpoint("a");
+        Box2dContactRecord.Endpoint second = endpoint("b");
+        Box2dContactTick.ActiveContact active = new Box2dContactTick.ActiveContact(
+                key("a", "b"), first, second, true, true,
+                List.of(new Box2dVector(0, 0)), Optional.of(new Box2dVector(0, 1)), List.of(),
+                List.of(new Truncation("box2d.contact.points", 2, 1, 1)));
+        assertThrows(IllegalArgumentException.class, () -> new Box2dContactTick(
+                new SimulationTickId(1), new ExecutionEpochId(0), 1, new FrameId(1),
+                List.of(), List.of(active), 0, 0, 128, 1, 1, 256, 0,
+                List.of(), List.of(), true));
     }
 
     private static Box2dContactTick tick(List<Box2dContactRecord> records,

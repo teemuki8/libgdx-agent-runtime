@@ -108,9 +108,15 @@ input; it does not claim cross-platform Box2D callback-order determinism.
 The active set uses a bounded ordered selection of stable keys. If the adapter cannot reconstruct an
 unretained active key after a retained contact ends, the snapshot remains explicitly incomplete.
 Negative consumers must never treat truncated or incomplete active evidence as “no contact.”
+Outside, late, unmapped, missing-begin, and failed-step callbacks taint the active-set testimony
+across later quiet ticks; only an authoritative epoch or replacement-world baseline clears it.
+Nested active/record truncations are part of tick completeness.
 
 Each finalized `Box2dContactTick` contains the tick/frame/epoch correlation, sorted records, sorted
-active contacts, counters, diagnostics, and truncations. A bounded deque retains typed Java history.
+active contacts, counters, diagnostics, and truncations. Captured ticks remain pending until the
+simulation timeline confirms their resulting frame; capture failure produces
+`MISSING_CORRELATION` rather than a phantom completed frame. A bounded deque retains typed Java
+history and an eviction watermark across capacity eviction and epoch reset.
 The registered `box2d.contacts` runtime entity exposes the current completed contact tick and active
 set through a closed `RuntimeValue` schema, so existing immutable frame and entity-history queries
 provide protocol/MCP history as well. Runtime frame eviction remains explicit in those generic

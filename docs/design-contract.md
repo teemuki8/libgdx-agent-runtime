@@ -188,3 +188,15 @@ Disabled runtimes retain no providers or frames and perform no serialization.
     remain `NOT_YET_CAPTURED`. Disabled capture executes the application step and forwards its
     listener without evidence. Fixture mutation removes only affected retained contact keys, and
     public evidence values reject oversized or open truncation structures before copying them.
+38. Simulation-scoped assertions name one execution epoch and an exact bounded inclusive
+    simulation-tick range; they never reinterpret arbitrary runtime-frame ranges as ticks. The
+    closed JDK-only assertion union evaluates completed immutable frames with deterministic decimal
+    arithmetic and bounded recursive object selectors without paths or executable predicates.
+    Final predicates inspect the last tick; every-tick predicates retain the first complete
+    violation. Negative and temporal PASS requires every relevant tick, frame, capture, and explicit
+    evidence requirement to be complete. Missing, evicted, failed, unknown, uncorrelated, truncated,
+    or adapter-incomplete evidence produces `INCONCLUSIVE` when it could change the answer.
+    `runtime-box2d` factories compile only stable IDs and documented captured schemas into this
+    generic model. Protocol 2.2 and `runtime_simulation_assert` expose the same closed bounded
+    contract without changing earlier schemas. Every public API/schema change updates the agent
+    cookbook in the same change.

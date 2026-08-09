@@ -128,6 +128,29 @@ See [Inspect registered Box2D state](agent-cookbook.md#inspect-registered-box2d-
 registered-object schemas. See [Capture and inspect Box2D contacts](agent-cookbook.md#capture-and-inspect-box2d-contacts)
 for the complete contact API, exact schemas, bounds, queries, lifecycle, and failure recipes.
 
+## Assert physics over exact ticks
+
+Build a data-only assertion after the ticks have completed. Evaluation reads retained snapshots;
+it never consults the live Box2D body:
+
+```java
+SimulationAssertionSpec expectedRest = Box2dAssertions.bodyStopped("ball", 0.01, 0.01);
+SimulationAssertionResult result = runtime.assertions().evaluateSimulation(
+        expectedRest,
+        new SimulationAssertionScope(runtime.currentEpoch(), 1, 60, 8));
+```
+
+Use `Box2dAssertions.contactOccurred` or `contactDidNotOccur` with stable
+`ContactEndpoint(bodyId, fixtureId, childIndex)` values. Contact factories automatically require
+the registered contact entity's `complete` flag. Missing ticks, failed capture, eviction,
+truncation, missing frame correlation, or incomplete contact evidence yields `INCONCLUSIVE` when it
+could otherwise create a misleading PASS.
+
+Protocol 2.2 exposes `simulationAssert`; MCP exposes the equivalent closed
+`runtime_simulation_assert` tool. See
+[Assert physics over exact simulation ticks](agent-cookbook.md#assert-physics-over-exact-simulation-ticks)
+for every factory, exact tags, request examples, bounds, and result semantics.
+
 ## Disabled runtime
 
 Use `RuntimeConfiguration.disabled()`. Registration returns no-op handles, `frame` only executes its

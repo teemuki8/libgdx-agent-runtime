@@ -99,8 +99,9 @@ bounded structured matching, not arbitrary traversal or a caller-selected path.
 
 ## Result semantics
 
-`SimulationAssertionEvidence` identifies `SimulationTickId`, execution epoch, epoch tick, runtime
-frame, evidence kind, optional entity/property, and optional observed value. Evidence is ordered by
+`SimulationAssertionEvidence` identifies optional `SimulationTickId`, execution epoch, epoch tick,
+optional runtime frame, evidence kind, optional entity/property, and optional observed value.
+Missing IDs explicitly represent a tick or correlation that could not be resolved. Evidence is ordered by
 epoch tick and stable entity/property order, then capped at the requested limit. The first concrete
 violation or missing tick is retained when available.
 
@@ -153,8 +154,8 @@ simulationAssert:
 ```
 
 The tagged assertion union mirrors the Java records. Every object uses
-`additionalProperties: false`; unknown tags and fields fail before evaluation. Runtime values in
-expected values and selectors use the existing natural JSON mapping and configured validation.
+`additionalProperties: false`; unknown tags and fields fail before evaluation. Protocol runtime
+values use the existing tagged `valueType` mapping; MCP inputs use bounded natural JSON values.
 The response is a distinct `simulationAssertion` result carrying `SimulationAssertionResult`.
 
 MCP exposes `runtime_simulation_assert` with the same schema. Capability discovery reports
@@ -170,10 +171,10 @@ tests deliberately create eviction, not-yet-executed, failed callback, missing c
 truncated frame, false completeness requirement, and mixed incomplete/decisive-violation ranges.
 
 Box2D tests prove every factory emits the documented immutable generic model without retaining or
-reading native objects. The real LWJGL3/Box2D fixture resets, advances exact ticks, and exercises
-body position/sleeping, speed-over-range, contact occurrence/absence, and active-contact continuity
-through Java, protocol JSON, and MCP. At least one deliberately truncated contact range must return
-`INCONCLUSIVE`, never `PASS`.
+reading native objects. The real native Box2D fixture advances exact ticks and exercises
+contact occurrence through Java, protocol JSON, and MCP. A deliberately missing-tick negative
+contact range returns `INCONCLUSIVE`, never `PASS`; focused core tests cover other loss modes and
+the Box2D factory tests cover the remaining body/contact mappings.
 
 The cookbook documents exact Java factories, JSON/MCP examples, schemas, boundary semantics,
 incompleteness rules, and the requirement to update recipes whenever these public APIs change.

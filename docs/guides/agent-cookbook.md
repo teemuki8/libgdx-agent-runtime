@@ -5,7 +5,8 @@ the runtime. Every public Java API, protocol/MCP contract, dependency, or agent-
 change must update its affected recipe in the same pull request. Examples are exercised by the
 repository fixture tests.
 
-The simulation timeline APIs and protocol 2.1 described below are development-version APIs until a
+The simulation timeline/assertion APIs and protocols 2.1/2.2 described below are
+development-version APIs until a
 release containing them is published. The current published 2.0.0 artifacts do not contain them.
 
 ## Fixed-step simulation ticks
@@ -654,3 +655,179 @@ copied into core remain immutable until ordinary core retention evicts them.
 Contact events state only that Box2D delivered a callback for registered endpoints. The runtime
 never infers that a player landed, took damage, died, scored, or caused another gameplay outcome.
 Emit an application semantic event or explicit attribution when an agent needs that causality.
+
+## Assert physics over exact simulation ticks
+
+Use this recipe after the application has captured the authoritative ticks. Simulation assertions
+read completed immutable timeline/frame evidence; they never call a Box2D getter, advance the game,
+render, sleep, or execute agent-supplied code.
+
+### Java workflow
+
+Create an inclusive epoch-relative tick scope and evaluate a data-only specification:
+
+```java
+SimulationAssertionScope ticks = new SimulationAssertionScope(
+        runtime.currentEpoch(), 1, 60, 8);
+
+SimulationAssertionResult resting = runtime.assertions().evaluateSimulation(
+        Box2dAssertions.bodyStopped("ball", 0.01, 0.01), ticks);
+
+Box2dAssertions.ContactEndpoint ball =
+        new Box2dAssertions.ContactEndpoint("ball", "ball-shape", 0);
+Box2dAssertions.ContactEndpoint ground =
+        new Box2dAssertions.ContactEndpoint("ground", "ground-shape", 0);
+SimulationAssertionResult landed = runtime.assertions().evaluateSimulation(
+        Box2dAssertions.contactOccurred("main", ball, ground), ticks);
+```
+
+The complete Box2D factory set is:
+
+| Factory | Evidence predicate |
+| --- | --- |
+| `bodyExists` | final `box2d.body.<id>` exists |
+| `bodyPositionApproximately` | final `position`, component or Euclidean tolerance |
+| `bodyVelocityApproximately` | final `linearVelocity`, component or Euclidean tolerance |
+| `bodySleeping` / `bodyAwake` | final exact `awake` boolean |
+| `bodyStopped` | final linear magnitude and angular absolute tolerance |
+| `bodyInsideArea` / `bodyOutsideArea` | final position and a closed inclusive area |
+| `bodyRemainedWithinBounds` | position is inside the closed area at every tick |
+| `bodyDistanceApproximately` | final distance between two body positions |
+| `bodyAngleApproximately` | final angle with wrapped `2*pi`-radian distance |
+| `contactOccurred` / `contactDidNotOccur` | exact canonical begin-event count |
+| `contactRemainedActive` | exact contact appears in `activeContacts` at every tick |
+| `bodyNeverExceededSpeed` | inclusive linear-speed maximum at every tick |
+
+Factories accept stable registration IDs, not runtime entity IDs or native objects. A contact
+endpoint is `(bodyId, fixtureId, childIndex)`; the factory canonicalizes the pair exactly like
+contact capture. Every contact factory adds the evidence requirement
+`box2d.contacts.<worldId>.complete == true`. `contactRemainedActive` reads each tick's active set; it
+does not infer continuity from adjacent begin/end events.
+
+### Final and whole-range semantics
+
+`FINAL` predicates inspect only `toEpochTick`. `EVERY_TICK` predicates and event counts inspect the
+closed range in ascending tick order. Areas and maximum/tolerance boundaries are inclusive.
+Component vector tolerance checks each coordinate. Euclidean vector, magnitude, and distance checks
+use deterministic squared `BigDecimal` arithmetic. Wrapped angles use the explicit positive period
+and an inclusive absolute tolerance no greater than half that period.
+
+A complete mismatch is `FAIL` and identifies the first complete violation. A negative or
+every-tick assertion becomes `PASS` only after every relevant tick is proven complete. Any relevant
+missing/evicted tick, failed or unknown tick outcome, wrong epoch, absent frame correlation, capture
+diagnostic/truncation, or false/missing explicit requirement yields `INCONCLUSIVE` when it could
+change the answer. A later unrelated incomplete tick does not hide an earlier decisive complete
+failure.
+
+One request evaluates at most 1,000 ticks, returns at most 100 evidence items, accepts at most eight
+evidence requirements, and permits at most eight non-composite `allOf` terms. Assertion value trees
+are separately bounded to 16 levels, 1,024 nodes, 256 values per collection, and 4,096 UTF-16 code
+units per string. Event/object selectors are stricter: four levels, 32 nodes, 16 fields per object,
+1,024-character strings, and no selector lists or property paths.
+
+### Closed assertion tags
+
+The generic `SimulationAssertion` tags and exact record fields are:
+
+| Tag | Fields after `assertionType` |
+| --- | --- |
+| `entityExists` | `entityId` |
+| `propertyEquals` | `entityId`, `property`, `expected` |
+| `scalarApproximatelyEquals` | `entityId`, `property`, `expected`, `absoluteTolerance` |
+| `vectorApproximatelyEquals` | `entityId`, `property`, `expected`, `absoluteTolerance`, `toleranceMode` |
+| `vectorInArea` | `entityId`, `property`, `area`, `relation`, `extent` |
+| `vectorMagnitudeAtMost` | `entityId`, `property`, `maximum`, `extent` |
+| `vectorDistanceApproximatelyEquals` | `leftEntityId`, `leftProperty`, `rightEntityId`, `rightProperty`, `expectedDistance`, `absoluteTolerance` |
+| `wrappedAngleApproximatelyEquals` | `entityId`, `property`, `expected`, `period`, `absoluteTolerance` |
+| `eventCount` | protocol: `selector`, `expectation`, `exactCount`; MCP: flattened selector fields below |
+| `objectListContains` | `entityId`, `property`, `selector`, `extent` |
+| `allOf` | `terms` (two through eight non-composite assertions) |
+
+Closed enum values are `FINAL`/`EVERY_TICK`, `COMPONENT`/`EUCLIDEAN`, `INSIDE`/`OUTSIDE`, and
+`AT_LEAST_ONE`/`NONE`/`EXACT`. For `EXACT`, `exactCount` is 1 through 1,000,000; the other event
+expectations require `exactCount: 0`. An event selector contains exact `eventType`, optional exact
+`subject` and `source`, and an object-subset `attributes` selector.
+
+### Protocol 2.2
+
+The transport-neutral command is `RuntimeCommand.SimulationAssert`. Tagged protocol JSON mirrors
+the Java records, including tagged `RuntimeValue` and ID records:
+
+```json
+{
+  "version": {"major": 2, "minor": 2},
+  "requestId": "ball-awake-1",
+  "sessionId": "game",
+  "command": {
+    "type": "simulationAssert",
+    "assertion": {
+      "assertionType": "propertyEquals",
+      "entityId": {"value": "box2d.body.ball"},
+      "property": "awake",
+      "expected": {"valueType": "boolean", "value": true}
+    },
+    "evidenceRequirements": [],
+    "executionEpochId": 0,
+    "fromEpochTick": 1,
+    "toEpochTick": 60,
+    "evidenceLimit": 8
+  }
+}
+```
+
+The result tag is `simulationAssertion`. Its `result` contains `status`, `assertionType`, the exact
+`scope`, optional `expected` and `observed`, bounded `evidence`, `evidenceIncomplete`, and `message`.
+Each evidence item contains nullable `simulationTickId`/`frameId`, `executionEpochId`, positive
+`epochTick`, `kind`, optional `entityId`/`property`, and optional `observed`. Missing correlation is
+represented by absent IDs; it is never replaced with a fabricated frame.
+
+Protocol 2.1 rejects `simulationAssert` with
+`command requires protocol version 2.2`. Protocol 1.7 `assert` remains byte-for-byte unchanged and
+frame-scoped.
+
+### MCP request
+
+MCP uses natural JSON values and a closed `runtime_simulation_assert` input. For an exact Box2D
+contact begin:
+
+```json
+{
+  "name": "runtime_simulation_assert",
+  "arguments": {
+    "sessionId": "game",
+    "executionEpochId": 0,
+    "fromEpochTick": 1,
+    "toEpochTick": 60,
+    "evidenceLimit": 8,
+    "evidenceRequirements": [
+      {"entityId": "box2d.contacts.main", "property": "complete"}
+    ],
+    "assertion": {
+      "assertionType": "eventCount",
+      "eventType": "box2d.contact.begin",
+      "subject": "box2d.body.ball",
+      "source": "box2d.body.ground",
+      "attributes": {
+        "worldId": "main",
+        "key": {
+          "fixtureAId": "ball-shape",
+          "childIndexA": 0,
+          "fixtureBId": "ground-shape",
+          "childIndexB": 0
+        }
+      },
+      "expectation": "AT_LEAST_ONE",
+      "exactCount": 0
+    }
+  }
+}
+```
+
+Every request object, assertion variant, nested area/vector, evidence requirement, and conjunction
+term is closed. Unknown fields or assertion tags are rejected before evaluation. MCP flattens the
+event selector to `eventType`, optional `subject`/`source`, and `attributes`; protocol JSON retains
+the Java record's nested `selector` object.
+
+Treat `PASS` as a statement only about the selected registered evidence and exact requested ticks.
+It is not proof of whole-program determinism, cross-platform Box2D callback equivalence, or semantic
+causality such as landing, damage, or death.

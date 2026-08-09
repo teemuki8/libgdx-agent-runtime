@@ -30,12 +30,19 @@ V1 includes registered entities, bounded immutable values, baseline/frame captur
 events, decisions, completed-frame queries, execution epochs, explicit attribution, typed actions,
 and declarative assertions. Optional application-owned capabilities add scenarios, exact-tick
 control, registered input, opaque checkpoints, runtime/UI correlation, recording, and determinism
-comparison through closed protocol 1.0-1.13, 2.0, and 2.1 stdio MCP surfaces. Protocol 2.1 adds
-application-reported simulation timing and tick-to-frame evidence. A deterministic LWJGL3 fixture
+comparison through closed protocol 1.0-1.13 and additive protocol 2.0-2.2 stdio MCP surfaces.
+Protocol 2.1 adds application-reported simulation timing and tick-to-frame evidence; protocol 2.2
+adds exact-tick declarative assertions. A deterministic LWJGL3 fixture
 qualifies the full workflow. The development line also provides an optional explicit Box2D
 inspection and contact-evidence adapter; it never traverses an application world, installs a
 contact listener, or steps physics automatically. Applications retain ownership of the listener,
 fixed-step call, rendering, and native disposal.
+
+Simulation assertions operate only on completed immutable tick/frame evidence. Generic scalar,
+vector, area, magnitude, distance, wrapped-angle, event, and structured-list predicates live in
+JDK-only core. `Box2dAssertions` supplies data-only factories for body and contact checks; it never
+reads a native object. Negative and every-tick PASS requires complete evidence, including the
+contact adapter's explicit `complete` property.
 
 V1 excludes replay execution, reflection, instrumentation, mutation interception, networking, ECS
 adapters, hot reload, visual debugging, natural-language queries, and automatic causality.

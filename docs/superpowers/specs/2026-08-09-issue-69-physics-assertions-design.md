@@ -145,7 +145,7 @@ and child-index testimony and do not inspect native fixtures or `userData`.
 
 ## Protocol and MCP
 
-Protocol 2.2 adds the closed command:
+Protocol 2.3 adds the closed command:
 
 ```text
 simulationAssert:

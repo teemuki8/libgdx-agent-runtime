@@ -177,13 +177,14 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
         /** Validates the complete closed simulation assertion request. */
         public SimulationAssert {
             java.util.Objects.requireNonNull(assertion, "assertion");
-            evidenceRequirements = java.util.List.copyOf(java.util.Objects.requireNonNull(
-                    evidenceRequirements, "evidenceRequirements"));
+            var validatedSpec =
+                    new io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertionSpec(
+                            assertion, java.util.Objects.requireNonNull(
+                                    evidenceRequirements, "evidenceRequirements"));
+            evidenceRequirements = validatedSpec.evidenceRequirements();
             if (executionEpochId < 0) {
                 throw new IllegalArgumentException("executionEpochId must be non-negative");
             }
-            new io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertionSpec(
-                    assertion, evidenceRequirements);
             new io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertionScope(
                     new io.github.teemuki8.libgdx.agent.runtime.core.ExecutionEpochId(
                             executionEpochId),

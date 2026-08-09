@@ -785,7 +785,10 @@ One request evaluates at most 1,000 ticks, returns at most 100 evidence items, a
 evidence requirements, and permits at most eight non-composite `allOf` terms. Assertion value trees
 are separately bounded to 16 levels, 1,024 nodes, 256 values per collection, and 4,096 UTF-16 code
 units per string. Event/object selectors are stricter: four levels, 32 nodes, 16 fields per object,
-1,024-character strings, and no selector lists or property paths.
+1,024-character strings, and no selector lists or property paths. Evaluation may inspect a valid
+captured value that is larger than the assertion-result tree bound; the status still reflects that
+immutable value, while optional `observed` projections that cannot fit are omitted instead of
+throwing or returning a misleading partial tree.
 
 ### Closed assertion tags
 
@@ -810,7 +813,7 @@ Closed enum values are `FINAL`/`EVERY_TICK`, `COMPONENT`/`EUCLIDEAN`, `INSIDE`/`
 expectations require `exactCount: 0`. An event selector contains exact `eventType`, optional exact
 `subject` and `source`, and an object-subset `attributes` selector.
 
-### Protocol 2.2
+### Protocol 2.3
 
 The transport-neutral command is `RuntimeCommand.SimulationAssert`. Tagged protocol JSON mirrors
 the Java records, including tagged `RuntimeValue` and ID records:
@@ -889,6 +892,22 @@ Every request object, assertion variant, nested area/vector, evidence requiremen
 term is closed. Unknown fields or assertion tags are rejected before evaluation. MCP flattens the
 event selector to `eventType`, optional `subject`/`source`, and `attributes`; protocol JSON retains
 the Java record's nested `selector` object.
+
+Natural MCP JSON maps nulls, booleans, integers, decimals, strings, lists, and objects directly.
+Exact enum and vector comparisons use reserved closed tags because a JSON string or object cannot
+otherwise preserve the `RuntimeValue` type:
+
+```json
+{"$runtimeValue": "enum", "value": "DYNAMIC"}
+{"$runtimeValue": "vector2", "x": 4.5, "y": 1.25}
+```
+
+The tag object accepts exactly the shown fields. `$runtimeValue` is reserved and cannot be an
+ordinary assertion-object field. The MCP schema enforces the per-string and per-collection bounds;
+the handler preflights the complete raw value before constructing a `RuntimeValue` and rejects more
+than 16 levels or 1,024 total nodes. Selector inputs are likewise preflighted against their
+four-level/32-node limit. An oversized or malformed tagged input returns `INVALID_QUERY`; it is not
+evaluated as an ordinary object or silently normalized to another runtime type.
 
 Treat `PASS` as a statement only about the selected registered evidence and exact requested ticks.
 It is not proof of whole-program determinism, cross-platform Box2D callback equivalence, or semantic

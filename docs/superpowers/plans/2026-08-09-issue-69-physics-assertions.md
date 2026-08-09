@@ -7,7 +7,7 @@
 **Architecture:** Keep the frozen frame assertion API unchanged. Add a separate JDK-only
 `SimulationAssertion` model and evaluator that resolves epoch ticks through the simulation timeline
 before reading immutable runtime frames. `runtime-box2d` constructs this generic model from stable
-IDs; protocol/MCP add an additive 2.2 command and tool.
+IDs; protocol/MCP add an additive 2.3 command and tool.
 
 **Tech Stack:** Java 25 records and sealed interfaces, `BigDecimal`, JUnit 5, Jackson closed tagged
 unions, MCP stdio tool schemas, libGDX Box2D natives, Gradle 9.6.1, Linux Xvfb.
@@ -191,7 +191,7 @@ Commit: `feat: add Box2D assertion factories`
 
 - [ ] **Step 1: Write RED protocol tests**
 
-Round-trip every assertion tag at 2.2, assert canonical JSON, invoke the real evaluator through the
+Round-trip every assertion tag at 2.3, assert canonical JSON, invoke the real evaluator through the
 service, and assert 2.1 rejection with the exact required-version message. Send unknown assertion
 tags, unknown top-level/nested fields, oversized selectors/requirements, and malformed numeric
 values and assert typed invalid-request failures before evaluation. Re-run frozen 1.7 assertion

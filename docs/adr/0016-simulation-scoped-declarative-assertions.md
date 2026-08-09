@@ -47,9 +47,12 @@ never retain or query native objects. Every contact factory requires
 at every tick rather than inferring continuity from begin/end adjacency.
 
 Protocol 2.3 adds the closed `simulationAssert` command and `simulationAssertion` result. MCP adds
-`runtime_simulation_assert` with a closed natural-JSON schema. Protocol 2.2 and earlier reject the
-new command before evaluation. Capability metadata advertises exact tick, evidence, requirement,
-and conjunction bounds.
+`runtime_simulation_assert` with a closed bounded natural-JSON schema. Ambiguous enum and vector
+values use reserved exact `$runtimeValue` tags so MCP preserves canonical equality with Java and
+protocol values. The MCP handler validates the complete raw tree's depth, node, collection, and
+string bounds before constructing immutable runtime values. Protocol 2.2 and earlier reject the new
+command before evaluation. Capability metadata advertises exact tick, evidence, requirement, and
+conjunction bounds.
 
 ## Consequences
 

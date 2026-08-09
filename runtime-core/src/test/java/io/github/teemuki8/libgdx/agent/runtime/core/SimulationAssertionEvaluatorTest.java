@@ -269,6 +269,48 @@ class SimulationAssertionEvaluatorTest {
         assertEquals(RuntimeValues.integer(2), result.observed().orElseThrow());
     }
 
+    @Test
+    void oversizedRetainedValuesProduceBoundedFailureEvidence() {
+        State state = new State();
+        RuntimeValue.ObjectValue item = RuntimeValues.object(
+                RuntimeValues.field("a", RuntimeValues.bool(true)),
+                RuntimeValues.field("b", RuntimeValues.bool(true)),
+                RuntimeValues.field("c", RuntimeValues.bool(true)),
+                RuntimeValues.field("d", RuntimeValues.bool(true)));
+        state.activeContacts = new RuntimeValue.ListValue(
+                java.util.Collections.nCopies(256, item));
+        AgentRuntime runtime = runtime("simulation-assert-result-value-bound", state);
+        runtime.start();
+        tick(runtime, () -> {});
+
+        SimulationAssertionResult result = evaluate(runtime, scope(1, 1),
+                new SimulationAssertion.ObjectListContains(BALL, "activeContacts",
+                        RuntimeValues.object(RuntimeValues.field(
+                                "missing", RuntimeValues.bool(true))),
+                        SimulationAssertion.Extent.FINAL));
+
+        assertEquals(AssertionStatus.FAIL, result.status());
+        assertEquals(Optional.empty(), result.observed());
+        assertEquals(Optional.empty(), result.evidence().getFirst().observed());
+        assertFalse(result.evidenceIncomplete());
+
+        SimulationAssertion matching = new SimulationAssertion.ObjectListContains(
+                BALL, "activeContacts", RuntimeValues.object(RuntimeValues.field(
+                        "a", RuntimeValues.bool(true))), SimulationAssertion.Extent.FINAL);
+        SimulationAssertionResult passed = evaluate(runtime, scope(1, 1), matching);
+        assertEquals(AssertionStatus.PASS, passed.status());
+        assertEquals(Optional.empty(), passed.observed());
+
+        state.complete = false;
+        tick(runtime, () -> {});
+        SimulationAssertionResult inconclusive = runtime.assertions().evaluateSimulation(
+                new SimulationAssertionSpec(matching, List.of(
+                        new SimulationEvidenceRequirement(BALL, "complete"))), scope(2, 2));
+        assertEquals(AssertionStatus.INCONCLUSIVE, inconclusive.status());
+        assertEquals(Optional.empty(), inconclusive.observed());
+        assertTrue(inconclusive.evidenceIncomplete());
+    }
+
     private static SimulationAssertion absentEvent() {
         return new SimulationAssertion.EventCount(new SimulationAssertion.EventSelector(
                 EventType.of("missing.event"), Optional.empty(), Optional.empty(),

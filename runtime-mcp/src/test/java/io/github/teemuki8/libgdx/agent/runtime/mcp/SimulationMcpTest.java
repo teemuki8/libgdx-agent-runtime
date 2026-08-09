@@ -9,11 +9,13 @@ import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityType;
 import io.github.teemuki8.libgdx.agent.runtime.core.SessionId;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationTimelineSpec;
+import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.PublishedRuntime;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeProtocolService;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeRegistry;
 import io.modelcontextprotocol.spec.McpSchema;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -76,7 +78,14 @@ final class SimulationMcpTest {
                 .build();
         runtime.simulation().register(SimulationTimelineSpec.fixedStep(10));
         runtime.entities().register(EntityId.of("ball"), EntityType.of("body"), () -> "ball",
-                inspector -> inspector.property("awake", () -> true));
+                inspector -> inspector
+                        .property("awake", () -> true)
+                        .property("bodyType", () -> RuntimeValues.enumValue("DYNAMIC"))
+                        .property("position", () -> RuntimeValues.vector2(1, 2))
+                        .property("contacts", () -> RuntimeValues.list(RuntimeValues.object(
+                                RuntimeValues.field("phase",
+                                        RuntimeValues.enumValue("BEGIN")),
+                                RuntimeValues.field("point", RuntimeValues.vector2(1, 2))))));
         runtime.start();
         runtime.simulation().tick(10, supplied -> supplied);
 
@@ -95,6 +104,21 @@ final class SimulationMcpTest {
             assertTrue(variants.stream().allMatch(value ->
                     Boolean.FALSE.equals(((Map<?, ?>) value).get("additionalProperties"))));
 
+            Map<?, ?> propertyEquals = variants.stream()
+                    .map(Map.class::cast)
+                    .filter(value -> "propertyEquals".equals(((Map<?, ?>) ((Map<?, ?>) value
+                            .get("properties")).get("assertionType")).get("const")))
+                    .findFirst().orElseThrow();
+            Map<?, ?> expectedSchema = (Map<?, ?>) ((Map<?, ?>) propertyEquals
+                    .get("properties")).get("expected");
+            List<?> expectedVariants = (List<?>) expectedSchema.get("anyOf");
+            assertTrue(expectedVariants.stream().map(Map.class::cast)
+                    .anyMatch(value -> Integer.valueOf(4_096).equals(value.get("maxLength"))));
+            assertTrue(expectedVariants.stream().map(Map.class::cast)
+                    .anyMatch(value -> Integer.valueOf(256).equals(value.get("maxItems"))));
+            assertTrue(expectedVariants.stream().map(Map.class::cast)
+                    .anyMatch(value -> Integer.valueOf(256).equals(value.get("maxProperties"))));
+
             Map<String, Object> base = simulationAssertionRequest(1, Map.of(
                             "assertionType", "propertyEquals",
                             "entityId", "ball",
@@ -106,6 +130,39 @@ final class SimulationMcpTest {
             Map<?, ?> passedContent = (Map<?, ?>) passed.structuredContent();
             assertEquals("simulationAssertion", passedContent.get("type"));
             assertEquals("PASS", ((Map<?, ?>) passedContent.get("result")).get("status"));
+
+            for (Map<String, Object> typedExpected : List.of(
+                    Map.of("property", "bodyType", "expected", Map.of(
+                            "$runtimeValue", "enum", "value", "DYNAMIC")),
+                    Map.of("property", "position", "expected", Map.of(
+                            "$runtimeValue", "vector2", "x", 1, "y", 2)))) {
+                McpSchema.CallToolResult typed = handler.handle(call(
+                        "runtime_simulation_assert", simulationAssertionRequest(1, Map.of(
+                                "assertionType", "propertyEquals",
+                                "entityId", "ball",
+                                "property", typedExpected.get("property"),
+                                "expected", typedExpected.get("expected")))))
+                        .block(Duration.ofSeconds(5));
+                assertFalse(typed.isError(), () -> "typed value was rejected: " + typedExpected);
+                assertEquals("PASS", ((Map<?, ?>) ((Map<?, ?>) typed.structuredContent())
+                        .get("result")).get("status"));
+            }
+
+            McpSchema.CallToolResult typedSelector = handler.handle(call(
+                    "runtime_simulation_assert", simulationAssertionRequest(1, Map.of(
+                            "assertionType", "objectListContains",
+                            "entityId", "ball",
+                            "property", "contacts",
+                            "selector", Map.of(
+                                    "phase", Map.of("$runtimeValue", "enum",
+                                            "value", "BEGIN"),
+                                    "point", Map.of("$runtimeValue", "vector2",
+                                            "x", 1, "y", 2)),
+                            "extent", "FINAL"))))
+                    .block(Duration.ofSeconds(5));
+            assertFalse(typedSelector.isError());
+            assertEquals("PASS", ((Map<?, ?>) ((Map<?, ?>) typedSelector.structuredContent())
+                    .get("result")).get("status"));
 
             Map<String, Object> vector = Map.of("x", 0, "y", 0);
             Map<String, Object> area = Map.of(
@@ -174,6 +231,21 @@ final class SimulationMcpTest {
                                     "unknown", true))))
                     .block(Duration.ofSeconds(5));
             assertTrue(unknown.isError());
+
+            LinkedHashMap<String, Object> oversizedSelector = new LinkedHashMap<>();
+            for (int index = 0; index < 16; index++) {
+                oversizedSelector.put("field" + index, Map.of("value", index));
+            }
+            McpSchema.CallToolResult oversized = handler.handle(call(
+                    "runtime_simulation_assert", simulationAssertionRequest(1, Map.of(
+                            "assertionType", "objectListContains",
+                            "entityId", "ball",
+                            "property", "contacts",
+                            "selector", oversizedSelector,
+                            "extent", "FINAL"))))
+                    .block(Duration.ofSeconds(5));
+            assertTrue(oversized.isError());
+            assertEquals("INVALID_QUERY", ((Map<?, ?>) oversized.structuredContent()).get("code"));
         }
     }
 

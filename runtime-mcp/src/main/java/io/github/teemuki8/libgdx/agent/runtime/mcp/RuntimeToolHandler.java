@@ -25,6 +25,7 @@ import io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertion;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationEvidenceRequirement;
 import io.modelcontextprotocol.json.McpJsonDefaults;
 import io.modelcontextprotocol.spec.McpSchema;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.math.BigDecimal;
@@ -419,7 +420,7 @@ public final class RuntimeToolHandler implements AutoCloseable {
                     EntityId.of(string(values, "entityId")));
             case "propertyEquals" -> new SimulationAssertion.PropertyEquals(
                     EntityId.of(string(values, "entityId")), string(values, "property"),
-                    runtimeValue(values.get("expected"), 0));
+                    simulationValue(values.get("expected")));
             case "scalarApproximatelyEquals" ->
                     new SimulationAssertion.ScalarApproximatelyEquals(
                             EntityId.of(string(values, "entityId")),
@@ -459,13 +460,13 @@ public final class RuntimeToolHandler implements AutoCloseable {
                             EventType.of(string(values, "eventType")),
                             Optional.ofNullable(string(values, "subject")).map(EntityId::of),
                             Optional.ofNullable(string(values, "source")).map(EntityId::of),
-                            objectValue(values.get("attributes"))),
+                            simulationSelector(values.get("attributes"))),
                     SimulationAssertion.EventExpectation.valueOf(
                             string(values, "expectation")),
                     Math.toIntExact(number(values, "exactCount", -1)));
             case "objectListContains" -> new SimulationAssertion.ObjectListContains(
                     EntityId.of(string(values, "entityId")), string(values, "property"),
-                    objectValue(values.get("selector")), SimulationAssertion.Extent.valueOf(
+                    simulationSelector(values.get("selector")), SimulationAssertion.Extent.valueOf(
                             string(values, "extent")));
             case "allOf" -> new SimulationAssertion.AllOf(
                     simulationAssertions(values.get("terms")));
@@ -505,12 +506,164 @@ public final class RuntimeToolHandler implements AutoCloseable {
                 new RuntimeValue.DecimalValue(decimal(values, "y")));
     }
 
-    private static RuntimeValue.ObjectValue objectValue(Object raw) {
-        RuntimeValue value = runtimeValue(raw, 0);
+    private static RuntimeValue simulationValue(Object raw) {
+        AssertionValueBudget budget = new AssertionValueBudget(16, 1_024, 256, 4_096);
+        budget.validate(raw, 1);
+        return assertionValue(raw);
+    }
+
+    private static RuntimeValue.ObjectValue simulationSelector(Object raw) {
+        AssertionValueBudget budget = new AssertionValueBudget(4, 32, 16, 1_024);
+        budget.validate(raw, 1);
+        RuntimeValue value = assertionValue(raw);
         if (value instanceof RuntimeValue.ObjectValue object) {
             return object;
         }
         throw new IllegalArgumentException("simulation assertion selector must be an object");
+    }
+
+    private static RuntimeValue assertionValue(Object raw) {
+        if (raw == null) {
+            return RuntimeValues.nullValue();
+        }
+        if (raw instanceof Boolean value) {
+            return RuntimeValues.bool(value);
+        }
+        if (raw instanceof Byte || raw instanceof Short || raw instanceof Integer
+                || raw instanceof Long) {
+            return RuntimeValues.integer(((Number) raw).longValue());
+        }
+        if (raw instanceof Number value) {
+            return RuntimeValues.decimal(value.toString());
+        }
+        if (raw instanceof String value) {
+            return RuntimeValues.string(value);
+        }
+        if (raw instanceof List<?> values) {
+            ArrayList<RuntimeValue> copy = new ArrayList<>(values.size());
+            for (Object value : values) {
+                copy.add(assertionValue(value));
+            }
+            return RuntimeValues.list(copy);
+        }
+        if (raw instanceof Map<?, ?> values) {
+            Object tag = values.get("$runtimeValue");
+            if (tag != null || values.containsKey("$runtimeValue")) {
+                return taggedAssertionValue(values);
+            }
+            ArrayList<RuntimeValue.Field> fields = new ArrayList<>(values.size());
+            for (Map.Entry<?, ?> entry : values.entrySet()) {
+                if (!(entry.getKey() instanceof String name)) {
+                    throw new IllegalArgumentException(
+                            "runtime value field name is not a string");
+                }
+                fields.add(RuntimeValues.field(
+                        name, assertionValue(entry.getValue())));
+            }
+            return new RuntimeValue.ObjectValue(fields);
+        }
+        throw new IllegalArgumentException("unsupported simulation assertion value");
+    }
+
+    private static RuntimeValue taggedAssertionValue(Map<?, ?> values) {
+        Object tag = values.get("$runtimeValue");
+        if ("enum".equals(tag) && values.keySet().equals(java.util.Set.of(
+                "$runtimeValue", "value")) && values.get("value") instanceof String value) {
+            return RuntimeValues.enumValue(value);
+        }
+        if ("vector2".equals(tag) && values.keySet().equals(java.util.Set.of(
+                "$runtimeValue", "x", "y"))
+                && values.get("x") instanceof Number x
+                && values.get("y") instanceof Number y) {
+            return new RuntimeValue.Vector2Value(
+                    new RuntimeValue.DecimalValue(new BigDecimal(x.toString())),
+                    new RuntimeValue.DecimalValue(new BigDecimal(y.toString())));
+        }
+        throw new IllegalArgumentException("invalid tagged simulation assertion value");
+    }
+
+    private static final class AssertionValueBudget {
+        private final int maximumDepth;
+        private final int maximumNodes;
+        private final int maximumCollectionLength;
+        private final int maximumStringLength;
+        private int nodes;
+
+        private AssertionValueBudget(int maximumDepth, int maximumNodes,
+                int maximumCollectionLength, int maximumStringLength) {
+            this.maximumDepth = maximumDepth;
+            this.maximumNodes = maximumNodes;
+            this.maximumCollectionLength = maximumCollectionLength;
+            this.maximumStringLength = maximumStringLength;
+        }
+
+        private void validate(Object raw, int depth) {
+            if (depth > maximumDepth || ++nodes > maximumNodes) {
+                throw new IllegalArgumentException(
+                        "simulation assertion value exceeds its hard bound");
+            }
+            if (raw == null || raw instanceof Boolean || raw instanceof Number) {
+                return;
+            }
+            if (raw instanceof String value) {
+                string(value);
+                return;
+            }
+            if (raw instanceof List<?> values) {
+                collection(values.size());
+                values.forEach(value -> validate(value, depth + 1));
+                return;
+            }
+            if (raw instanceof Map<?, ?> values) {
+                Object tag = values.get("$runtimeValue");
+                if (tag != null || values.containsKey("$runtimeValue")) {
+                    validateTag(values);
+                    return;
+                }
+                collection(values.size());
+                values.forEach((key, value) -> {
+                    if (!(key instanceof String name)) {
+                        throw new IllegalArgumentException(
+                                "runtime value field name is not a string");
+                    }
+                    string(name);
+                    validate(value, depth + 1);
+                });
+                return;
+            }
+            throw new IllegalArgumentException("unsupported simulation assertion value");
+        }
+
+        private void validateTag(Map<?, ?> values) {
+            Object tag = values.get("$runtimeValue");
+            if ("enum".equals(tag) && values.keySet().equals(java.util.Set.of(
+                    "$runtimeValue", "value"))
+                    && values.get("value") instanceof String value) {
+                string(value);
+                return;
+            }
+            if ("vector2".equals(tag) && values.keySet().equals(java.util.Set.of(
+                    "$runtimeValue", "x", "y"))
+                    && values.get("x") instanceof Number
+                    && values.get("y") instanceof Number) {
+                return;
+            }
+            throw new IllegalArgumentException("invalid tagged simulation assertion value");
+        }
+
+        private void collection(int size) {
+            if (size > maximumCollectionLength) {
+                throw new IllegalArgumentException(
+                        "simulation assertion collection exceeds its hard bound");
+            }
+        }
+
+        private void string(String value) {
+            if (value.length() > maximumStringLength) {
+                throw new IllegalArgumentException(
+                        "simulation assertion string exceeds its hard bound");
+            }
+        }
     }
 
     private static SnapshotComparisonScope comparisonScope(Object raw) {

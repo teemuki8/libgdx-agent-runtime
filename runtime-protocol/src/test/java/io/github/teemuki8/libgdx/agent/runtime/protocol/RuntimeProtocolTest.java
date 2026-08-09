@@ -669,6 +669,23 @@ final class RuntimeProtocolTest {
     }
 
     @Test
+    void simulationAssertionRejectsOversizedRequirementsBeforeCopyingCallerCollection() {
+        List<SimulationEvidenceRequirement> oversized = new java.util.AbstractList<>() {
+            @Override public SimulationEvidenceRequirement get(int index) {
+                throw new AssertionError("oversized requirements must not be traversed");
+            }
+
+            @Override public int size() {
+                return 9;
+            }
+        };
+
+        assertThrows(IllegalArgumentException.class, () -> new RuntimeCommand.SimulationAssert(
+                new SimulationAssertion.EntityExists(EntityId.of("ball")), oversized,
+                0, 1, 1, 1));
+    }
+
+    @Test
     void simulationControlPauseAdvanceAndWaitRoundTripWithExactFrameEvidence() {
         ArrayDeque<Runnable> queue = new ArrayDeque<>();
         int[] ticks = {0};

@@ -8,7 +8,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.badlogic.gdx.physics.box2d.Box2D;
 import com.badlogic.gdx.utils.GdxNativesLoader;
+import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dAdapterLimits;
 import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dAssertions;
+import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dContactLimits;
 import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dDeterminism;
 import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dVector;
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
@@ -17,15 +19,23 @@ import io.github.teemuki8.libgdx.agent.runtime.core.AssertionStatus;
 import io.github.teemuki8.libgdx.agent.runtime.core.CommandState;
 import io.github.teemuki8.libgdx.agent.runtime.core.DeterminismStatus;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
+import io.github.teemuki8.libgdx.agent.runtime.core.EntitySnapshot;
 import io.github.teemuki8.libgdx.agent.runtime.core.EventQuery;
 import io.github.teemuki8.libgdx.agent.runtime.core.ExecutionEpochId;
 import io.github.teemuki8.libgdx.agent.runtime.core.FrameRange;
 import io.github.teemuki8.libgdx.agent.runtime.core.FixedStepUpdateDiagnostic;
+import io.github.teemuki8.libgdx.agent.runtime.core.RecordingInputEntry;
+import io.github.teemuki8.libgdx.agent.runtime.core.RecordingSpec;
+import io.github.teemuki8.libgdx.agent.runtime.core.RecordingTickEntry;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeErrorCode;
+import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeEvent;
+import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertion;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertionScope;
+import io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertionSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationTickQuery;
+import io.github.teemuki8.libgdx.agent.runtime.core.SimulationTickOutcome;
 import io.github.teemuki8.libgdx.agent.runtime.mcp.RuntimeToolHandler;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.ProtocolVersion;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.PublishedRuntime;
@@ -35,6 +45,7 @@ import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeRegistry;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeRequest;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeResponse;
 import io.modelcontextprotocol.spec.McpSchema;
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -112,11 +123,29 @@ final class Box2dConformanceFixtureTest {
             assertEquals(AssertionStatus.PASS, runtime.assertions().evaluateSimulation(
                     Box2dAssertions.contactOccurred("main", left, right),
                     new SimulationAssertionScope(collisionEpoch, 1, 90, 8)).status());
-            assertTrue(runtime.events(new EventQuery(
+            RuntimeEvent postSolve = runtime.events(new EventQuery(
                     FrameRange.of(collisionReset.baselineFrameId().orElseThrow().value(),
                             runtime.latestFrame().orElseThrow().frameId().value()),
                     Optional.of("box2d.contact.postSolve"), false,
-                    Optional.empty(), Optional.empty(), 100)).items().size() > 0);
+                    Optional.empty(), Optional.empty(), 100)).items().stream()
+                    .findFirst().orElseThrow();
+            assertInstanceOf(RuntimeValue.Vector2Value.class,
+                    attribute(postSolve, "normal"));
+            assertFalse(list(attribute(postSolve, "points")).values().isEmpty());
+            assertFalse(list(attribute(postSolve, "impulses")).values().isEmpty());
+
+            EntitySnapshot contacts = runtime.entity(
+                    EntityId.of("box2d.contacts.main")).orElseThrow();
+            assertEquals(RuntimeValues.bool(true),
+                    contacts.property("complete").orElseThrow());
+            assertFalse(list(contacts.property("activeContacts").orElseThrow())
+                    .values().isEmpty());
+            assertEquals(RuntimeValues.enumValue("DISTANCE"), runtime.entity(
+                    EntityId.of("box2d.joint.static-link")).orElseThrow()
+                    .property("jointType").orElseThrow());
+            assertEquals(RuntimeValues.integer(90), runtime.entity(
+                    EntityId.of("fixture.post-physics")).orElseThrow()
+                    .property("completedTicks").orElseThrow());
 
             runtime.scenarios().reset(
                     "player-movement", "player-reset", Duration.ofSeconds(2));
@@ -147,6 +176,49 @@ final class Box2dConformanceFixtureTest {
                     new SimulationAssertionScope(playerEpoch, 1, 90, 8)).status());
             fixture.recordRender();
             assertEquals(1, fixture.renderCount());
+        }
+    }
+
+    @Test
+    void checkpointRestoreAndRecordingUseTheSameScheduledTickPath() {
+        try (Box2dConformanceSimulation fixture =
+                new Box2dConformanceSimulation(Runnable::run)) {
+            AgentRuntime runtime = fixture.runtime();
+            runtime.scenarios().reset(
+                    "player-movement", "checkpoint-player-reset", Duration.ofSeconds(2));
+            runtime.controls().control(true, "checkpoint-pause", Duration.ofSeconds(2));
+            runtime.checkpoints().create(
+                    "player-start", "before scheduled input", "checkpoint-create",
+                    Duration.ofSeconds(2));
+            runtime.recordings().start(new RecordingSpec(
+                    "player-recording", "2.4", List.of(),
+                    Optional.of("player-movement"), Optional.of("player-start"),
+                    OptionalLong.of(7), RuntimeValues.object(), false),
+                    "recording-start", Duration.ofSeconds(2));
+
+            long scheduledTick = runtime.controls().currentTick() + 1;
+            runtime.inputs().inject("move-player", "recorded-player-input",
+                    RuntimeValues.object(RuntimeValues.field(
+                            "velocityX", RuntimeValues.decimal("4"))),
+                    OptionalLong.of(scheduledTick), Duration.ofSeconds(2));
+            runtime.controls().advanceFixed(
+                    "recorded-player-advance", 10, Duration.ofSeconds(5));
+            runtime.recordings().stop(
+                    "player-recording", "recording-stop", Duration.ofSeconds(2));
+            assertTrue(position(runtime, "player").x().value().doubleValue() > 0);
+
+            var restored = runtime.checkpoints().restore(
+                    "player-start", "checkpoint-restore", Duration.ofSeconds(2));
+            assertEquals(CommandState.SUCCEEDED,
+                    restored.command().status().orElseThrow().state());
+            assertEquals(0.0, position(runtime, "player").x().value().doubleValue(), 0.0001);
+            assertEquals(RuntimeValues.integer(0), runtime.entity(
+                    EntityId.of("fixture.post-physics")).orElseThrow()
+                    .property("completedTicks").orElseThrow());
+
+            var recording = runtime.recordings().get("player-recording", 0, 64);
+            assertTrue(recording.entries().stream().anyMatch(RecordingInputEntry.class::isInstance));
+            assertTrue(recording.entries().stream().anyMatch(RecordingTickEntry.class::isInstance));
         }
     }
 
@@ -277,6 +349,9 @@ final class Box2dConformanceFixtureTest {
                     FixedStepUpdateDiagnostic.RENDER_DELTA_CLAMPED));
             assertTrue(update.diagnostics().contains(
                     FixedStepUpdateDiagnostic.CATCH_UP_TICKS_DROPPED));
+            assertTrue(update.diagnostics().contains(
+                    FixedStepUpdateDiagnostic.ACCUMULATOR_TIME_DROPPED));
+            assertTrue(update.accumulatorLimitDroppedTimeNanos() > 0);
             assertTrue(update.droppedTicks() > 0);
 
             var wrongSettings = new Box2dDeterminism.WorldSettings(
@@ -293,5 +368,147 @@ final class Box2dConformanceFixtureTest {
             assertEquals(RuntimeErrorCode.INVALID_QUERY, failure.code());
             assertTrue(failure.getMessage().contains("box2d.world.main:gravity"));
         }
+    }
+
+    @Test
+    void executedStepMismatchIsRetainedAsFailedTickEvidence() {
+        try (Box2dConformanceSimulation fixture = new Box2dConformanceSimulation(
+                Runnable::run, Box2dConformanceSimulation.FIXED_STEP_NANOS * 2,
+                null, Box2dAdapterLimits.developmentDefaults(),
+                Box2dContactLimits.developmentDefaults(), false)) {
+            var update = fixture.simulation().updateNanos(
+                    Box2dConformanceSimulation.FIXED_STEP_NANOS);
+            assertTrue(update.diagnostics().contains(
+                    FixedStepUpdateDiagnostic.EXECUTED_DELTA_MISMATCH));
+            assertEquals(1, update.ticksCompleted());
+            assertEquals(SimulationTickOutcome.DELTA_MISMATCH,
+                    fixture.runtime().simulation().ticks(new SimulationTickQuery(
+                            new ExecutionEpochId(0), 1, 1, 1)).ticks().getFirst().outcome());
+        }
+    }
+
+    @Test
+    void scaleTruncationAndUnmappedContactsProduceFailAndInconclusiveEvidence() {
+        Box2dAdapterLimits shapeLimits = new Box2dAdapterLimits(
+                16, 4_096, 8_192, 2_048, 2, 64, 8);
+        try (Box2dConformanceSimulation fixture = new Box2dConformanceSimulation(
+                Runnable::run, Box2dConformanceSimulation.FIXED_STEP_NANOS,
+                "ball-shape", shapeLimits,
+                new Box2dContactLimits(1, 1, 1, 1, 1, 1, 1_024, 256), false)) {
+            AgentRuntime runtime = fixture.runtime();
+            var reset = runtime.scenarios().reset(
+                    "ball-drop", "negative-ball-reset", Duration.ofSeconds(2));
+            ExecutionEpochId epoch = reset.executionEpochId().orElseThrow();
+            runtime.controls().control(true, "negative-pause", Duration.ofSeconds(2));
+            runtime.controls().advanceFixed("negative-advance", 240, Duration.ofSeconds(5));
+
+            RuntimeValue.ListValue shapeDiagnostics = list(runtime.entity(
+                    EntityId.of("box2d.fixture.ground-shape")).orElseThrow()
+                    .property("diagnostics").orElseThrow());
+            assertTrue(shapeDiagnostics.values().contains(
+                    RuntimeValues.enumValue("SHAPE_VERTICES_TRUNCATED")));
+            EntitySnapshot contactEvidence = runtime.entity(
+                    EntityId.of("box2d.contacts.main")).orElseThrow();
+            assertEquals(RuntimeValues.bool(false),
+                    contactEvidence.property("complete").orElseThrow());
+            assertTrue(list(contactEvidence.property("diagnostics").orElseThrow())
+                    .values().stream().anyMatch(value -> RuntimeValues.enumValue(
+                            "UNMAPPED_ENDPOINT").equals(field(value, "code"))));
+
+            var renderExtent = new SimulationAssertionSpec(
+                    new SimulationAssertion.VectorInArea(
+                            EntityId.of("box2d.body.ball"), "renderPosition",
+                            new SimulationAssertion.Area(
+                                    BigDecimal.valueOf(-10), BigDecimal.valueOf(-10),
+                                    BigDecimal.valueOf(10), BigDecimal.valueOf(10)),
+                            SimulationAssertion.AreaRelation.INSIDE,
+                            SimulationAssertion.Extent.FINAL), List.of());
+            assertEquals(AssertionStatus.FAIL, runtime.assertions().evaluateSimulation(
+                    renderExtent,
+                    new SimulationAssertionScope(epoch, 240, 240, 8)).status());
+
+            var ball = new Box2dAssertions.ContactEndpoint("ball", "ball-shape", 0);
+            var ground = new Box2dAssertions.ContactEndpoint("ground", "ground-shape", 0);
+            var contact = runtime.assertions().evaluateSimulation(
+                    Box2dAssertions.contactOccurred("main", ball, ground),
+                    new SimulationAssertionScope(epoch, 1, 240, 8));
+            assertEquals(AssertionStatus.INCONCLUSIVE, contact.status());
+            assertTrue(contact.evidenceIncomplete());
+        }
+
+        try (Box2dConformanceSimulation fixture = new Box2dConformanceSimulation(
+                Runnable::run, Box2dConformanceSimulation.FIXED_STEP_NANOS,
+                null, Box2dAdapterLimits.developmentDefaults(),
+                new Box2dContactLimits(1, 1, 1, 1, 1, 8, 1_024, 256), false)) {
+            AgentRuntime runtime = fixture.runtime();
+            runtime.scenarios().reset(
+                    "collision", "truncated-collision-reset", Duration.ofSeconds(2));
+            ExecutionEpochId epoch = runtime.currentEpoch();
+            runtime.controls().control(true, "truncated-pause", Duration.ofSeconds(2));
+            runtime.controls().advanceFixed(
+                    "truncated-advance", 90, Duration.ofSeconds(5));
+            EntitySnapshot evidence = runtime.entity(
+                    EntityId.of("box2d.contacts.main")).orElseThrow();
+            assertEquals(RuntimeValues.bool(false), evidence.property("complete").orElseThrow());
+            assertTrue(runtime.simulation().ticks(new SimulationTickQuery(
+                            epoch, 1, 90, 90)).ticks().stream()
+                    .map(tick -> runtime.frame(tick.resultingFrameId().orElseThrow())
+                            .orElseThrow().entity(EntityId.of("box2d.contacts.main"))
+                            .orElseThrow())
+                    .flatMap(snapshot -> list(snapshot.property("diagnostics").orElseThrow())
+                            .values().stream())
+                    .anyMatch(value -> RuntimeValues.enumValue(
+                            "RECORD_LIMIT_REACHED").equals(field(value, "code"))));
+        }
+    }
+
+    @Test
+    void alteredNativeRerunReportsFirstDifferingTickAndProperty() {
+        try (Box2dConformanceSimulation fixture = new Box2dConformanceSimulation(
+                Runnable::run, Box2dConformanceSimulation.FIXED_STEP_NANOS,
+                null, Box2dAdapterLimits.developmentDefaults(),
+                Box2dContactLimits.developmentDefaults(), true)) {
+            var settings = new Box2dDeterminism.WorldSettings(
+                    Box2dConformanceSimulation.FIXED_STEP_NANOS,
+                    new Box2dVector(0, 0), 8, 3, true, true, true);
+            var spec = Box2dDeterminism.builder(
+                            "main", settings, "player-movement", 7,
+                            RuntimeValues.object(), 2, 10)
+                    .body("player", "position", "linearVelocity")
+                    .input(1, "move-player", RuntimeValues.object(RuntimeValues.field(
+                            "velocityX", RuntimeValues.decimal("4"))))
+                    .build();
+            fixture.runtime().scenarios().reset(
+                    "player-movement", "divergent-baseline", Duration.ofSeconds(2));
+
+            var result = fixture.runtime().determinism().checkSimulation(
+                    spec, "native-player-diverged", Duration.ofSeconds(10))
+                    .result().orElseThrow();
+            assertEquals(DeterminismStatus.DIVERGED, result.status());
+            assertEquals(1, result.divergence().orElseThrow().epochTick());
+            assertTrue(result.divergence().orElseThrow().difference().fact()
+                    .orElseThrow().contains("linearVelocity"));
+        }
+    }
+
+    private static RuntimeValue attribute(RuntimeEvent event, String name) {
+        return event.attributes().stream().filter(field -> field.name().equals(name))
+                .findFirst().orElseThrow().value();
+    }
+
+    private static RuntimeValue.ListValue list(RuntimeValue value) {
+        return assertInstanceOf(RuntimeValue.ListValue.class, value);
+    }
+
+    private static RuntimeValue field(RuntimeValue value, String name) {
+        return assertInstanceOf(RuntimeValue.ObjectValue.class, value).fields().stream()
+                .filter(candidate -> candidate.name().equals(name))
+                .findFirst().orElseThrow().value();
+    }
+
+    private static RuntimeValue.Vector2Value position(AgentRuntime runtime, String bodyId) {
+        return assertInstanceOf(RuntimeValue.Vector2Value.class, runtime.entity(
+                EntityId.of("box2d.body." + bodyId)).orElseThrow()
+                .property("position").orElseThrow());
     }
 }

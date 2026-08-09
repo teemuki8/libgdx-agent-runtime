@@ -5,8 +5,10 @@ import com.badlogic.gdx.physics.box2d.Body;
 import com.badlogic.gdx.physics.box2d.BodyDef;
 import com.badlogic.gdx.physics.box2d.CircleShape;
 import com.badlogic.gdx.physics.box2d.Fixture;
+import com.badlogic.gdx.physics.box2d.Joint;
 import com.badlogic.gdx.physics.box2d.PolygonShape;
 import com.badlogic.gdx.physics.box2d.World;
+import com.badlogic.gdx.physics.box2d.joints.DistanceJointDef;
 import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dAdapterLimits;
 import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dContactLimits;
 import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dContactPolicy;
@@ -17,6 +19,10 @@ import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dUnitTransform;
 import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dWorldSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
 import io.github.teemuki8.libgdx.agent.runtime.core.ApplicationCommandDispatcher;
+import io.github.teemuki8.libgdx.agent.runtime.core.CheckpointHandle;
+import io.github.teemuki8.libgdx.agent.runtime.core.CheckpointProvider;
+import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
+import io.github.teemuki8.libgdx.agent.runtime.core.EntityType;
 import io.github.teemuki8.libgdx.agent.runtime.core.FixedStepDropPolicy;
 import io.github.teemuki8.libgdx.agent.runtime.core.FixedStepSimulationConfiguration;
 import io.github.teemuki8.libgdx.agent.runtime.core.InputSpec;
@@ -46,7 +52,8 @@ public final class Box2dConformanceSimulation implements AutoCloseable {
     private static final int VELOCITY_ITERATIONS = 8;
     private static final int POSITION_ITERATIONS = 3;
     private static final String[] BODY_IDS = {
-        "ground", "wall", "ball", "collision-left", "collision-right", "player"
+        "ground", "wall", "ball", "collision-left", "collision-right", "player",
+        "joint-a", "joint-b"
     };
     private static final String[] FIXTURE_IDS = {
         "ground-shape", "wall-shape", "ball-shape", "collision-left-shape",
@@ -58,38 +65,79 @@ public final class Box2dConformanceSimulation implements AutoCloseable {
     private final Box2dContacts contacts;
     private final LibGdxFixedStepSimulation simulation;
     private final Box2dRegistration<World> worldRegistration;
+    private final String omittedFixtureId;
+    private final long reportedExecutedStepNanos;
+    private final boolean divergentPlayerInput;
     private final LinkedHashMap<String, Box2dRegistration<Body>> bodyRegistrations =
             new LinkedHashMap<>();
     private final LinkedHashMap<String, Box2dRegistration<Fixture>> fixtureRegistrations =
             new LinkedHashMap<>();
+    private final LinkedHashMap<String, Box2dRegistration<Joint>> jointRegistrations =
+            new LinkedHashMap<>();
     private NativeScene scene;
     private int renderCount;
+    private int sceneGeneration;
+    private long postPhysicsTicks;
     private boolean closed;
 
     /** Creates, registers, and starts the fixture on the application/capture thread. */
     public Box2dConformanceSimulation(ApplicationCommandDispatcher dispatcher) {
+        this(dispatcher, FIXED_STEP_NANOS, null,
+                Box2dAdapterLimits.developmentDefaults(),
+                Box2dContactLimits.developmentDefaults(), false);
+    }
+
+    Box2dConformanceSimulation(ApplicationCommandDispatcher dispatcher,
+            long reportedExecutedStepNanos, String omittedFixtureId,
+            Box2dAdapterLimits adapterLimits, Box2dContactLimits contactLimits,
+            boolean divergentPlayerInput) {
         Objects.requireNonNull(dispatcher, "dispatcher");
+        this.reportedExecutedStepNanos = reportedExecutedStepNanos;
+        this.omittedFixtureId = omittedFixtureId;
+        this.divergentPlayerInput = divergentPlayerInput;
         runtime = LibGdxAgentRuntime.builder()
                 .captureThread(Thread.currentThread())
                 .sessionId(SESSION_ID)
                 .commandDispatcher(dispatcher)
                 .build();
         scene = createScene(Scenario.BALL_DROP);
-        inspection = new Box2dInspection(runtime, Box2dAdapterLimits.developmentDefaults());
+        inspection = new Box2dInspection(runtime, Objects.requireNonNull(adapterLimits,
+                "adapterLimits"));
         worldRegistration = inspection.registerWorld(
                 WORLD_ID, scene.world(), worldSpec());
         registerDescendants(scene);
         contacts = inspection.registerContacts(WORLD_ID,
-                Box2dContactLimits.developmentDefaults(),
+                Objects.requireNonNull(contactLimits, "contactLimits"),
                 Box2dContactPolicy.developmentDefaults());
         scene.world().setContactListener(contacts.listener());
 
         runtime.inputs().register(InputSpec.builder("move-player")
                 .description("Sets horizontal player velocity before the selected physics tick")
                 .requiredDecimal("velocityX")
-                .handler(parameters -> scene.bodies().get("player").setLinearVelocity(
-                        parameters.requiredDecimal("velocityX").floatValue(), 0))
+                .handler(parameters -> {
+                    float velocity = parameters.requiredDecimal("velocityX").floatValue();
+                    if (divergentPlayerInput && sceneGeneration % 2 == 0) {
+                        velocity += 1;
+                    }
+                    scene.bodies().get("player").setLinearVelocity(velocity, 0);
+                })
                 .build());
+        runtime.entities().register(EntityId.of("fixture.post-physics"),
+                EntityType.of("fixture.game-logic"), () -> "post-physics",
+                inspector -> inspector.property("completedTicks", () -> postPhysicsTicks));
+        runtime.checkpoints().register(new CheckpointProvider() {
+            @Override public CheckpointHandle create() {
+                return checkpoint();
+            }
+
+            @Override public void restore(CheckpointHandle handle) {
+                restoreCheckpoint((SceneCheckpoint) handle);
+            }
+
+            @Override public void dispose(CheckpointHandle handle) {
+                // The immutable checkpoint owns no native object.
+            }
+        });
         runtime.scenarios().register(BALL_DROP,
                 "Recreates the deterministic gravity ball-drop world",
                 context -> reset(Scenario.BALL_DROP));
@@ -102,13 +150,14 @@ public final class Box2dConformanceSimulation implements AutoCloseable {
 
         simulation = LibGdxFixedStepSimulation.acknowledged(runtime,
                 new FixedStepSimulationConfiguration(
-                        FIXED_STEP_NANOS, FIXED_STEP_NANOS * 16,
+                        FIXED_STEP_NANOS, FIXED_STEP_NANOS * 32,
                         FIXED_STEP_NANOS * 16, 8, 1_024,
                         FixedStepDropPolicy.DROP_WHOLE_TICKS_KEEP_REMAINDER, true), tick -> {
                             contacts.captureStep(() -> scene.world().step(
                                     tick.fixedStepSeconds(),
                                     VELOCITY_ITERATIONS, POSITION_ITERATIONS));
-                            return tick.fixedStepNanos();
+                            gameLogicAfterPhysics();
+                            return reportedExecutedStepNanos;
                         });
         runtime.start();
     }
@@ -147,6 +196,8 @@ public final class Box2dConformanceSimulation implements AutoCloseable {
     private void reset(Scenario scenario) {
         NativeScene replacement = createScene(scenario);
         World previous = scene.world();
+        jointRegistrations.values().forEach(Box2dRegistration::close);
+        jointRegistrations.clear();
         fixtureRegistrations.values().forEach(Box2dRegistration::close);
         fixtureRegistrations.clear();
         bodyRegistrations.values().forEach(Box2dRegistration::close);
@@ -155,6 +206,7 @@ public final class Box2dConformanceSimulation implements AutoCloseable {
         registerDescendants(replacement);
         replacement.world().setContactListener(contacts.listener());
         scene = replacement;
+        sceneGeneration++;
         runtime.fixedStepSimulation().clearAccumulator();
         previous.dispose();
     }
@@ -167,9 +219,13 @@ public final class Box2dConformanceSimulation implements AutoCloseable {
         for (int index = 0; index < FIXTURE_IDS.length; index++) {
             String fixtureId = FIXTURE_IDS[index];
             String bodyId = BODY_IDS[index];
-            fixtureRegistrations.put(fixtureId, inspection.registerFixture(
-                    fixtureId, bodyId, value.fixtures().get(fixtureId)));
+            if (!fixtureId.equals(omittedFixtureId)) {
+                fixtureRegistrations.put(fixtureId, inspection.registerFixture(
+                        fixtureId, bodyId, value.fixtures().get(fixtureId)));
+            }
         }
+        jointRegistrations.put("static-link", inspection.registerJoint(
+                "static-link", WORLD_ID, value.joints().get("static-link")));
     }
 
     private static Box2dWorldSpec worldSpec() {
@@ -215,7 +271,18 @@ public final class Box2dConformanceSimulation implements AutoCloseable {
         bodies.put("player", player);
         fixtures.put("player-shape", circleFixture(player, 0.5f));
 
-        return new NativeScene(world, Map.copyOf(bodies), Map.copyOf(fixtures));
+        Body jointA = boxBody(world, BodyDef.BodyType.DynamicBody, 20, 20, false);
+        bodies.put("joint-a", jointA);
+        Body jointB = boxBody(world, BodyDef.BodyType.DynamicBody, 21, 20, false);
+        bodies.put("joint-b", jointB);
+        DistanceJointDef jointDefinition = new DistanceJointDef();
+        jointDefinition.initialize(jointA, jointB,
+                jointA.getWorldCenter(), jointB.getWorldCenter());
+        LinkedHashMap<String, Joint> joints = new LinkedHashMap<>();
+        joints.put("static-link", world.createJoint(jointDefinition));
+
+        return new NativeScene(world, Map.copyOf(bodies), Map.copyOf(fixtures),
+                Map.copyOf(joints));
     }
 
     private static Body boxBody(World world, BodyDef.BodyType type,
@@ -259,10 +326,43 @@ public final class Box2dConformanceSimulation implements AutoCloseable {
         }
     }
 
+    private void gameLogicAfterPhysics() {
+        postPhysicsTicks++;
+    }
+
+    private SceneCheckpoint checkpoint() {
+        LinkedHashMap<String, BodyState> bodies = new LinkedHashMap<>();
+        scene.bodies().forEach((id, body) -> bodies.put(id, new BodyState(
+                body.isActive(), body.getPosition().x, body.getPosition().y,
+                body.getAngle(), body.getLinearVelocity().x, body.getLinearVelocity().y,
+                body.getAngularVelocity(), body.isAwake())));
+        return new SceneCheckpoint(Map.copyOf(bodies), postPhysicsTicks);
+    }
+
+    private void restoreCheckpoint(SceneCheckpoint checkpoint) {
+        checkpoint.bodies().forEach((id, state) -> {
+            Body body = scene.bodies().get(id);
+            body.setActive(state.active());
+            body.setTransform(state.x(), state.y(), state.angle());
+            body.setLinearVelocity(state.velocityX(), state.velocityY());
+            body.setAngularVelocity(state.angularVelocity());
+            body.setAwake(state.awake());
+        });
+        postPhysicsTicks = checkpoint.postPhysicsTicks();
+        runtime.fixedStepSimulation().clearAccumulator();
+    }
+
     private enum Scenario {
         BALL_DROP, COLLISION, PLAYER_MOVEMENT
     }
 
     private record NativeScene(
-            World world, Map<String, Body> bodies, Map<String, Fixture> fixtures) {}
+            World world, Map<String, Body> bodies, Map<String, Fixture> fixtures,
+            Map<String, Joint> joints) {}
+
+    private record SceneCheckpoint(
+            Map<String, BodyState> bodies, long postPhysicsTicks) implements CheckpointHandle {}
+
+    private record BodyState(boolean active, float x, float y, float angle,
+            float velocityX, float velocityY, float angularVelocity, boolean awake) {}
 }

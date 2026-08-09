@@ -1156,12 +1156,28 @@ identical floating-point state or callback order.
 The unpublished `runtime-fixtures` module contains the copyable agent example:
 
 - `Box2dConformanceSimulation` composes the public fixed-step, inspection, contacts, input,
-  scenario, assertion, and determinism APIs around an actual native `World`;
+  scenario, checkpoint, recording, assertion, and determinism APIs around an actual native
+  `World`, including selected bodies, fixtures, and a distance joint plus observable
+  post-physics game logic;
 - `Box2dConformanceFixtureTest` proves ball drop, two-body collision, scheduled player movement,
-  exact tick/frame evidence, protocol 2.3/2.4, MCP, render independence, deterministic reruns, and
-  explicit catch-up/configuration failures;
+  post-solve points/normal/impulses, active contacts, exact tick/frame evidence, checkpoint restore,
+  recording, protocol 2.3/2.4, MCP, render independence, and deterministic reruns;
 - `Box2dConformanceApplication` runs the same model from a hidden real LWJGL3 render loop, using
   `Gdx.graphics.getDeltaTime()` only as input to the canonical accumulator.
+
+The fixture also locks down the negative matrix agents need when a game is broken:
+
+| Deliberate fault | Required evidence |
+| --- | --- |
+| application reports twice the configured step | `EXECUTED_DELTA_MISMATCH` and tick outcome `DELTA_MISMATCH` |
+| one-second render delta | render clamp, accumulator loss, catch-up tick loss, and exact dropped time/ticks |
+| 100 render units/metre violates an application-supplied 10-unit extent | assertion `FAIL` with observed `renderPosition` |
+| polygon vertices and contact callbacks exceed configured limits | `SHAPE_VERTICES_TRUNCATED`, `RECORD_LIMIT_REACHED`, and `complete=false` |
+| colliding fixture endpoint is not registered | `UNMAPPED_ENDPOINT`, `complete=false`, and contact assertion `INCONCLUSIVE` |
+| one repeat changes scheduled input testimony | `DIVERGED` at epoch tick 1 with `linearVelocity` as the first differing fact |
+
+These faults are separate fixtures/configurations. Do not combine incomplete evidence with a
+successful claim or infer a scale meaning that the application did not supply.
 
 On Linux run the isolated native gate, never the developer desktop display:
 

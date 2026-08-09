@@ -4,10 +4,11 @@ Issue #71 is a final qualification slice, not a new physics abstraction. One reu
 will own an actual Box2D `World`, stable registration handles, contacts, a
 `LibGdxFixedStepSimulation`, and a started `AgentRuntime`. It exposes only bounded test operations.
 
-The model registers all stable IDs once. Reset creates the requested scenario's replacement native
-objects, rebinds world/body/fixture handles before the scenario baseline, reinstalls the explicit
-contact listener, and clears the fixed-step accumulator. The three scenarios are ball drop,
-two-body collision, and player movement against static geometry.
+The model preserves stable agent-visible IDs across resets. Reset creates the requested scenario's
+replacement native objects, closes descendant fixture/body registrations, rebinds the world,
+registers the replacement descendants under the same IDs before the scenario baseline, reinstalls
+the explicit contact listener, and clears the fixed-step accumulator. The three scenarios are ball
+drop, two-body collision, and player movement against static geometry.
 
 The acknowledged fixed-step callback performs contact capture around exactly one `World.step`, then
 post-physics game logic. Registered inputs mutate only explicit fixture intent before that callback.

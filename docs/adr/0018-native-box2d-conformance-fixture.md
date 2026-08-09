@@ -17,9 +17,10 @@ reset/input/control, immutable assertions, determinism, protocol, and MCP. The a
 world, listener, render loop, command queue, native disposal, and every rebind.
 
 The fixture has three closed scenarios: ball drop, dynamic collision, and input-driven player
-movement. Scenario reset recreates the native world, rebinds the stable adapter handles, clears the
-fixed-step accumulator, and lets the runtime capture the new epoch baseline. Rendering is never
-authoritative; tests may execute many simulation ticks between renders.
+movement. Scenario reset recreates the native world, closes descendant fixture/body registrations,
+rebinds the world, registers replacements under the same stable IDs, clears the fixed-step
+accumulator, and lets the runtime capture the new epoch baseline. Rendering is never authoritative;
+tests may execute many simulation ticks between renders.
 
 The integrated additive protocol allocation is 2.1 timeline, 2.2 fixed-step facade, 2.3 simulation
 assertions, and 2.4 simulation determinism. Earlier exact shapes remain unchanged.

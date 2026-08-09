@@ -224,3 +224,10 @@ Disabled runtimes retain no providers or frames and perform no serialization.
     supplies only a data-to-spec builder; it never reads native state. Protocol 2.4 and the closed
     `runtime_simulation_determinism_check` tool expose this additive result without changing older
     determinism or protocol shapes. Equality is not a whole-program or cross-platform claim.
+41. The unpublished native conformance fixture composes the public fixed-step, Box2D inspection,
+    contact, scenario, registered-input, controlled-tick, assertion, determinism, protocol, and MCP
+    contracts in one application-owned model. Linux qualification launches a hidden real LWJGL3
+    application and actual Box2D desktop natives only under Xvfb. The fixture proves that many
+    controlled simulation ticks remain valid with one supplementary render and records structured
+    position/contact/result/frame-correlation facts; screenshots never define correctness. It adds
+    no production dependency, transport, loop, thread, reflection, or native-disposal ownership.

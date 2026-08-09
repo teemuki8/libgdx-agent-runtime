@@ -1151,6 +1151,31 @@ application-reported setup in this operation. It is not whole-program determinis
 causality, or a promise that another CPU, platform, libGDX version, or Box2D native version produces
 identical floating-point state or callback order.
 
+## Run the actual-native Box2D conformance recipe
+
+The unpublished `runtime-fixtures` module contains the copyable agent example:
+
+- `Box2dConformanceSimulation` composes the public fixed-step, inspection, contacts, input,
+  scenario, assertion, and determinism APIs around an actual native `World`;
+- `Box2dConformanceFixtureTest` proves ball drop, two-body collision, scheduled player movement,
+  exact tick/frame evidence, protocol 2.3/2.4, MCP, render independence, deterministic reruns, and
+  explicit catch-up/configuration failures;
+- `Box2dConformanceApplication` runs the same model from a hidden real LWJGL3 render loop, using
+  `Gdx.graphics.getDeltaTime()` only as input to the canonical accumulator.
+
+On Linux run the isolated native gate, never the developer desktop display:
+
+```bash
+xvfb-run -a ./gradlew :runtime-fixtures:test --tests '*Box2dConformance*' \
+  --tests '*Lwjgl3FixtureSmokeTest*' --warning-mode=fail
+```
+
+The compact evidence asserts 60 controlled physics ticks, one supplementary presentation render,
+PASS position/contact assertions, EQUAL selected rerun evidence, runtime-frame correlation, and
+application-thread dispatch. See
+[Bootstrap migration: deterministic Box2D games](bootstrap-box2d-migration.md) for the exact
+generated-game contract.
+
 When any public Java API, protocol/MCP contract, dependency, or agent-visible behavior changes,
 update the affected cookbook schema and runnable recipe in that same pull request. Do not defer the
 agent example to a later documentation issue.

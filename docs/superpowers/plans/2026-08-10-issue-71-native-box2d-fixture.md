@@ -12,4 +12,5 @@
 6. Add the bootstrap migration guide and update the roadmap, design contract, cookbook, tool,
    dependency, and release documentation.
 7. Run focused native tests, fixture/full repository scripts under Xvfb, clean check/Javadoc,
-   dependency locks/metadata checks, and `jdeps` for JDK-only core; then open a stacked draft PR.
+   dependency locks/metadata checks, and `jdeps` for JDK-only core; then open a draft PR against
+   `main` without publishing artifacts.

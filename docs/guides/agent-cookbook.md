@@ -106,3 +106,71 @@ frame; inspect both `outcome` and `mutationOutcome` before deciding whether retr
 
 Close the runtime on its capture thread. Completed immutable tick pages remain queryable after
 close; no new tick is accepted.
+
+## Inspect registered Box2D state
+
+Use this development-version API when an agent needs authoritative physics evidence without
+reflection or native-pointer identities. Add `agent-runtime-box2d`, create the adapter on the
+runtime capture thread, and explicitly register the useful subset before `runtime.start()`:
+
+```java
+Box2dInspection physics = new Box2dInspection(
+        runtime, Box2dAdapterLimits.developmentDefaults());
+Box2dRegistration<World> mainWorld = physics.registerWorld(
+        "main", world, new Box2dWorldSpec(
+                true, true, true, 6, 2, OptionalDouble.of(60),
+                new Box2dUnitTransform(100)));
+Box2dRegistration<Body> ball = physics.registerBody("ball", "main", ballBody);
+Box2dRegistration<Fixture> ballShape = physics.registerFixture(
+        "ball-shape", "ball", ballFixture);
+```
+
+`Box2dUnitTransform(100)` explicitly means one physics metre equals 100 application render units.
+Use `physicsToRender` and `renderToPhysics` for finite scalar or `Box2dVector` conversion. The
+runtime never assumes that render units are pixels and does not invent a globally correct scale.
+
+Registration produces ordinary runtime entities with stable IDs and types:
+
+| Kind | Runtime ID | Entity type | Closed properties |
+| --- | --- | --- | --- |
+| World | `box2d.world.main` | `box2d.world` | IDs, gravity, supplied world/solver settings, fixed step, registered/total body-fixture-joint counts, contact count, locked state, render scale |
+| Body | `box2d.body.ball` | `box2d.body` | IDs, type, position/angle, linear/angular velocity, mass/inertia, gravity scale, damping, awake/active/bullet/fixed-rotation/sleeping flags, fixture counts |
+| Fixture | `box2d.fixture.ball-shape` | `box2d.fixture` | IDs, shape type, sensor/material/filter values, geometry, diagnostics |
+| Joint | `box2d.joint.spring` | `box2d.joint` | IDs/type/endpoints, anchors, active/collide-connected state, optional reaction values, type detail |
+
+Circle geometry contains radius and local centre. Polygon and chain geometry contains a bounded
+vertex prefix plus `observedVertices`, `retainedVertices`, `vertexLimit`, and `truncated`. Edge
+geometry contains endpoints and optional adjacent vertices. Chain registration must supply
+`Box2dFixtureSpec.chainLoop(true|false)`. A truncated polygon or chain also adds the bounded
+`SHAPE_VERTICES_TRUNCATED` fixture diagnostic. Distance, revolute, and prismatic joints have closed
+type-specific detail; other joint types expose only their stable native type. Reaction force and
+torque are `null` unless `Box2dWorldSpec.inverseStep` explicitly supplies the value required by
+Box2D's query.
+
+Inspect the result through the existing tool:
+
+```json
+{"name":"runtime_entity","arguments":{"sessionId":"game","entityId":"box2d.body.ball","fromFrame":0,"toFrame":60,"limit":60}}
+```
+
+For a fixed-step game, capture happens after `world.step` inside the acknowledged simulation tick:
+
+```java
+runtime.simulation().tick(FIXED_STEP_NANOS, supplied -> {
+    world.step((float) (supplied / 1_000_000_000.0), 6, 2);
+    gameLogicAfterPhysics();
+    return supplied;
+});
+```
+
+`Box2dAdapterLimits` bounds worlds, bodies, fixtures, joints, copied shape vertices, the largest
+closed property schema, and diagnostics. Core capture limits still apply afterward; always inspect
+`EntitySnapshot.truncations()` as well as fixture diagnostics. Capacity overflow, duplicate IDs or
+native wrappers, missing parents/endpoints, wrong-world relationships, missing chain-loop
+testimony, wrong-thread use, and use after close fail explicitly.
+
+The adapter stores weak native references and owns neither discovery nor lifecycle. Before replacing
+a native object, remove dependent fixture/joint registrations as required and call `rebind` on the
+stable registration. Close registrations from leaves to roots, or close `Box2dInspection` to remove
+all providers. The adapter never calls `World.dispose`, `Shape.dispose`, or any native destroy
+operation; application code remains responsible for those objects.

@@ -10,6 +10,7 @@ import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 final class Box2dShapeValues {
     private Box2dShapeValues() {}
@@ -65,11 +66,24 @@ final class Box2dShapeValues {
         }
         return RuntimeValues.object(
                 RuntimeValues.field("type", RuntimeValues.enumValue(shape.getType().name()
-                        .toUpperCase())),
+                        .toUpperCase(Locale.ROOT))),
                 RuntimeValues.field("observedVertices", RuntimeValues.integer(0)),
                 RuntimeValues.field("retainedVertices", RuntimeValues.integer(0)),
                 RuntimeValues.field("vertexLimit", RuntimeValues.integer(vertexLimit)),
                 RuntimeValues.field("truncated", RuntimeValues.bool(false)));
+    }
+
+    static RuntimeValue diagnostics(Shape shape, int vertexLimit, int diagnosticLimit) {
+        int vertices = switch (shape) {
+            case PolygonShape polygon -> polygon.getVertexCount();
+            case ChainShape chain -> chain.getVertexCount();
+            default -> 0;
+        };
+        if (vertices > vertexLimit && diagnosticLimit > 0) {
+            return RuntimeValues.list(
+                    RuntimeValues.enumValue("SHAPE_VERTICES_TRUNCATED"));
+        }
+        return RuntimeValues.list();
     }
 
     private static RuntimeValue vertices(String type, int observed, int limit,

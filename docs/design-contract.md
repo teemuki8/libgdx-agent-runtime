@@ -150,3 +150,12 @@ Disabled runtimes retain no providers or frames and perform no serialization.
     never claim fixed-step success. Timeline retention and queries are bounded with explicit
     pagination, partial eviction, and not-yet-executed status. Protocol 2.1 adds the closed
     `simulation` and `simulationTicks` commands without changing protocols 1.0-1.13 or 2.0.
+35. Box2D inspection is an optional adapter module directed toward `runtime-core`; core, protocol,
+    and MCP have no Box2D dependency. Applications explicitly register selected worlds, bodies,
+    fixtures, and joints under stable IDs. The adapter publishes closed `box2d.*` entity schemas
+    through existing snapshot/entity paths, retains only weak native references, bounds every
+    registration class, shape vertex list, property schema, and diagnostic list, and reports
+    adapter-level vertex truncation. Application testimony supplies solver settings, chain-loop
+    state, reaction-force inverse step, and the physics-metre/render-unit transform. The adapter
+    never reflects, traverses a world for discovery, owns stepping/rendering, disposes native
+    objects, infers pixel semantics, or hides runtime capture truncation.

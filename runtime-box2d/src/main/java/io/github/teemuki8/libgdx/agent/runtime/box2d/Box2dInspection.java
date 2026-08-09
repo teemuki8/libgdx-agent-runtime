@@ -2,7 +2,6 @@ package io.github.teemuki8.libgdx.agent.runtime.box2d;
 
 import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.physics.box2d.Body;
-import com.badlogic.gdx.physics.box2d.CircleShape;
 import com.badlogic.gdx.physics.box2d.Filter;
 import com.badlogic.gdx.physics.box2d.Fixture;
 import com.badlogic.gdx.physics.box2d.Joint;
@@ -17,6 +16,7 @@ import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import java.lang.ref.WeakReference;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.OptionalLong;
@@ -119,7 +119,7 @@ public final class Box2dInspection implements AutoCloseable {
         JointEntry entry = new JointEntry(id, entityId("joint", id), value, worldId, bodyA, bodyB);
         entry.entityRegistration = runtime.entities().register(entry.entityId,
                 EntityType.of("box2d.joint"), () -> id,
-                inspector -> Box2dJointValues.declare(inspector, entry, worlds, runtime));
+                inspector -> Box2dJointValues.declare(inspector, entry, worlds));
         joints.put(id, entry);
         return handle(entry);
     }
@@ -205,7 +205,7 @@ public final class Box2dInspection implements AutoCloseable {
                 .property("runtimeEntityId", () -> RuntimeValues.string(entry.entityId.value()))
                 .property("bodyId", () -> RuntimeValues.string(entry.parentId))
                 .property("shapeType", () -> RuntimeValues.enumValue(
-                        live(entry).getType().name().toUpperCase()))
+                        live(entry).getType().name().toUpperCase(Locale.ROOT)))
                 .property("sensor", () -> live(entry).isSensor())
                 .property("density", () -> decimal(live(entry).getDensity()))
                 .property("friction", () -> decimal(live(entry).getFriction()))
@@ -214,7 +214,10 @@ public final class Box2dInspection implements AutoCloseable {
                 .property("maskBits", () -> (long) Short.toUnsignedInt(filter(entry).maskBits))
                 .property("groupIndex", () -> (long) filter(entry).groupIndex)
                 .property("geometry", () -> Box2dShapeValues.copy(
-                        live(entry).getShape(), limits.shapeVertices(), entry.spec));
+                        live(entry).getShape(), limits.shapeVertices(), entry.spec))
+                .property("diagnostics", () -> Box2dShapeValues.diagnostics(
+                        live(entry).getShape(), limits.shapeVertices(),
+                        limits.diagnosticEntries()));
     }
 
     private RuntimeValue fixedStep() {
@@ -251,6 +254,9 @@ public final class Box2dInspection implements AutoCloseable {
 
     private void rebind(Entry<?> entry, Object value) {
         requireOwnerOpen();
+        if (entry.closed) {
+            throw new IllegalStateException("Box2D registration is closed");
+        }
         Objects.requireNonNull(value, "value");
         if (entry instanceof WorldEntry world) {
             if (bodies.values().stream().anyMatch(body -> body.parentId.equals(world.id))

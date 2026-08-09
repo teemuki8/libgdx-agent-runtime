@@ -143,6 +143,7 @@ final class Box2dInspectionTest {
             assertTrue(wrongThread.get() instanceof IllegalStateException);
 
             fixture.close();
+            assertThrows(IllegalStateException.class, () -> fixture.rebind(firstFixture));
             body.close();
             world.rebind(second);
             runtime.start();
@@ -155,6 +156,38 @@ final class Box2dInspectionTest {
         } finally {
             first.dispose();
             second.dispose();
+        }
+    }
+
+    @Test
+    void destroyedWorldCanBeRecreatedUnderTheSameStableRegistration() {
+        World original = new World(new Vector2(1, -9), true);
+        World replacement = new World(new Vector2(2, -8), true);
+        boolean originalDisposed = false;
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("box2d-world-recreation"))
+                .build();
+        Box2dInspection inspection = new Box2dInspection(
+                runtime, Box2dAdapterLimits.developmentDefaults());
+        try {
+            Box2dRegistration<World> registration = inspection.registerWorld(
+                    "main", original, worldSpec());
+            original.dispose();
+            originalDisposed = true;
+
+            registration.rebind(replacement);
+            runtime.start();
+
+            assertEquals(EntityId.of("box2d.world.main"), registration.runtimeEntityId());
+            assertEquals(RuntimeValues.vector2(2, -8), property(runtime.entity(
+                    registration.runtimeEntityId()).orElseThrow(), "gravity"));
+        } finally {
+            runtime.close();
+            inspection.close();
+            if (!originalDisposed) {
+                original.dispose();
+            }
+            replacement.dispose();
         }
     }
 

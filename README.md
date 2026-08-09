@@ -32,7 +32,8 @@ and declarative assertions. Optional application-owned capabilities add scenario
 control, registered input, opaque checkpoints, runtime/UI correlation, recording, and determinism
 comparison through closed protocol 1.0-1.13, 2.0, and 2.1 stdio MCP surfaces. Protocol 2.1 adds
 application-reported simulation timing and tick-to-frame evidence. A deterministic LWJGL3 fixture
-qualifies the full workflow.
+qualifies the full workflow. The development line also provides an optional explicit Box2D
+inspection adapter; it never traverses an application world automatically.
 
 V1 excludes replay execution, reflection, instrumentation, mutation interception, networking, ECS
 adapters, hot reload, visual debugging, natural-language queries, and automatic causality.
@@ -141,6 +142,7 @@ game running elsewhere. Remote process attachment is explicitly outside V1.
 | --- | --- | --- |
 | `runtime-core` | JDK-only model, capture, retention, queries | `agent-runtime-core` |
 | `runtime-libgdx` | render-thread helpers, metrics, converters | `agent-runtime-libgdx` |
+| `runtime-box2d` | explicit bounded Box2D world/body/fixture/joint inspection | `agent-runtime-box2d` |
 | `runtime-protocol` | strict V1 JSON and session registry | `agent-runtime-protocol` |
 | `runtime-mcp` | closed base and registered optional stdio MCP tools | `agent-runtime-mcp` |
 | `runtime-fixtures` | deterministic LWJGL3 qualification | not published |

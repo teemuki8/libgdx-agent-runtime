@@ -34,6 +34,8 @@ final class Box2dConfigurationTest {
                 () -> new Box2dAdapterLimits(0, 1, 1, 1, 1, 32, 1));
         assertThrows(IllegalArgumentException.class,
                 () -> new Box2dAdapterLimits(1, 1, 1, 1, 1_000_001, 32, 1));
+        assertThrows(IllegalArgumentException.class,
+                () -> new Box2dAdapterLimits(1, 1, 1, 1, 1, 19, 1));
 
         Box2dWorldSpec spec = new Box2dWorldSpec(true, true, true, 6, 2,
                 OptionalDouble.of(60.0), new Box2dUnitTransform(100));

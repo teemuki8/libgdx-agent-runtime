@@ -4,17 +4,17 @@ import com.badlogic.gdx.physics.box2d.Joint;
 import com.badlogic.gdx.physics.box2d.joints.DistanceJoint;
 import com.badlogic.gdx.physics.box2d.joints.PrismaticJoint;
 import com.badlogic.gdx.physics.box2d.joints.RevoluteJoint;
-import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityInspector;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
+import java.util.Locale;
 import java.util.Map;
 
 final class Box2dJointValues {
     private Box2dJointValues() {}
 
     static void declare(EntityInspector inspector, Box2dInspection.JointEntry entry,
-            Map<String, Box2dInspection.WorldEntry> worlds, AgentRuntime runtime) {
+            Map<String, Box2dInspection.WorldEntry> worlds) {
         inspector.property("id", () -> RuntimeValues.string(entry.id))
                 .property("runtimeEntityId", () -> RuntimeValues.string(entry.entityId.value()))
                 .property("worldId", () -> RuntimeValues.string(entry.parentId))
@@ -108,7 +108,7 @@ final class Box2dJointValues {
             case DistanceJoint -> "DISTANCE";
             case RevoluteJoint -> "REVOLUTE";
             case PrismaticJoint -> "PRISMATIC";
-            default -> joint.getType().name().replace("Joint", "").toUpperCase();
+            default -> joint.getType().name().replace("Joint", "").toUpperCase(Locale.ROOT);
         };
     }
 }

@@ -69,6 +69,10 @@ final class Box2dShapeInspectionTest {
             assertEquals(RuntimeValues.bool(true), field(polygonGeometry, "truncated"));
             assertEquals(2, ((RuntimeValue.ListValue) field(
                     polygonGeometry, "vertices")).values().size());
+            assertEquals(new RuntimeValue.ListValue(java.util.List.of(
+                            RuntimeValues.enumValue("SHAPE_VERTICES_TRUNCATED"))),
+                    runtime.entity(EntityId.of("box2d.fixture.polygon")).orElseThrow()
+                            .property("diagnostics").orElseThrow());
 
             RuntimeValue.ObjectValue edgeGeometry = geometry(runtime, "edge");
             assertEquals(RuntimeValues.vector2(-1, 0), field(edgeGeometry, "endpoint1"));

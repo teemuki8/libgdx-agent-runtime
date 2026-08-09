@@ -177,6 +177,7 @@ jobs:
             fi
             expected_purls="$(
               printf '%s\n' \
+                "pkg:maven/io.github.teemuki8/agent-runtime-box2d@$version" \
                 "pkg:maven/io.github.teemuki8/agent-runtime-core@$version" \
                 "pkg:maven/io.github.teemuki8/agent-runtime-libgdx@$version" \
                 "pkg:maven/io.github.teemuki8/agent-runtime-mcp@$version" \

@@ -381,3 +381,9 @@ determinism comparison, and explicit UI correlation. The hidden LWJGL3 fixture d
 commands through `Gdx.app.postRunnable`, verifies their callbacks on the render/capture thread,
 advances deterministically to frame 45 without sleep-based correctness, and exits. The stdio MCP
 fixture retains stable frame-45 state until its client closes stdin.
+
+The same unpublished module contains `Box2dConformanceApplication` and
+`Box2dConformanceFixtureTest`. Under Xvfb they run actual LWJGL3 and Box2D desktop natives through
+the canonical fixed-step loop, stable registered physics evidence, contact callbacks, exact
+assertions, protocol 2.3/2.4, MCP, and selected-evidence determinism. Screenshots are not used as
+authoritative evidence.

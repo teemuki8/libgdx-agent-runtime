@@ -6,6 +6,12 @@ All notable changes follow Keep a Changelog structure.
 
 ### Added
 
+- An unpublished actual-native LWJGL3 + Box2D conformance fixture proves ball drop, dynamic
+  collision, scheduled player movement, fixed-step render integration, exact controlled ticks,
+  structured inspection/contacts/assertions, protocol and MCP access, deterministic selected-
+  evidence reruns, render independence, and explicit timing/configuration failures under Xvfb.
+  The agent cookbook and bootstrap migration guide point to the runnable example (#71).
+
 - Additive exact-tick simulation determinism reuses the existing bounded repeated-scenario engine
   with scheduled registered inputs, exact reset-baseline configuration facts, per-tick completeness
   requirements, actual simulation-tick/frame divergence evidence, the data-only

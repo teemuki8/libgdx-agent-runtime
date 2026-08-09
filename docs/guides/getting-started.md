@@ -185,6 +185,11 @@ Protocol 2.4 and `runtime_simulation_determinism_check` expose the same bounded 
 [Compare deterministic Box2D runs](agent-cookbook.md#compare-deterministic-box2d-runs) for the
 complete Java, protocol, MCP, schema, and failure recipes.
 
+For a complete actual-native example, see
+[Run the actual-native Box2D conformance recipe](agent-cookbook.md#run-the-actual-native-box2d-conformance-recipe).
+Bootstrap generators should follow
+[Bootstrap migration: deterministic Box2D games](bootstrap-box2d-migration.md).
+
 ## Disabled runtime
 
 Use `RuntimeConfiguration.disabled()`. Registration returns no-op handles, `frame` only executes its

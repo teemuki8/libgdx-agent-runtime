@@ -36,10 +36,12 @@ adds the canonical fixed-step accumulator, loss reports, and configured-step adv
 adds exact-tick declarative assertions; protocol 2.4 adds repeated exact-tick simulation
 determinism with scheduled registered inputs and explicit configuration/completeness testimony. A
 deterministic LWJGL3 fixture
-qualifies the full workflow. The development line also provides an optional explicit Box2D
-inspection and contact-evidence adapter; it never traverses an application world, installs a
-contact listener, or steps physics automatically. Applications retain ownership of the listener,
-fixed-step call, rendering, and native disposal.
+qualifies the full workflow. Its actual-native Box2D conformance scenario covers ball drop,
+dynamic collision, scheduled player movement, exact assertions, deterministic reruns, protocol,
+MCP, and render-independent evidence under Xvfb. The development line also provides an optional
+explicit Box2D inspection and contact-evidence adapter; it never traverses an application world,
+installs a contact listener, or steps physics automatically. Applications retain ownership of the
+listener, fixed-step call, rendering, and native disposal.
 
 Simulation assertions operate only on completed immutable tick/frame evidence. Generic scalar,
 vector, area, magnitude, distance, wrapped-angle, event, and structured-list predicates live in
@@ -52,6 +54,9 @@ application-reported reset, seed, configuration, fixed step, registered input sc
 tick count. `Box2dDeterminism` compiles stable registered body/fixture/joint IDs, world testimony,
 and contact completeness into the JDK-only engine. Divergence reports the first actual simulation
 tick and both run correlations; incomplete evidence is never reported equal.
+
+See [Bootstrap migration: deterministic Box2D games](docs/guides/bootstrap-box2d-migration.md)
+for the generated-game loop, reset, input, and verification contract.
 
 V1 excludes replay execution, reflection, instrumentation, mutation interception, networking, ECS
 adapters, hot reload, visual debugging, natural-language queries, and automatic causality.

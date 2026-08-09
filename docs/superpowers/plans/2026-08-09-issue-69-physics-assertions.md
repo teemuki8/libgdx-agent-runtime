@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add generic bounded assertions over exact simulation-tick evidence and Box2D convenience factories, with protocol 2.2, MCP, and real native fixture coverage.
+**Goal:** Add generic bounded assertions over exact simulation-tick evidence and Box2D convenience factories, with protocol 2.3, MCP, and real native fixture coverage.
 
 **Architecture:** Keep the frozen frame assertion API unchanged. Add a separate JDK-only
 `SimulationAssertion` model and evaluator that resolves epoch ticks through the simulation timeline
@@ -175,7 +175,7 @@ Run:
 
 Commit: `feat: add Box2D assertion factories`
 
-### Task 4: Add closed protocol 2.2 simulation assertions
+### Task 4: Add closed protocol 2.3 simulation assertions
 
 **Files:**
 - Modify: `runtime-protocol/src/main/java/io/github/teemuki8/libgdx/agent/runtime/protocol/ProtocolVersion.java`
@@ -186,7 +186,7 @@ Commit: `feat: add Box2D assertion factories`
 - Test: `runtime-protocol/src/test/java/io/github/teemuki8/libgdx/agent/runtime/protocol/RuntimeProtocolTest.java`
 
 **Interfaces:**
-- Produces: `ProtocolVersion.V2_2` and `CURRENT=V2_2`.
+- Produces: `ProtocolVersion.V2_3` and `CURRENT=V2_3`.
 - Produces: `RuntimeCommand.SimulationAssert` and response result tag `simulationAssertion`.
 
 - [ ] **Step 1: Write RED protocol tests**
@@ -211,7 +211,7 @@ Use a distinct Jackson mixin for `SimulationAssertion`. Do not add any new subty
 
 Run: `.agents/skills/libgdx-agent-runtime-dev/scripts/verify.sh protocol`
 
-Commit: `feat: expose simulation assertions in protocol 2.2`
+Commit: `feat: expose simulation assertions in protocol 2.3`
 
 ### Task 5: Add the closed MCP tool
 
@@ -221,7 +221,7 @@ Commit: `feat: expose simulation assertions in protocol 2.2`
 - Test: `runtime-mcp/src/test/java/io/github/teemuki8/libgdx/agent/runtime/mcp/RuntimeMcpTest.java`
 
 **Interfaces:**
-- Produces MCP tool `runtime_simulation_assert` with a closed schema matching protocol 2.2.
+- Produces MCP tool `runtime_simulation_assert` with a closed schema matching protocol 2.3.
 
 - [ ] **Step 1: Write RED catalog/handler tests**
 

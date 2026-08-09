@@ -150,7 +150,16 @@ Disabled runtimes retain no providers or frames and perform no serialization.
     never claim fixed-step success. Timeline retention and queries are bounded with explicit
     pagination, partial eviction, and not-yet-executed status. Protocol 2.1 adds the closed
     `simulation` and `simulationTicks` commands without changing protocols 1.0-1.13 or 2.0.
-35. Box2D inspection is an optional adapter module directed toward `runtime-core`; core, protocol,
+35. The canonical fixed-step accumulator is application-invoked and uses integer nanoseconds.
+    Render delta clamping, accumulated-time loss, catch-up tick drops, attempted/completed ticks,
+    interpolation remainder, and tick/frame correlation are retained as bounded typed reports.
+    Pause freezes normal accumulation; exact controlled advancement derives its delta only from the
+    registered fixed step and does not consume the render accumulator. Callback failure consumes the
+    attempted quantum and explicitly drops remaining whole time so it is never silently retried.
+    The helper creates no thread, timer, scheduler, sleep, render call, or disposal ownership.
+    Protocol 2.2 adds fixed-step state/report inspection and configured-step advance while leaving
+    protocols 1.0-1.13, 2.0, and 2.1 closed and unchanged.
+36. Box2D inspection is an optional adapter module directed toward `runtime-core`; core, protocol,
     and MCP have no Box2D dependency. Applications explicitly register selected worlds, bodies,
     fixtures, and joints under stable IDs. The adapter publishes closed `box2d.*` entity schemas
     through existing snapshot/entity paths, retains only weak native references, bounds every
@@ -197,6 +206,6 @@ Disabled runtimes retain no providers or frames and perform no serialization.
     evidence requirement to be complete. Missing, evicted, failed, unknown, uncorrelated, truncated,
     or adapter-incomplete evidence produces `INCONCLUSIVE` when it could change the answer.
     `runtime-box2d` factories compile only stable IDs and documented captured schemas into this
-    generic model. Protocol 2.2 and `runtime_simulation_assert` expose the same closed bounded
+    generic model. Protocol 2.3 and `runtime_simulation_assert` expose the same closed bounded
     contract without changing earlier schemas. Every public API/schema change updates the agent
     cookbook in the same change.

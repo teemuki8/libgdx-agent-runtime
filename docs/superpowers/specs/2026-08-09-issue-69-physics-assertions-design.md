@@ -17,7 +17,7 @@ evaluator reads completed runtime snapshots and timeline evidence; it never read
 
 Add `SimulationAssertion`, `SimulationAssertionSpec`, `SimulationAssertionScope`,
 `SimulationAssertionEvidence`, and `SimulationAssertionResult` to `runtime-core`. Add
-`AssertionEvaluator.evaluateSimulation(...)` beside the existing frame evaluator. Protocol 2.2
+`AssertionEvaluator.evaluateSimulation(...)` beside the existing frame evaluator. Protocol 2.3
 adds `RuntimeCommand.SimulationAssert`; MCP adds `runtime_simulation_assert`. The existing
 `RuntimeAssertion`, `RuntimeCommand.Assert`, protocol 1.7 JSON, MCP `runtime_assert`, and wait
 command remain byte-for-byte schema compatible.
@@ -159,7 +159,7 @@ values use the existing tagged `valueType` mapping; MCP inputs use bounded natur
 The response is a distinct `simulationAssertion` result carrying `SimulationAssertionResult`.
 
 MCP exposes `runtime_simulation_assert` with the same schema. Capability discovery reports
-`simulation-assertions`, protocol 2.2, the tick/evidence/term/requirement bounds, and its dependency
+`simulation-assertions`, protocol 2.3, the tick/evidence/term/requirement bounds, and its dependency
 on the simulation timeline and completed frames. Existing commands and tools remain unchanged.
 
 ## Tests and fixture

@@ -196,7 +196,7 @@ final class Box2dInspectionFixtureTest {
                                     assertInstanceOf(RuntimeResponse.Success.class,
                                             new RuntimeProtocolService(registry).execute(
                                                     new RuntimeRequest(
-                                                            ProtocolVersion.V2_2,
+                                                            ProtocolVersion.V2_3,
                                                             "box2d-contact-assertion",
                                                             runtime.sessionId().value(),
                                                             new RuntimeCommand.SimulationAssert(

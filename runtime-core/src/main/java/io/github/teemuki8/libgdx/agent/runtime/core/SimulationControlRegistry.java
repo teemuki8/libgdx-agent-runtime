@@ -148,6 +148,18 @@ public final class SimulationControlRegistry {
         return tickOperation(requestId, signature, timeout);
     }
 
+    /** Submits an exact bounded advance using only the registered fixed timestep. */
+    public ControlOperation advanceFixed(String requestId, int ticks, Duration timeout) {
+        long fixedStepNanos = runtime.simulation().state().configuredFixedStepNanos()
+                .orElseThrow(() -> new AgentRuntimeException(
+                        RuntimeErrorCode.INVALID_LIFECYCLE,
+                        "fixed simulation step is not configured"));
+        validateTicks(ticks, fixedStepNanos);
+        Signature signature = new Signature(ControlOperation.Kind.ADVANCE, ticks, fixedStepNanos,
+                Optional.empty(), Optional.empty(), 0);
+        return tickOperation(requestId, signature, timeout);
+    }
+
     /** Advances until a registered condition is true or the hard tick bound is reached. */
     public ControlOperation waitForCondition(String requestId, String conditionId, int maximumTicks,
             long deltaNanos, Duration timeout) {

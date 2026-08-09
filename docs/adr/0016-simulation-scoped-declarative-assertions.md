@@ -46,8 +46,8 @@ never retain or query native objects. Every contact factory requires
 `box2d.contacts.<worldId>.complete == true`; contact continuity reads the `activeContacts` snapshot
 at every tick rather than inferring continuity from begin/end adjacency.
 
-Protocol 2.2 adds the closed `simulationAssert` command and `simulationAssertion` result. MCP adds
-`runtime_simulation_assert` with a closed natural-JSON schema. Protocol 2.1 and earlier reject the
+Protocol 2.3 adds the closed `simulationAssert` command and `simulationAssertion` result. MCP adds
+`runtime_simulation_assert` with a closed natural-JSON schema. Protocol 2.2 and earlier reject the
 new command before evaluation. Capability metadata advertises exact tick, evidence, requirement,
 and conjunction bounds.
 

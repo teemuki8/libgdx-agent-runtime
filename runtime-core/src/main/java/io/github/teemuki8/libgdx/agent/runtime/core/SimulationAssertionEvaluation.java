@@ -37,7 +37,7 @@ final class SimulationAssertionEvaluation {
                         .thenComparing(SimulationAssertionEvidence::kind))
                 .limit(scope.evidenceLimit()).toList();
         return new SimulationAssertionResult(outcome.status, outcome.type, scope,
-                outcome.expected, outcome.observed, evidence, outcome.incomplete,
+                bounded(outcome.expected), bounded(outcome.observed), evidence, outcome.incomplete,
                 message(outcome.status));
     }
 
@@ -527,6 +527,17 @@ final class SimulationAssertionEvaluation {
                 RuntimeValues.field("tolerance", decimal(tolerance)));
     }
 
+    private static Optional<RuntimeValue> bounded(Optional<RuntimeValue> value) {
+        return value.filter(candidate -> {
+            try {
+                SimulationAssertionValueBounds.validate(candidate);
+                return true;
+            } catch (IllegalArgumentException outsideResultBounds) {
+                return false;
+            }
+        });
+    }
+
     private static RuntimeValue area(
             SimulationAssertion.Area area, SimulationAssertion.AreaRelation relation) {
         return RuntimeValues.object(
@@ -542,7 +553,7 @@ final class SimulationAssertionEvaluation {
         return new SimulationAssertionEvidence(Optional.of(slot.tick.simulationTickId()),
                 slot.tick.executionEpochId(), slot.epochTick,
                 Optional.of(slot.frame.frameId()), kind,
-                Optional.ofNullable(entityId), Optional.ofNullable(property), observed);
+                Optional.ofNullable(entityId), Optional.ofNullable(property), bounded(observed));
     }
 
     private static SimulationAssertionEvidence incompleteEvidence(Slot slot) {

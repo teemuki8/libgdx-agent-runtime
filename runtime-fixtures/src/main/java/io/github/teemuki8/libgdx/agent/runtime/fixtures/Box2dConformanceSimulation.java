@@ -207,6 +207,7 @@ public final class Box2dConformanceSimulation implements AutoCloseable {
         replacement.world().setContactListener(contacts.listener());
         scene = replacement;
         sceneGeneration++;
+        postPhysicsTicks = 0;
         runtime.fixedStepSimulation().clearAccumulator();
         previous.dispose();
     }

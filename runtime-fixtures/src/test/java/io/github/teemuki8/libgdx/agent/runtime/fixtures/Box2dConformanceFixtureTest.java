@@ -250,6 +250,9 @@ final class Box2dConformanceFixtureTest {
             assertEquals(2, result.bounds().completedRepeats());
             assertTrue(result.divergence().isEmpty());
             assertFalse(result.message().contains("whole-program determinism is proven"));
+            assertEquals(RuntimeValues.integer(90), fixture.runtime().entity(
+                    EntityId.of("fixture.post-physics")).orElseThrow()
+                    .property("completedTicks").orElseThrow());
         }
     }
 
@@ -388,32 +391,24 @@ final class Box2dConformanceFixtureTest {
     }
 
     @Test
-    void scaleTruncationAndUnmappedContactsProduceFailAndInconclusiveEvidence() {
+    void scaleShapeContactAndRegistrationFailuresRemainDistinguishable() {
         Box2dAdapterLimits shapeLimits = new Box2dAdapterLimits(
                 16, 4_096, 8_192, 2_048, 2, 64, 8);
         try (Box2dConformanceSimulation fixture = new Box2dConformanceSimulation(
                 Runnable::run, Box2dConformanceSimulation.FIXED_STEP_NANOS,
-                "ball-shape", shapeLimits,
-                new Box2dContactLimits(1, 1, 1, 1, 1, 1, 1_024, 256), false)) {
+                null, shapeLimits, Box2dContactLimits.developmentDefaults(), false)) {
             AgentRuntime runtime = fixture.runtime();
             var reset = runtime.scenarios().reset(
-                    "ball-drop", "negative-ball-reset", Duration.ofSeconds(2));
+                    "ball-drop", "extent-ball-reset", Duration.ofSeconds(2));
             ExecutionEpochId epoch = reset.executionEpochId().orElseThrow();
-            runtime.controls().control(true, "negative-pause", Duration.ofSeconds(2));
-            runtime.controls().advanceFixed("negative-advance", 240, Duration.ofSeconds(5));
+            runtime.controls().control(true, "extent-pause", Duration.ofSeconds(2));
+            runtime.controls().advanceFixed("extent-advance", 240, Duration.ofSeconds(5));
 
             RuntimeValue.ListValue shapeDiagnostics = list(runtime.entity(
                     EntityId.of("box2d.fixture.ground-shape")).orElseThrow()
                     .property("diagnostics").orElseThrow());
             assertTrue(shapeDiagnostics.values().contains(
                     RuntimeValues.enumValue("SHAPE_VERTICES_TRUNCATED")));
-            EntitySnapshot contactEvidence = runtime.entity(
-                    EntityId.of("box2d.contacts.main")).orElseThrow();
-            assertEquals(RuntimeValues.bool(false),
-                    contactEvidence.property("complete").orElseThrow());
-            assertTrue(list(contactEvidence.property("diagnostics").orElseThrow())
-                    .values().stream().anyMatch(value -> RuntimeValues.enumValue(
-                            "UNMAPPED_ENDPOINT").equals(field(value, "code"))));
 
             var renderExtent = new SimulationAssertionSpec(
                     new SimulationAssertion.VectorInArea(
@@ -426,6 +421,26 @@ final class Box2dConformanceFixtureTest {
             assertEquals(AssertionStatus.FAIL, runtime.assertions().evaluateSimulation(
                     renderExtent,
                     new SimulationAssertionScope(epoch, 240, 240, 8)).status());
+        }
+
+        try (Box2dConformanceSimulation fixture = new Box2dConformanceSimulation(
+                Runnable::run, Box2dConformanceSimulation.FIXED_STEP_NANOS,
+                "ball-shape", Box2dAdapterLimits.developmentDefaults(),
+                Box2dContactLimits.developmentDefaults(), false)) {
+            AgentRuntime runtime = fixture.runtime();
+            var reset = runtime.scenarios().reset(
+                    "ball-drop", "unmapped-ball-reset", Duration.ofSeconds(2));
+            ExecutionEpochId epoch = reset.executionEpochId().orElseThrow();
+            runtime.controls().control(true, "unmapped-pause", Duration.ofSeconds(2));
+            runtime.controls().advanceFixed("unmapped-advance", 240, Duration.ofSeconds(5));
+
+            EntitySnapshot contactEvidence = runtime.entity(
+                    EntityId.of("box2d.contacts.main")).orElseThrow();
+            assertEquals(RuntimeValues.bool(false),
+                    contactEvidence.property("complete").orElseThrow());
+            assertTrue(list(contactEvidence.property("diagnostics").orElseThrow())
+                    .values().stream().anyMatch(value -> RuntimeValues.enumValue(
+                            "UNMAPPED_ENDPOINT").equals(field(value, "code"))));
 
             var ball = new Box2dAssertions.ContactEndpoint("ball", "ball-shape", 0);
             var ground = new Box2dAssertions.ContactEndpoint("ground", "ground-shape", 0);

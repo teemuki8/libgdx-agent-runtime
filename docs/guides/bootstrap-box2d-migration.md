@@ -51,6 +51,7 @@ box2d.registerJoint("player-rope", "main", playerRope);
 Box2dContacts contacts = box2d.registerContacts(
         "main", Box2dContactLimits.developmentDefaults(),
         Box2dContactPolicy.developmentDefaults());
+world.setContactListener(contacts.listener());
 ```
 
 The generated callback should have this shape:
@@ -79,8 +80,9 @@ int velocityIterations = 8;
 int positionIterations = 3;
 ```
 
-If the game already owns a listener, compose it explicitly. The runtime evidence callback runs
-first; neither registration nor `listener()` installs itself:
+The final line explicitly installs the listener; neither registration nor `listener()` installs
+itself. If the game already owns a listener, replace that direct installation with explicit
+composition. The runtime evidence callback runs first:
 
 ```java
 world.setContactListener(contacts.compose(gameContactListener));

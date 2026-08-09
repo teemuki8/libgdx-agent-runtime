@@ -89,6 +89,13 @@ public final class DeterminismRegistry {
         return limits;
     }
 
+    /** Reports whether exact acknowledged simulation determinism can accept a request. */
+    public boolean simulationAvailable() {
+        return runtime.commands().isPresent() && runtime.controls().acknowledgedTicksAvailable()
+                && runtime.scenarios().determinismAvailable()
+                && runtime.simulation().state().configured();
+    }
+
     /** Submits or polls one at-most-once exact simulation-tick determinism comparison. */
     public SimulationDeterminismOperation checkSimulation(
             SimulationDeterminismSpec spec, String requestId, Duration timeout) {

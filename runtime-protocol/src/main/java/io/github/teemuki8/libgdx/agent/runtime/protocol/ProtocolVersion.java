@@ -36,8 +36,10 @@ public record ProtocolVersion(int major, int minor) {
     public static final ProtocolVersion V2_1 = new ProtocolVersion(2, 1);
     /** Simulation-scoped declarative assertion protocol version. */
     public static final ProtocolVersion V2_2 = new ProtocolVersion(2, 2);
+    /** Tick-aware simulation determinism protocol version. */
+    public static final ProtocolVersion V2_3 = new ProtocolVersion(2, 3);
     /** Latest implemented protocol version. */
-    public static final ProtocolVersion CURRENT = V2_2;
+    public static final ProtocolVersion CURRENT = V2_3;
 
     /** Validates version components. */
     public ProtocolVersion {
@@ -68,6 +70,9 @@ public record ProtocolVersion(int major, int minor) {
      */
     public boolean capability(RuntimeCommand command) {
         if (isV2()) {
+            if (command instanceof RuntimeCommand.SimulationDeterminismCheck) {
+                return minor() >= 3;
+            }
             if (command instanceof RuntimeCommand.SimulationAssert) {
                 return minor() >= 2;
             }
@@ -81,6 +86,7 @@ public record ProtocolVersion(int major, int minor) {
             return false;
         }
         return switch (command) {
+            case RuntimeCommand.SimulationDeterminismCheck _ -> false;
             case RuntimeCommand.Simulation _, RuntimeCommand.SimulationTicks _ -> false;
             case RuntimeCommand.EntityHistory _ -> false;
             case RuntimeCommand.CommandStatus _, RuntimeCommand.CommandCancel _ -> minor() >= 2;
@@ -106,6 +112,8 @@ public record ProtocolVersion(int major, int minor) {
     /** Returns the exact required-version message for one unsupported command. */
     public String requiredVersionMessage(RuntimeCommand command) {
         return switch (command) {
+            case RuntimeCommand.SimulationDeterminismCheck _ ->
+                    "command requires protocol version 2.3";
             case RuntimeCommand.SimulationAssert _ ->
                     "command requires protocol version 2.2";
             case RuntimeCommand.Simulation _, RuntimeCommand.SimulationTicks _ ->

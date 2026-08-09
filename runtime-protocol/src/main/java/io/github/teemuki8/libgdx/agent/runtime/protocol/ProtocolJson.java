@@ -25,6 +25,7 @@ import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue;
 import java.util.Optional;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeAssertion;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertion;
+import io.github.teemuki8.libgdx.agent.runtime.core.SimulationDeterminismResult;
 import io.github.teemuki8.libgdx.agent.runtime.core.RecordingActionEntry;
 import io.github.teemuki8.libgdx.agent.runtime.core.RecordingEntry;
 import io.github.teemuki8.libgdx.agent.runtime.core.RecordingFrameEntry;
@@ -196,6 +197,8 @@ public final class ProtocolJson {
         mapper.addMixIn(CheckpointOperation.class, CheckpointOperationMixin.class);
         mapper.addMixIn(InputInjection.class, InputInjectionMixin.class);
         mapper.addMixIn(DeterminismResult.class, DeterminismResultMixin.class);
+        mapper.addMixIn(SimulationDeterminismResult.class,
+                SimulationDeterminismResultMixin.class);
         return mapper;
     }
 
@@ -320,6 +323,11 @@ public final class ProtocolJson {
 
     /** Keeps the structured application failure out of the protocol 1.x determinism wire shape. */
     private interface DeterminismResultMixin {
+        @JsonIgnore
+        Optional<ApplicationFailureEvidence> applicationFailure();
+    }
+
+    private interface SimulationDeterminismResultMixin {
         @JsonIgnore
         Optional<ApplicationFailureEvidence> applicationFailure();
     }

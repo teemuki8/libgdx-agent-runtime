@@ -42,7 +42,9 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
     @JsonSubTypes.Type(value = RuntimeCommand.EntityHistory.class, name = "entityHistory"),
     @JsonSubTypes.Type(value = RuntimeCommand.Simulation.class, name = "simulation"),
     @JsonSubTypes.Type(value = RuntimeCommand.SimulationTicks.class, name = "simulationTicks"),
-    @JsonSubTypes.Type(value = RuntimeCommand.SimulationAssert.class, name = "simulationAssert")
+    @JsonSubTypes.Type(value = RuntimeCommand.SimulationAssert.class, name = "simulationAssert"),
+    @JsonSubTypes.Type(value = RuntimeCommand.SimulationDeterminismCheck.class,
+            name = "simulationDeterminismCheck")
 })
 public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeCommand.Capabilities,
         RuntimeCommand.Frames, RuntimeCommand.Snapshot, RuntimeCommand.Entity,
@@ -58,7 +60,7 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
         RuntimeCommand.RecordingStart, RuntimeCommand.RecordingStop,
         RuntimeCommand.RecordingGet, RuntimeCommand.DeterminismCheck,
         RuntimeCommand.EntityHistory, RuntimeCommand.Simulation, RuntimeCommand.SimulationTicks,
-        RuntimeCommand.SimulationAssert {
+        RuntimeCommand.SimulationAssert, RuntimeCommand.SimulationDeterminismCheck {
     /** Lists published sessions. */
     record Sessions() implements RuntimeCommand {}
 
@@ -538,6 +540,18 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
                 throw new IllegalArgumentException("invalid determinism execution dimensions");
             }
             requirePositive(deltaNanos, "deltaNanos");
+            requirePositive(timeoutNanos, "timeoutNanos");
+        }
+    }
+
+    /** Starts or polls one exact tick-aware simulation determinism comparison. */
+    record SimulationDeterminismCheck(String determinismRequestId,
+            io.github.teemuki8.libgdx.agent.runtime.core.SimulationDeterminismSpec spec,
+            long timeoutNanos) implements RuntimeCommand {
+        /** Validates the closed request identity, specification, and timeout. */
+        public SimulationDeterminismCheck {
+            ProtocolJson.requireIdentifier(determinismRequestId, "determinismRequestId");
+            java.util.Objects.requireNonNull(spec, "spec");
             requirePositive(timeoutNanos, "timeoutNanos");
         }
     }

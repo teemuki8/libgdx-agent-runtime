@@ -78,6 +78,10 @@ smaller pair. When native A/B is reversed, body, fixture, child, and sensor fact
 world normal is negated; normal impulse magnitudes are unchanged; and signed tangent impulses are
 negated. World points do not change. The adapter never exposes a native contact address.
 
+Every immutable record and active-contact value also exposes a combined `sensor` fact derived from
+the two immediately copied endpoint sensor flags. It is true when either endpoint is a sensor; the
+per-endpoint flags remain available so the source of that state is not lost.
+
 Every callback copies allowed primitive and vector values before returning. It never retains a
 `Contact`, `ContactImpulse`, `Manifold`, `WorldManifold`, `Fixture`, `Body`, libGDX vector, or native
 array. Phase availability is closed and explicit:
@@ -122,9 +126,10 @@ Finalization emits these existing-runtime events for retained callbacks:
 - `box2d.contact.postSolve`
 
 The canonical body A is the subject and body B is the source. Closed attributes contain the contact
-key, fixture IDs, child indices, sensor states, touching/enabled values, phase availability, bounded
-points/normal/manifold/impulses, simulation tick ID, epoch tick, and execution epoch. The event's
-own frame ID is the runtime-frame correlation. No gameplay causality is inferred.
+key, fixture IDs, child indices, per-endpoint and combined sensor states, touching/enabled values,
+phase availability, bounded points/normal/manifold/impulses, simulation tick ID, epoch tick, and
+execution epoch. The event's own frame ID is the runtime-frame correlation. No gameplay causality
+is inferred.
 
 The `box2d.contacts` entity exposes exact properties for world ID, policy, configured limits,
 latest tick/frame/epoch correlation, current records, active contacts, observed/retained/limit

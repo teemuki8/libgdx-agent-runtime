@@ -143,6 +143,8 @@ listener installation, `World.step`, the simulation loop, and every native objec
 - Runtime entity ID `box2d.contacts.<worldId>` and type `box2d.contacts`.
 - Event types `box2d.contact.begin`, `.end`, `.preSolve`, and `.postSolve`; canonical body A is
   subject and body B is source.
+- Runtime records and active contacts expose per-endpoint sensor flags plus a combined `sensor`
+  boolean derived from the immutable endpoint copies.
 - Exact entity properties: `worldId`, `runtimeEntityId`, `policy`, `limits`, `latestTick`,
   `records`, `activeContacts`, `callbackCounts`, `activeCounts`, `unmappedContacts`, `diagnostics`,
   `truncations`, and `complete`.

@@ -17,3 +17,16 @@ tasks.withType<Test>().configureEach {
     jvmArgs("--enable-native-access=ALL-UNNAMED")
     systemProperty("example.classpath", sourceSets.main.get().runtimeClasspath.asPath)
 }
+
+tasks.register<JavaExec>("runSameJvmMcpExample") {
+    group = "application"
+    description = "Runs the hidden same-JVM libGDX stdio MCP consumer example"
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass.set(
+        "io.github.teemuki8.libgdx.agent.runtime.examples.SameJvmMcpApplication",
+    )
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+    standardInput = System.`in`
+    standardOutput = System.out
+    errorOutput = System.err
+}

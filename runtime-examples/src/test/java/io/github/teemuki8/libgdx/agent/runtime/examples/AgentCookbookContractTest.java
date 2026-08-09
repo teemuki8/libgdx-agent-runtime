@@ -44,6 +44,10 @@ class AgentCookbookContractTest {
         assertTrue(cookbook.contains("2.0.1-SNAPSHOT"));
         assertTrue(cookbook.contains("absence is not proof"));
         assertTrue(cookbook.contains("INCONCLUSIVE"));
+        assertTrue(cookbook.contains("UNSUPPORTED_VERSION"));
+        assertTrue(cookbook.contains("WRONG_THREAD"));
+        assertTrue(cookbook.contains("unknown mutation outcome"));
+        assertTrue(cookbook.contains("runSameJvmMcpExample"));
 
         String readme = read("README.md");
         assertTrue(readme.contains("runtime-examples"));
@@ -61,6 +65,8 @@ class AgentCookbookContractTest {
         String published = rootBuild.substring(rootBuild.indexOf("val publishedModules"),
                 rootBuild.indexOf("val artifactNames"));
         assertFalse(published.contains("runtime-examples"));
+        assertTrue(read("runtime-examples/build.gradle.kts")
+                .contains("runSameJvmMcpExample"));
     }
 
     @Test

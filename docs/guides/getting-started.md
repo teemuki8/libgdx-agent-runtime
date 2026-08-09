@@ -151,6 +151,32 @@ Protocol 2.2 exposes `simulationAssert`; MCP exposes the equivalent closed
 [Assert physics over exact simulation ticks](agent-cookbook.md#assert-physics-over-exact-simulation-ticks)
 for every factory, exact tags, request examples, bounds, and result semantics.
 
+## Compare repeated physics runs
+
+For a deterministic rerun, register the controller with `acknowledgedTick`, make scenario reset
+restore and rebind every selected Box2D registration before its new baseline, then build a
+data-only request:
+
+```java
+SimulationDeterminismSpec spec = Box2dDeterminism.builder(
+        "main",
+        new Box2dDeterminism.WorldSettings(16_666_667L,
+                new Box2dVector(0, -9.8), 6, 2, true, true, true),
+        "ball-drop", 7, RuntimeValues.object(), 2, 60)
+        .body("ball", "position", "linearVelocity", "awake")
+        .activeContacts()
+        .build();
+runtime.determinism().checkSimulation(
+        spec, "ball-drop-repeat", Duration.ofSeconds(5));
+```
+
+The application-owned dispatcher executes the operation while paused. Poll with the identical
+specification and request ID. `EQUAL` is limited to the selected evidence; any failed, missing,
+uncorrelated, truncated, evicted, or explicitly incomplete relevant tick yields `INCONCLUSIVE`.
+Protocol 2.3 and `runtime_simulation_determinism_check` expose the same bounded contract. See
+[Compare deterministic Box2D runs](agent-cookbook.md#compare-deterministic-box2d-runs) for the
+complete Java, protocol, MCP, schema, and failure recipes.
+
 ## Disabled runtime
 
 Use `RuntimeConfiguration.disabled()`. Registration returns no-op handles, `frame` only executes its

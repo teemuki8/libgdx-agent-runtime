@@ -45,6 +45,7 @@ strict closed input schemas (`additionalProperties: false`), and a maximum reque
 | `runtime_simulation`*********** | `sessionId` | none |
 | `runtime_simulation_ticks`*********** | `sessionId`, `executionEpochId`, `fromEpochTick`, `toEpochTick`, `limit` | none |
 | `runtime_simulation_assert`************ | `sessionId`, `executionEpochId`, `fromEpochTick`, `toEpochTick`, `evidenceLimit`, `evidenceRequirements`, `assertion` | assertion-specific closed fields |
+| `runtime_simulation_determinism_check`************* | `sessionId`, `determinismRequestId`, `scenarioId`, `randomSeed`, `configuration`, `repeatCount`, `ticksPerRepeat`, `deltaNanos`, `profile`, `inputs`, `configurationRequirements`, `evidenceRequirements`, `eventTypes`, `timeoutNanos` | none |
 
 \* Command tools are included in the server-start catalog only when at least one published runtime
 has explicitly registered application command dispatch. They use protocol 1.2.
@@ -95,6 +96,13 @@ the server-start catalog. The tool evaluates one closed assertion over at most 1
 ticks, accepts at most eight explicit completeness requirements, and returns at most 100 evidence
 items. Protocol 2.1 rejects the command before evaluation.
 
+\*\*\*\*\*\*\*\*\*\*\*\*\* Simulation determinism uses exact protocol 2.3 and is included only
+when at least one published runtime has application dispatch, a fixed simulation timeline, an
+acknowledged controller, and a registered deterministic scenario. It repeats at most 256 scheduled
+registered inputs, checks at most 32 exact configuration facts and eight per-tick completeness
+facts, and compares at most 16 selected event types. Protocol 2.2 rejects the command before
+execution.
+
 Every identifier is a nonblank string of at most 256 UTF-16 code units. Frame fields are
 non-negative integers. Prefix matching is available only where the schema has an explicit prefix
 boolean; there are no regular expressions or generic expressions.
@@ -109,7 +117,9 @@ scenario catalog and reset use protocol 1.4. Protocol 2.0 (the additive major bu
 protocols 1.0-1.13 keep their exact frozen wire shapes and negotiation. Protocol 2.1 additively
 provides application-reported simulation timeline state and tick history; protocol 2.0 rejects
 those two commands before execution. Protocol 2.2 additively provides exact-tick simulation
-assertions; protocol 2.1 rejects that command before execution.
+assertions; protocol 2.1 rejects that command before execution. Protocol 2.3 additively provides
+exact-tick simulation determinism with scheduled registered inputs and actual tick correlations;
+protocol 2.2 rejects that command before execution.
 Attributed fact queries use protocol 1.5. Their `sourceSubsystem` is separate from the event `source`
 entity ID. A `sourceLocation` in output is an unverified, bounded application-provided label;
 correlation indicates association, not inferred causality.
@@ -301,6 +311,18 @@ both epochs and frames, and the first stable typed difference. Equality means on
 configured observable evidence matched. Bounds and messages report completed repeats, compared
 frames/entities/properties, execution time, truncation, eviction, timeout, and incomplete evidence.
 The runtime does not inspect unregistered state or prove whole-program determinism.
+
+`runtime_simulation_determinism_check` is the tick-aware additive form. It requires the configured
+`deltaNanos` to equal the registered fixed timeline, requires an acknowledged controlled-tick
+callback, rejects conflicting baseline configuration before dispatch, and repeats its ordered
+registered-input script before the selected epoch ticks of every run. It checks configuration again
+after each scenario reset and explicit boolean evidence requirements at every compared tick. Its
+first divergence includes the epoch tick, both session simulation-tick IDs, both execution epochs,
+both correlated frames, and the existing typed difference. Missing selection, reset/rebind drift,
+false completeness, failed or mismatched ticks, missing frame correlation, diagnostics,
+truncation, eviction, timeout, or evidence exhaustion yields `INCONCLUSIVE`, never `EQUAL`.
+The exact Java, protocol, and natural MCP schemas are in the
+[agent cookbook](agent-cookbook.md#compare-deterministic-box2d-runs).
 
 Evidence limits are enforced before retention. Each frame's selected entities and facts are
 counted incrementally with bounded iteration, and admission stops at the first item whose

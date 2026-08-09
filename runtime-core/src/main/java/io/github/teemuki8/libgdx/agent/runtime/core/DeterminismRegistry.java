@@ -456,6 +456,16 @@ public final class DeterminismRegistry {
                         "selected simulation entity is truncated: " + entityId.value());
             }
         }
+        for (String property : scope.properties()) {
+            boolean present = frame.entities().stream()
+                    .filter(entity -> scope.entityIds().isEmpty()
+                            || scope.entityIds().contains(entity.id()))
+                    .anyMatch(entity -> entity.property(property).isPresent());
+            if (!present) {
+                return Optional.of(
+                        "selected simulation property is missing: " + property);
+            }
+        }
         return Optional.empty();
     }
 

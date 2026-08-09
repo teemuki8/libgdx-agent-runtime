@@ -68,6 +68,10 @@ Simulation comparison requires all of the following before its command is queued
 - all dimensions, selectors, values, inputs, encoded configuration, operations, and duration within
   the existing determinism and runtime limits.
 
+Every explicitly selected entity must be present and untruncated, and every selected property name
+must resolve on at least one selected entity. A misspelled selector therefore fails admission or
+becomes inconclusive after reset instead of comparing two empty selections as equal.
+
 A request conflict is a typed `INVALID_QUERY` or `LIMIT_EXCEEDED` rejection before application
 mutation. After each scenario reset, the registry checks the same requirements again against the
 new epoch baseline. This is where application-owned Box2D recreation and adapter rebind are proven.

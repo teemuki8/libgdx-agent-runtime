@@ -4,6 +4,15 @@ All notable changes follow Keep a Changelog structure.
 
 ## [Unreleased]
 
+### Added
+
+- Additive exact-tick simulation determinism reuses the existing bounded repeated-scenario engine
+  with scheduled registered inputs, exact reset-baseline configuration facts, per-tick completeness
+  requirements, actual simulation-tick/frame divergence evidence, the data-only
+  `Box2dDeterminism` builder, closed protocol 2.3, and
+  `runtime_simulation_determinism_check`. Incomplete or truncated physics evidence cannot report
+  equality (#70).
+
 ## [2.0.0] - 2026-08-08
 
 ### Added

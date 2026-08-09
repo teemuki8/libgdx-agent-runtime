@@ -200,3 +200,18 @@ Disabled runtimes retain no providers or frames and perform no serialization.
     generic model. Protocol 2.2 and `runtime_simulation_assert` expose the same closed bounded
     contract without changing earlier schemas. Every public API/schema change updates the agent
     cookbook in the same change.
+39. Simulation determinism is an additive mode of the existing bounded determinism registry. It
+    requires a registered fixed timeline, application-dispatched scenario reset, acknowledged
+    controller, exact reset-baseline configuration facts, and optional per-tick boolean
+    completeness facts. Selected entities must be present and untruncated, and every selected
+    property must resolve on selected evidence. Registered input handlers run in stable caller
+    order immediately before
+    their selected epoch ticks and repeat identically for every run; ordinary queued input cannot
+    be mixed into the operation. Equality compares only selected completed immutable evidence for
+    epoch ticks one through the exact bound. The first divergence carries its actual epoch tick,
+    both monotonic session tick IDs, epochs, frames, and typed difference. Missing registrations,
+    reset/rebind drift, false completeness, tick/delta/correlation failure, diagnostics,
+    truncation, eviction, timeout, or limit exhaustion cannot yield equality. `runtime-box2d`
+    supplies only a data-to-spec builder; it never reads native state. Protocol 2.3 and the closed
+    `runtime_simulation_determinism_check` tool expose this additive result without changing older
+    determinism or protocol shapes. Equality is not a whole-program or cross-platform claim.

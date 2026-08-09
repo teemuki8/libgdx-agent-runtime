@@ -88,6 +88,19 @@ final class SimulationDeterminismRegistryTest {
                         wrongConfiguration, "wrong-configuration", Duration.ofSeconds(1)));
 
         assertEquals(RuntimeErrorCode.INVALID_QUERY, configurationFailure.code());
+        DeterminismSpec missingPropertyExecution = new DeterminismSpec(
+                "player-move", 7, RuntimeValues.object(), 2, 3, STEP,
+                new DeterminismProfile(new SnapshotComparisonScope(
+                        List.of(EntityId.of("box2d.body.player")), List.of("positoin"),
+                        List.of(), false, false), false));
+        SimulationDeterminismSpec missingProperty = new SimulationDeterminismSpec(
+                missingPropertyExecution, List.of(), configuration(), completeness(), List.of());
+        AgentRuntimeException selectionFailure = assertThrows(AgentRuntimeException.class,
+                () -> runtime.determinism().checkSimulation(
+                        missingProperty, "missing-property", Duration.ofSeconds(1)));
+
+        assertEquals(RuntimeErrorCode.INVALID_QUERY, selectionFailure.code());
+        assertTrue(selectionFailure.getMessage().contains("property"));
         assertTrue(queue.isEmpty());
     }
 
@@ -132,6 +145,46 @@ final class SimulationDeterminismRegistryTest {
 
         assertEquals(DeterminismStatus.INCONCLUSIVE, incomplete.status());
         assertTrue(incomplete.message().contains("incomplete"));
+    }
+
+    @Test
+    void perFrameEventTruncationIsInconclusiveInsteadOfEqual() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        RuntimeLimits defaults = RuntimeLimits.developmentDefaults();
+        RuntimeLimits limitedEvents = new RuntimeLimits(defaults.retainedFrames(), 1,
+                defaults.entitiesPerSnapshot(), defaults.propertiesPerEntity(),
+                defaults.decisionsPerFrame(), defaults.candidatesPerDecision(),
+                defaults.attributesPerItem(), defaults.stringLength(),
+                defaults.collectionLength(), defaults.nestingDepth(), defaults.queryResults());
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("simulation-determinism-truncation"))
+                .configuration(new RuntimeConfiguration(true, limitedEvents))
+                .clock(() -> 1)
+                .commandDispatcher(queue::addLast)
+                .build();
+        registerRuntime(runtime, new long[] {0}, new long[] {8}, new boolean[] {true},
+                delta -> {
+                    runtime.emit(EventSpec.type("physics.event"));
+                    runtime.emit(EventSpec.type("physics.event"));
+                    return delta;
+                }, context -> {});
+        runtime.start();
+        DeterminismSpec execution = new DeterminismSpec("player-move", 7,
+                RuntimeValues.object(), 2, 3, STEP,
+                new DeterminismProfile(new SnapshotComparisonScope(
+                        List.of(EntityId.of("box2d.body.player")), List.of("position"),
+                        List.of(), true, false), false));
+        SimulationDeterminismSpec spec = new SimulationDeterminismSpec(execution, List.of(),
+                configuration(), completeness(), List.of(EventType.of("physics.event")));
+
+        runtime.determinism().checkSimulation(
+                spec, "truncated-events", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+        SimulationDeterminismResult result = runtime.determinism().checkSimulation(
+                spec, "truncated-events", Duration.ofSeconds(1)).result().orElseThrow();
+
+        assertEquals(DeterminismStatus.INCONCLUSIVE, result.status());
+        assertTrue(result.message().contains("truncation"));
     }
 
     @Test

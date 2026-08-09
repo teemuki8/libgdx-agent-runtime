@@ -30,9 +30,11 @@ V1 includes registered entities, bounded immutable values, baseline/frame captur
 events, decisions, completed-frame queries, execution epochs, explicit attribution, typed actions,
 and declarative assertions. Optional application-owned capabilities add scenarios, exact-tick
 control, registered input, opaque checkpoints, runtime/UI correlation, recording, and determinism
-comparison through closed protocol 1.0-1.13 and additive protocol 2.0-2.2 stdio MCP surfaces.
+comparison through closed protocol 1.0-1.13 and additive protocol 2.0-2.3 stdio MCP surfaces.
 Protocol 2.1 adds application-reported simulation timing and tick-to-frame evidence; protocol 2.2
-adds exact-tick declarative assertions. A deterministic LWJGL3 fixture
+adds exact-tick declarative assertions; protocol 2.3 adds repeated exact-tick simulation
+determinism with scheduled registered inputs and explicit configuration/completeness testimony. A
+deterministic LWJGL3 fixture
 qualifies the full workflow. The development line also provides an optional explicit Box2D
 inspection and contact-evidence adapter; it never traverses an application world, installs a
 contact listener, or steps physics automatically. Applications retain ownership of the listener,
@@ -43,6 +45,12 @@ vector, area, magnitude, distance, wrapped-angle, event, and structured-list pre
 JDK-only core. `Box2dAssertions` supplies data-only factories for body and contact checks; it never
 reads a native object. Negative and every-tick PASS requires complete evidence, including the
 contact adapter's explicit `complete` property.
+
+Simulation determinism compares only explicitly selected completed evidence under the same
+application-reported reset, seed, configuration, fixed step, registered input script, and exact
+tick count. `Box2dDeterminism` compiles stable registered body/fixture/joint IDs, world testimony,
+and contact completeness into the JDK-only engine. Divergence reports the first actual simulation
+tick and both run correlations; incomplete evidence is never reported equal.
 
 V1 excludes replay execution, reflection, instrumentation, mutation interception, networking, ECS
 adapters, hot reload, visual debugging, natural-language queries, and automatic causality.

@@ -176,6 +176,33 @@ class SimulationAssertionContractTest {
         assertThrows(IllegalArgumentException.class, () -> new SimulationAssertionResult(
                 AssertionStatus.FAIL, "propertyEquals", scope(), Optional.of(oversized),
                 Optional.empty(), List.of(), false, "assertion failed"));
+        assertThrows(IllegalArgumentException.class, () -> new SimulationAssertionEvidence(
+                Optional.of(new SimulationTickId(1)), new ExecutionEpochId(0), 1,
+                Optional.of(new FrameId(1)), "unknownEvidence", Optional.empty(),
+                Optional.empty(), Optional.empty()));
+        assertThrows(IllegalArgumentException.class, () -> new SimulationAssertionResult(
+                AssertionStatus.PASS, "unknownAssertion", scope(), Optional.empty(),
+                Optional.empty(), List.of(), false, "assertion passed"));
+        assertThrows(IllegalArgumentException.class, () -> new SimulationAssertionResult(
+                AssertionStatus.INCONCLUSIVE, "entityExists", scope(), Optional.empty(),
+                Optional.empty(), List.of(), false, "evidence is incomplete"));
+        assertThrows(IllegalArgumentException.class, () -> new SimulationAssertionResult(
+                AssertionStatus.FAIL, "entityExists", scope(), Optional.empty(), Optional.empty(),
+                List.of(evidence(2, RuntimeValues.bool(false))), false, "assertion failed"));
+    }
+
+    @Test
+    void resultCanonicalizesEvidenceOrderWithinItsExactScope() {
+        SimulationAssertionScope scope = new SimulationAssertionScope(
+                new ExecutionEpochId(0), 1, 2, 2);
+        SimulationAssertionEvidence second = evidence(2, RuntimeValues.bool(false));
+        SimulationAssertionEvidence first = evidence(1, RuntimeValues.bool(true));
+
+        SimulationAssertionResult result = new SimulationAssertionResult(
+                AssertionStatus.FAIL, "propertyEquals", scope, Optional.empty(), Optional.empty(),
+                List.of(second, first), false, "assertion failed");
+
+        assertEquals(List.of(first, second), result.evidence());
     }
 
     private static SimulationAssertionScope scope() {

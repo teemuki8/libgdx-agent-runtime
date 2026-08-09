@@ -38,6 +38,7 @@ import io.github.teemuki8.libgdx.agent.runtime.core.SimulationControllerSpec;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayDeque;
@@ -583,6 +584,50 @@ final class RuntimeProtocolTest {
                         ProtocolVersion.V2_2, "simulation-assert-roundtrip",
                         "simulation-assertion", command))).command());
         assertEquals(command, decoded);
+
+        SimulationAssertion.Area area = new SimulationAssertion.Area(
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.TEN, BigDecimal.TEN);
+        SimulationAssertion.EventSelector eventSelector = new SimulationAssertion.EventSelector(
+                EventType.of("contact.begin"), Optional.of(EntityId.of("ball")), Optional.empty(),
+                RuntimeValues.object(RuntimeValues.field("sensor", RuntimeValues.bool(false))));
+        List<SimulationAssertion> variants = List.of(
+                new SimulationAssertion.EntityExists(EntityId.of("ball")),
+                command.assertion(),
+                new SimulationAssertion.ScalarApproximatelyEquals(EntityId.of("ball"), "angle",
+                        BigDecimal.ZERO, new BigDecimal("0.01")),
+                new SimulationAssertion.VectorApproximatelyEquals(EntityId.of("ball"),
+                        "position", RuntimeValues.vector2(1, 2), new BigDecimal("0.01"),
+                        SimulationAssertion.VectorToleranceMode.EUCLIDEAN),
+                new SimulationAssertion.VectorInArea(EntityId.of("ball"), "position", area,
+                        SimulationAssertion.AreaRelation.INSIDE,
+                        SimulationAssertion.Extent.EVERY_TICK),
+                new SimulationAssertion.VectorMagnitudeAtMost(EntityId.of("ball"), "velocity",
+                        BigDecimal.TEN, SimulationAssertion.Extent.FINAL),
+                new SimulationAssertion.VectorDistanceApproximatelyEquals(EntityId.of("ball"),
+                        "position", EntityId.of("ground"), "position", BigDecimal.ONE,
+                        new BigDecimal("0.1")),
+                new SimulationAssertion.WrappedAngleApproximatelyEquals(EntityId.of("ball"),
+                        "angle", BigDecimal.ZERO, new BigDecimal("6.283185307179586"),
+                        new BigDecimal("0.01")),
+                new SimulationAssertion.EventCount(eventSelector,
+                        SimulationAssertion.EventExpectation.EXACT, 1),
+                new SimulationAssertion.ObjectListContains(EntityId.of("contacts"), "active",
+                        RuntimeValues.object(RuntimeValues.field(
+                                "sensor", RuntimeValues.bool(false))),
+                        SimulationAssertion.Extent.FINAL),
+                new SimulationAssertion.AllOf(List.of(
+                        new SimulationAssertion.EntityExists(EntityId.of("ball")),
+                        command.assertion())));
+        for (SimulationAssertion variant : variants) {
+            RuntimeCommand.SimulationAssert variantCommand = new RuntimeCommand.SimulationAssert(
+                    variant, List.of(), 0, 1, 1, 8);
+            RuntimeCommand.SimulationAssert roundTripped = assertInstanceOf(
+                    RuntimeCommand.SimulationAssert.class,
+                    ProtocolJson.decodeRequest(ProtocolJson.encode(new RuntimeRequest(
+                            ProtocolVersion.V2_2, "variant", "simulation-assertion",
+                            variantCommand))).command());
+            assertEquals(variantCommand, roundTripped);
+        }
 
         RuntimeRegistry registry = new RuntimeRegistry();
         try (PublishedRuntime publication = registry.publish(runtime)) {

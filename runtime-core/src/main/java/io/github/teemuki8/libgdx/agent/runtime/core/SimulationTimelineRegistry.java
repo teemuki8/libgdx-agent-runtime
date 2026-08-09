@@ -76,6 +76,22 @@ public final class SimulationTimelineRegistry {
                 OptionalLong.empty(), callback, true));
     }
 
+    Optional<SimulationTick> tickUnacknowledged(
+            long runtimeSuppliedDeltaNanos, java.util.function.LongConsumer callback) {
+        Objects.requireNonNull(callback, "callback");
+        if (!runtime.prepareSimulationTick()) {
+            callback.accept(runtimeSuppliedDeltaNanos);
+            return Optional.empty();
+        }
+        SimulationTickSource source = runtime.controls().paused()
+                ? SimulationTickSource.PAUSED : SimulationTickSource.RUNNING;
+        return Optional.of(execute(runtimeSuppliedDeltaNanos, source,
+                OptionalLong.empty(), supplied -> {
+                    callback.accept(supplied);
+                    return 0;
+                }, false));
+    }
+
     /** Returns one bounded epoch-relative timeline page. Safe for concurrent readers. */
     public synchronized SimulationTickPage ticks(SimulationTickQuery query) {
         Objects.requireNonNull(query, "query");

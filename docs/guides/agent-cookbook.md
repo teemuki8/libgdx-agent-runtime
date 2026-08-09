@@ -10,6 +10,217 @@ described below are
 development-version APIs until a release containing them is published. The current published
 2.0.0 artifacts do not contain them.
 
+## Task index
+
+Choose the smallest recipe that answers the current question. The complete sources compile in the
+non-published `runtime-examples` module as ordinary consumers of the public artifacts.
+
+| Task | Start here | Compiled evidence |
+| --- | --- | --- |
+| Add observable state to a libGDX game | [Instrument and inspect state](#instrument-and-inspect-state) | [`BasicInspectionApplication.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/BasicInspectionApplication.java) |
+| Explain what changed or happened | [Query changes, events, and decisions](#query-changes-events-and-decisions) | `BasicInspectionApplicationTest` |
+| Reset, pause, inject, step, assert, record, and compare | [Run controlled scenarios and input](#run-controlled-scenarios-and-input) | [`ControlledWorkflowExample.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/ControlledWorkflowExample.java) |
+| Connect an MCP coding agent | [Host same-JVM stdio MCP](#host-same-jvm-stdio-mcp) | [`SameJvmMcpApplication.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/SameJvmMcpApplication.java) and [`controlled-workflow.json`](../../runtime-examples/src/main/resources/transcripts/controlled-workflow.json) |
+| Interpret missing, bounded, or failed evidence | [Diagnose incomplete and failed evidence](#diagnose-incomplete-and-failed-evidence) | `AgentCookbookContractTest` and runtime fixture regressions |
+| Build a deterministic Box2D game | [Use the deterministic Box2D example](#use-the-deterministic-box2d-example) | [`DeterministicBox2dExample.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/DeterministicBox2dExample.java) |
+
+For released inspection-only APIs use `2.0.0`. Recipes using fixed-step simulation, simulation
+assertions, simulation determinism, or `agent-runtime-box2d` currently require the repository
+development version `2.0.1-SNAPSHOT` until the next release. The examples module itself is test
+scaffolding and is never a dependency or published artifact.
+
+## Instrument and inspect state
+
+Prerequisites: add the smallest published artifacts your game consumes, construct the runtime on
+the libGDX render thread, and register only explicit safe properties. For released basic state
+inspection:
+
+```kotlin
+implementation("io.github.teemuki8:agent-runtime-core:2.0.0")
+implementation("io.github.teemuki8:agent-runtime-libgdx:2.0.0")
+```
+
+The canonical order is register, start, capture, query, close. `start()` captures baseline frame
+0, and application mutation plus semantic events belong inside one application-owned frame:
+
+```java
+runtime.entities().register(EntityId.of("player"), EntityType.of("player"),
+        () -> "Player", inspector -> inspector.property("health", () -> health));
+runtime.start();
+runtime.frame(16_666_667L, () -> {
+    health = 75;
+    runtime.emit(EventSpec.type("player.damaged")
+            .subject(EntityId.of("player"))
+            .attribute("amount", RuntimeValues.integer(25)));
+});
+EntitySnapshot player = runtime.entity(EntityId.of("player")).orElseThrow();
+```
+
+Representative evidence is `frameId=1`, `player.health=75`, and one explicitly emitted
+`player.damaged` event. Registration, start, frame capture, and close stay on the capture thread;
+completed immutable queries may run on any thread. Runtime limits bound values, property counts,
+frames, and events. Truncation or eviction is evidence and must not be recast as a complete answer.
+Close on the owner thread; the runtime never disposes application objects.
+
+Do not register a mutable `Body`, actor graph, secret-bearing object, or reflective serializer.
+The typed failure for an unregistered entity is absence (`Optional.empty()` or an empty query), not
+permission to traverse the game. See the full hidden LWJGL3 application in
+[`BasicInspectionApplication.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/BasicInspectionApplication.java).
+
+## Query changes, events, and decisions
+
+Use structural changes for observed property differences, semantic events for facts the game
+explicitly emits, and decisions for an application-declared candidate choice. Query an inclusive
+completed-frame range with bounded filters:
+
+```java
+QueryPage<PropertyChange> changes = runtime.changes(
+        new ChangeQuery(FrameRange.of(0, 60), Optional.of(EntityId.of("player")),
+                Optional.empty(), Optional.of("health"), 32));
+QueryPage<RuntimeEvent> events = runtime.events(
+        new EventQuery(FrameRange.of(0, 60), Optional.of("player.damaged"), false,
+                Optional.of(EntityId.of("player")), Optional.empty(), 32));
+```
+
+The MCP equivalents are closed calls such as:
+
+```json
+{"name":"runtime_changes","arguments":{"sessionId":"game","fromFrame":0,"toFrame":60,"entityId":"player","property":"health","limit":32}}
+```
+
+```json
+{"name":"runtime_events","arguments":{"sessionId":"game","fromFrame":0,"toFrame":60,"eventType":"player.damaged","eventTypePrefix":false,"subject":"player","limit":32}}
+```
+
+An empty retained page only says that no matching evidence was retained in that query. It does not
+infer why health changed or prove an event never happened outside the complete retained range.
+Inspect page completeness, eviction, and truncation fields before making a negative claim.
+Decisions and events require an open frame and capture-thread ownership. Query results are frozen;
+cleanup is still the runtime owner's responsibility.
+
+Do not infer “the collision damaged the player” because a contact and health change share a frame.
+Supply explicit correlation or a semantic event when the application knows that fact. Invalid
+filters and unknown fields produce typed `INVALID_QUERY` transport failures.
+
+## Run controlled scenarios and input
+
+This development workflow requires `2.0.1-SNAPSHOT`. Register the application dispatcher,
+scenario, closed input schema, optional checkpoint provider, and acknowledged fixed-step helper
+before `start()`. Then use idempotent request IDs and poll the exact same request after the
+application thread drains it:
+
+```java
+runtime.scenarios().reset("walk", "reset-1", timeout);
+runtime.controls().control(true, "pause-1", timeout);
+long tick = runtime.controls().currentTick() + 1;
+runtime.inputs().inject("set-velocity", "input-1",
+        RuntimeValues.object(RuntimeValues.field(
+                "velocityX", RuntimeValues.decimal("2"))),
+        OptionalLong.of(tick), timeout);
+runtime.controls().advanceFixed("advance-1", 60, timeout);
+```
+
+The scheduled input executes immediately before its selected tick. An acknowledged tick records
+the configured, supplied, and application-reported executed delta plus its resulting runtime
+frame. Assertions consume completed immutable evidence and return `PASS`, `FAIL`, or
+`INCONCLUSIVE`. Recordings and deterministic comparison reuse the same scenario/input/tick path;
+`EQUAL` applies only to the selected evidence.
+
+Submitted commands may first return `QUEUED` or `EXECUTING`. The application must drain its own
+dispatcher and retry with the identical request ID and fields. Reusing an ID with changed fields is
+rejected; retrying unknown partial mutation is unsafe until the application resets. Tick counts,
+future scheduling, retained operations, recordings, evidence, and execution time are bounded.
+Restore/reset callbacks must restore application state and clear or restore the accumulator.
+
+Do not call a mutation from an MCP worker or invent a loop with `Thread.sleep`. The complete
+application-owned Java sequence—including checkpoint restore, recording, PASS/FAIL assertions,
+and selected reruns—is
+[`ControlledWorkflowExample.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/ControlledWorkflowExample.java).
+
+## Host same-JVM stdio MCP
+
+MCP is a local development transport, not remote attachment. Publish the started runtime and open
+the server inside the same libGDX JVM:
+
+```java
+publication = registry.publish(runtime);
+server = RuntimeMcpServer.open(
+        new RuntimeProtocolService(registry), System.in, System.out);
+```
+
+Send MCP `initialize`, `notifications/initialized`, then closed `tools/call` requests. The tested
+[`controlled-workflow.json`](../../runtime-examples/src/main/resources/transcripts/controlled-workflow.json)
+transcript covers sessions, capabilities, scenarios, reset, pause, scheduled input, configured-step
+advance, entity/event inspection, frame and simulation assertions, and simulation determinism.
+Representative terminal results include command `SUCCEEDED`, assertion `PASS`, and selected
+comparison `EQUAL` with a null divergence.
+
+`System.out` is exclusively newline-framed JSON-RPC. Put human logs on stderr or in a bounded file.
+The game owns dispatch via `Gdx.app.postRunnable`; the server creates no game loop. Inputs, nesting,
+strings, result lists, and frames use the runtime's hard protocol/MCP bounds, and unknown fields are
+rejected before dispatch. Close in order: server, publication, runtime. EOF is a clean launcher
+shutdown signal.
+
+Do not run a catalog-only MCP JVM beside the game and expect it to inspect process memory. Do not
+open both runtime and UI-harness stdio servers on the same streams. See the runnable hidden launcher
+in [`SameJvmMcpApplication.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/SameJvmMcpApplication.java).
+
+## Diagnose incomplete and failed evidence
+
+Interpret evidence conservatively:
+
+| Observation | Meaning | Agent action |
+| --- | --- | --- |
+| entity/query absent with complete retained range | no matching registered evidence in that range | verify ID and registration; do not infer application semantics |
+| range partially evicted or paginated | requested evidence is incomplete | narrow/repeat the query or return `INCONCLUSIVE` |
+| truncation/limit diagnostic | only a bounded prefix was retained | raise an application-configured limit or reduce explicit scope |
+| command `QUEUED`/`EXECUTING` | application thread has not completed it | drain dispatch and poll the identical request |
+| command `FAILED` with mutation unknown | callback may have partially changed state | reset/restore before retrying |
+| assertion `FAIL` | complete evidence contradicts the expected fact | inspect typed expected/observed/evidence fields |
+| assertion `INCONCLUSIVE` | PASS/negative proof is unsafe | inspect eviction, truncation, missing correlation, and completeness |
+| determinism `DIVERGED` | selected evidence first differs at the reported tick | inspect entity/property or event difference for both runs |
+| determinism `INCONCLUSIVE` | setup or evidence could not support equality | fix the named timing/configuration/completeness fault |
+
+For negative claims, absence is not proof when any relevant evidence is evicted, truncated,
+unmapped, failed, unacknowledged, or missing frame correlation. A screenshot can supplement these
+facts but never makes incomplete structured evidence complete. Diagnostics are closed typed values;
+the runtime does not serialize a stack trace or infer causality.
+
+Incorrect example: treating an empty contact-event page as “contact never occurred” after contact
+history eviction. The correct result is `INCONCLUSIVE`, followed by a reset and a smaller exact-tick
+range or larger application-selected retention limit.
+
+## Use the deterministic Box2D example
+
+Use development dependencies `agent-runtime-core`, `agent-runtime-libgdx`, and
+`agent-runtime-box2d` at `2.0.1-SNAPSHOT`. The consumer example explicitly owns a native `World`,
+registers stable world/body/fixture/joint IDs, installs `Box2dContacts.listener()`, and steps only
+inside the acknowledged fixed-step callback:
+
+```java
+contacts.captureStep(() -> world.step(
+        tick.fixedStepSeconds(), velocityIterations, positionIterations));
+return tick.fixedStepNanos();
+```
+
+Its workflow resets `player-movement`, pauses, schedules velocity for epoch tick 1, advances 90
+exact ticks, checks final position and player-wall contact, verifies tick/frame correlation, and
+runs two selected body/contact evidence repeats. The expected summary is position `PASS`, contact
+`PASS`, determinism `EQUAL`, and no whole-program determinism claim. Structured entities remain
+available at `box2d.world.main`, `box2d.body.player`, `box2d.fixture.player-shape`,
+`box2d.joint.static-link`, and `box2d.contacts.main`.
+
+World objects, callbacks, contacts, and native disposal remain capture-thread/application-owned.
+The adapter copies only explicitly registered bounded facts; contact completeness and truncation
+control negative assertions. Recreated worlds must rebind or re-register stable IDs and reinstall
+the listener before old native objects are disposed.
+
+Do not call `world.step(renderDelta)`, use native pointers as IDs, assume pixels equal metres, or
+read screenshots as authoritative physics state. The compact copyable implementation and native
+test are [`DeterministicBox2dExample.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/DeterministicBox2dExample.java)
+and `DeterministicBox2dExampleTest`; the larger conformance fixture below supplies deliberate
+timing, scale, truncation, and unmapped-endpoint failures.
+
 ## Fixed-step simulation ticks
 
 Use this when game correctness depends on Box2D or another authoritative fixed-step simulation.

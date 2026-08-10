@@ -4,6 +4,15 @@ All notable changes follow Keep a Changelog structure.
 
 ## [Unreleased]
 
+### Added
+
+- Protocol 2.5 adds bounded replay-ready recording capture and execution from exactly one
+  application-owned scenario or opaque checkpoint origin. Successful registered inputs are applied
+  in stable tick order through acknowledged fixed-step control; selected immutable baseline/tick
+  evidence reports `EQUAL`, first `DIVERGED`, or safe `INCONCLUSIVE` with explicit limits and
+  sanitized application failures. Closed local-stdio MCP tools, a compiled workflow transcript,
+  and real Box2D/LWJGL3 fixtures qualify the additive contract without changing recording schema 1.
+
 ## [2.1.0] - 2026-08-10
 
 ### Added

@@ -43,8 +43,9 @@ class McpTranscriptTest {
     void machineReadableTranscriptReplaysThroughClosedLiveTools() throws Exception {
         Transcript transcript = transcript();
         assertEquals(List.of(
-                "sessions", "capabilities", "scenarios", "reset", "pause", "input",
-                "advance", "entity", "events", "frame assertion", "assertion",
+                "sessions", "capabilities", "scenarios", "reset", "pause",
+                "replay recording start", "input", "advance", "entity", "events",
+                "frame assertion", "assertion", "replay recording stop", "replay",
                 "determinism"),
                 transcript.steps().stream().map(Step::name).toList());
 
@@ -98,13 +99,13 @@ class McpTranscriptTest {
     }
 
     @Test
-    void representativeProtocol24EnvelopesRoundTripExactly() {
+    void representativeProtocol25EnvelopesRoundTripExactly() {
         RuntimeRequest request = new RuntimeRequest(
-                ProtocolVersion.V2_4, "example-request", null, new RuntimeCommand.Sessions());
+                ProtocolVersion.V2_5, "example-request", null, new RuntimeCommand.Sessions());
         assertEquals(request, ProtocolJson.decodeRequest(ProtocolJson.encode(request)));
 
         RuntimeResponse response = new RuntimeResponse.Success(
-                ProtocolVersion.V2_4, "example-request",
+                ProtocolVersion.V2_5, "example-request",
                 new RuntimeResponse.Result.Sessions(List.of()));
         assertEquals(response, ProtocolJson.decodeResponse(ProtocolJson.encode(response)));
     }

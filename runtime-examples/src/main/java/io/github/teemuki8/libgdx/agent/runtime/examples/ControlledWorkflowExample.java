@@ -20,6 +20,7 @@ import io.github.teemuki8.libgdx.agent.runtime.core.RecordingEntry;
 import io.github.teemuki8.libgdx.agent.runtime.core.RecordingInputEntry;
 import io.github.teemuki8.libgdx.agent.runtime.core.RecordingSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.RecordingTickEntry;
+import io.github.teemuki8.libgdx.agent.runtime.core.ReplayCaptureSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import io.github.teemuki8.libgdx.agent.runtime.core.SessionId;
@@ -155,7 +156,6 @@ public final class ControlledWorkflowExample implements AutoCloseable {
         var reset = runtime.scenarios().reset("walk", "workflow-reset", TIMEOUT);
         drainAll();
         reset = runtime.scenarios().reset("walk", "workflow-reset", TIMEOUT);
-        var epoch = reset.executionEpochId().orElseThrow();
 
         runtime.controls().control(true, "workflow-pause", TIMEOUT);
         drainAll();
@@ -164,12 +164,13 @@ public final class ControlledWorkflowExample implements AutoCloseable {
                 "start", "Before scheduled movement", "workflow-checkpoint-create", TIMEOUT);
         drainAll();
 
-        runtime.recordings().start(new RecordingSpec(
-                "walk-recording", "2.4",
-                List.of(new RecordingCapabilityVersion("fixed-step-simulation", "2.2")),
-                Optional.of("walk"), Optional.of("start"), OptionalLong.of(7),
-                RuntimeValues.object(), false), "workflow-recording-start", TIMEOUT);
+        ReplayCaptureSpec replayCaptureSpec = replayCaptureSpec();
+        runtime.replays().start(
+                replayCaptureSpec, "workflow-replay-capture-start", TIMEOUT);
         drainAll();
+        var replayCapture = runtime.replays().start(
+                replayCaptureSpec, "workflow-replay-capture-start", TIMEOUT);
+        var epoch = replayCapture.baselineExecutionEpochId().orElseThrow();
 
         RuntimeValue.ObjectValue velocity = velocityParameters(2);
         long targetTick = runtime.controls().currentTick() + 1;
@@ -187,6 +188,13 @@ public final class ControlledWorkflowExample implements AutoCloseable {
                 "walk-recording", "workflow-recording-stop", TIMEOUT);
         drainAll();
         List<RecordingEntry> entries = recordingEntries("walk-recording");
+
+        runtime.replays().execute(
+                "walk-recording", "workflow-replay-execute", TIMEOUT);
+        drainAll();
+        var replay = runtime.replays().execute(
+                "walk-recording", "workflow-replay-execute", TIMEOUT)
+                .result().orElseThrow();
 
         SimulationDeterminismSpec determinismSpec = determinismSpec(velocity);
         runtime.determinism().checkSimulation(
@@ -212,7 +220,8 @@ public final class ControlledWorkflowExample implements AutoCloseable {
                 Math.toIntExact(entries.stream().filter(RecordingInputEntry.class::isInstance)
                         .count()),
                 Math.toIntExact(entries.stream().filter(RecordingTickEntry.class::isInstance)
-                        .count()), determinism.status(), restored, correlated);
+                        .count()), replay.status(), replay.bounds().completedTicks(),
+                determinism.status(), restored, correlated);
     }
 
     /** Runs the queued example and writes only human-readable diagnostics to stderr. */
@@ -262,6 +271,18 @@ public final class ControlledWorkflowExample implements AutoCloseable {
                 List.of(), List.of(), List.of());
     }
 
+    private static ReplayCaptureSpec replayCaptureSpec() {
+        SimulationDeterminismSpec template = determinismSpec(velocityParameters(2));
+        RecordingSpec recording = new RecordingSpec(
+                "walk-recording", "2.5",
+                List.of(new RecordingCapabilityVersion("fixed-step-simulation", "2.2")),
+                Optional.of("walk"), Optional.empty(), OptionalLong.of(7),
+                RuntimeValues.object(), true);
+        return new ReplayCaptureSpec(recording, template.execution().profile(),
+                template.configurationRequirements(), template.evidenceRequirements(),
+                template.eventTypes());
+    }
+
     private List<RecordingEntry> recordingEntries(String recordingId) {
         ArrayList<RecordingEntry> entries = new ArrayList<>();
         int offset = 0;
@@ -295,13 +316,15 @@ public final class ControlledWorkflowExample implements AutoCloseable {
     /** Immutable result of the complete controlled workflow. */
     public record WorkflowResult(CommandState resetState, int completedTicks,
             long firstAppliedEpochTick, String expectedPosition, String wrongPosition,
-            int recordedInputs, int recordedTicks, DeterminismStatus determinism,
+            int recordedInputs, int recordedTicks, DeterminismStatus replay, int replayedTicks,
+            DeterminismStatus determinism,
             RuntimeValue.Vector2Value restoredPosition, boolean tickFrameCorrelated) {
         /** Validates required immutable evidence. */
         public WorkflowResult {
             Objects.requireNonNull(resetState, "resetState");
             Objects.requireNonNull(expectedPosition, "expectedPosition");
             Objects.requireNonNull(wrongPosition, "wrongPosition");
+            Objects.requireNonNull(replay, "replay");
             Objects.requireNonNull(determinism, "determinism");
             Objects.requireNonNull(restoredPosition, "restoredPosition");
         }

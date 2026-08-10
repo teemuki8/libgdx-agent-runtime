@@ -30,11 +30,14 @@ V1 includes registered entities, bounded immutable values, baseline/frame captur
 events, decisions, completed-frame queries, execution epochs, explicit attribution, typed actions,
 and declarative assertions. Optional application-owned capabilities add scenarios, exact-tick
 control, registered input, opaque checkpoints, runtime/UI correlation, recording, and determinism
-comparison through closed protocol 1.0-1.13 and additive protocol 2.0-2.4 stdio MCP surfaces.
+comparison and bounded replay through closed protocol 1.0-1.13 and additive protocol 2.0-2.5
+stdio MCP surfaces.
 Protocol 2.1 adds application-reported simulation timing and tick-to-frame evidence; protocol 2.2
 adds the canonical fixed-step accumulator, loss reports, and configured-step advance; protocol 2.3
 adds exact-tick declarative assertions; protocol 2.4 adds repeated exact-tick simulation
-determinism with scheduled registered inputs and explicit configuration/completeness testimony. A
+determinism with scheduled registered inputs and explicit configuration/completeness testimony;
+protocol 2.5 executes explicitly replay-ready recordings from registered scenario or checkpoint
+origins and reports equal, first divergence, or inconclusive selected evidence. A
 deterministic LWJGL3 fixture
 qualifies the full workflow. Its actual-native Box2D conformance scenario covers ball drop,
 dynamic collision, scheduled player movement, exact assertions, deterministic reruns, protocol,
@@ -58,8 +61,9 @@ tick and both run correlations; incomplete evidence is never reported equal.
 See [Bootstrap migration: deterministic Box2D games](docs/guides/bootstrap-box2d-migration.md)
 for the generated-game loop, reset, input, and verification contract.
 
-V1 excludes replay execution, reflection, instrumentation, mutation interception, networking, ECS
-adapters, hot reload, visual debugging, natural-language queries, and automatic causality.
+V1 excludes arbitrary or unregistered replay execution, reflection, instrumentation, mutation
+interception, networking, ECS adapters, hot reload, visual debugging, natural-language queries,
+and automatic causality.
 Version 1.0 establishes the stable Java and exact-version protocol contracts described in
 [ADR 0011](docs/adr/0011-stable-1x-compatibility.md).
 

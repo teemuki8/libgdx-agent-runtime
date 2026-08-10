@@ -5,7 +5,7 @@ the runtime. Every public Java API, protocol/MCP contract, dependency, or agent-
 change must update its affected recipe in the same pull request. Examples are exercised by the
 repository fixture tests.
 
-The simulation timeline, fixed-step, assertion, and determinism APIs and protocols 2.1-2.4
+The simulation timeline, fixed-step, assertion, determinism, and replay APIs and protocols 2.1-2.5
 described below are available in release 2.1.0. Earlier 2.0.0 artifacts do not contain them.
 
 ## Task index
@@ -26,6 +26,7 @@ non-published `runtime-examples` module as ordinary consumers of the public arti
 | Create or restore a checkpoint | [Run controlled scenarios and input](#run-controlled-scenarios-and-input) | [`ControlledWorkflowExample.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/ControlledWorkflowExample.java) |
 | Evaluate an assertion | [Run controlled scenarios and input](#run-controlled-scenarios-and-input) | frame and simulation assertions in the transcript |
 | Record bounded execution | [Run controlled scenarios and input](#run-controlled-scenarios-and-input) | recording retrieval in `ControlledWorkflowExample` |
+| Execute a replay-ready recording | [Capture and execute deterministic replay](#capture-and-execute-deterministic-replay) | Java and MCP `EQUAL` paths in `ControlledWorkflowExample` |
 | Compare deterministic reruns | [Run controlled scenarios and input](#run-controlled-scenarios-and-input) | selected `EQUAL` result in both controlled examples |
 | Correlate runtime and UI evidence | [Frame correlation](frame-correlation.md) | explicit `UiFrameCorrelation`, never guessed frames |
 | Connect an MCP coding agent | [Host same-JVM stdio MCP](#host-same-jvm-stdio-mcp) | [`SameJvmMcpApplication.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/SameJvmMcpApplication.java) and [`controlled-workflow.json`](../../runtime-examples/src/main/resources/transcripts/controlled-workflow.json) |
@@ -154,6 +155,10 @@ RecordingChunk recording = runtime.recordings().get("walk-recording", 0, 64);
 runtime.checkpoints().restore("start", "checkpoint-restore-1", timeout);
 ```
 
+This ordinary recording is not executable replay evidence, even if its application testimony sets
+`replayGuaranteed=true`. Use the replay-ready start path below to capture the bounded comparison
+sidecar.
+
 After application dispatch, create/stop/restore report command `SUCCEEDED`; the chunk contains a
 bounded `RecordingInputEntry` and the exact retained `RecordingTickEntry` values. Restore produces
 a new epoch baseline and the example verifies position `(0,0)`. A recording chunk explicitly
@@ -176,6 +181,56 @@ application-owned Java sequence—including checkpoint restore, recording, PASS/
 and selected reruns—is
 [`ControlledWorkflowExample.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/ControlledWorkflowExample.java).
 
+## Capture and execute deterministic replay
+
+Protocol 2.5 adds bounded execution for recordings explicitly started through
+`ReplayRegistry`. Pause first, choose exactly one registered scenario or retained checkpoint
+origin, select observable evidence, then inject registered inputs and advance contiguous fixed
+ticks. The compiled workflow uses a scenario origin:
+
+```java
+RecordingSpec recording = new RecordingSpec(
+        "walk-recording", "2.5", capabilityVersions,
+        Optional.of("walk"), Optional.empty(), OptionalLong.of(7),
+        RuntimeValues.object(), true);
+ReplayCaptureSpec capture = new ReplayCaptureSpec(
+        recording, profile, configurationRequirements, evidenceRequirements, eventTypes);
+runtime.replays().start(capture, "replay-capture-1", timeout);
+// drain on the application thread; inject registered input; advance exact fixed ticks
+runtime.recordings().stop("walk-recording", "recording-stop-1", timeout);
+runtime.replays().execute("walk-recording", "replay-execute-1", timeout);
+ReplayResult result = runtime.replays()
+        .execute("walk-recording", "replay-execute-1", timeout)
+        .result().orElseThrow();
+```
+
+`EQUAL` means only the selected baseline and every retained tick observable matched. `DIVERGED`
+stops at the first complete difference: `BASELINE` has no tick ID, while `SIMULATION_TICK` includes
+the reference/replay epoch, tick, and frame correlations. The difference is observable evidence,
+not a claim that the recorded input caused it. `INCONCLUSIVE` covers ordinary recordings, missing
+or truncated evidence, skipped/non-fixed/unacknowledged ticks, actions, failed or redacted inputs,
+eviction, timeout, and bounded application failure. Application callback evidence never contains a
+serialized stack trace.
+
+The checkpoint form changes only the origin fields: `scenarioId` is empty and `checkpointId` names
+one retained opaque application checkpoint. Its seed/configuration remain testimony; baseline
+comparison detects a bad restore. The application must restore all state that affects its selected
+observables, including native physics caches where relevant.
+
+The closed MCP calls used by the tested transcript are:
+
+```json
+{"name":"runtime_replay_recording_start","arguments":{"sessionId":"game","recordingId":"walk-recording","replayRequestId":"capture-1","originKind":"scenario","originId":"walk","randomSeed":7,"configuration":[],"profile":{"comparisonScope":{"entityIds":["player"],"properties":["position","velocity"],"excludedProperties":[],"includeEvents":false,"includeDecisions":false},"includeUiCorrelations":false},"configurationRequirements":[],"evidenceRequirements":[],"eventTypes":[],"timeoutNanos":5000000000}}
+```
+
+```json
+{"name":"runtime_replay","arguments":{"sessionId":"game","recordingId":"walk-recording","replayRequestId":"execute-1","timeoutNanos":5000000000}}
+```
+
+Poll either call with the identical fields while its command is `QUEUED` or `EXECUTING`. Protocol
+2.4 rejects both commands as requiring 2.5. Sidecars, scripts, tick evidence, operations, encoded
+bytes, and deadlines are independently bounded; recording or operation eviction is explicit.
+
 ## Host same-JVM stdio MCP
 
 MCP is a local development transport, not remote attachment. Publish the started runtime and open
@@ -189,8 +244,9 @@ server = RuntimeMcpServer.open(
 
 Send MCP `initialize`, `notifications/initialized`, then closed `tools/call` requests. The tested
 [`controlled-workflow.json`](../../runtime-examples/src/main/resources/transcripts/controlled-workflow.json)
-transcript covers sessions, capabilities, scenarios, reset, pause, scheduled input, configured-step
-advance, entity/event inspection, frame and simulation assertions, and simulation determinism.
+transcript covers sessions, capabilities, scenarios, reset, pause, replay-ready capture, scheduled
+input, configured-step advance, entity/event inspection, frame and simulation assertions, replay,
+and simulation determinism.
 Representative terminal results include command `SUCCEEDED`, assertion `PASS`, and selected
 comparison `EQUAL` with a null divergence.
 
@@ -1542,7 +1598,7 @@ The unpublished `runtime-fixtures` module contains the copyable agent example:
   post-physics game logic;
 - `Box2dConformanceFixtureTest` proves ball drop, two-body collision, scheduled player movement,
   post-solve points/normal/impulses, active contacts, exact tick/frame evidence, checkpoint restore,
-  recording, protocol 2.3/2.4, MCP, render independence, and deterministic reruns;
+  recording/replay, protocol 2.3-2.5, MCP, render independence, and deterministic reruns;
 - `Box2dConformanceApplication` runs the same model from a hidden real LWJGL3 render loop, using
   `Gdx.graphics.getDeltaTime()` only as input to the canonical accumulator.
 

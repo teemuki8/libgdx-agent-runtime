@@ -25,6 +25,8 @@ final class ControlledWorkflowExampleTest {
             assertEquals("FAIL", result.wrongPosition());
             assertTrue(result.recordedInputs() >= 1);
             assertEquals(60, result.recordedTicks());
+            assertEquals(DeterminismStatus.EQUAL, result.replay());
+            assertEquals(60, result.replayedTicks());
             assertEquals(DeterminismStatus.EQUAL, result.determinism());
             assertEquals(RuntimeValues.vector2(0, 0), result.restoredPosition());
             assertTrue(result.tickFrameCorrelated());

@@ -464,26 +464,26 @@ record Replay(
 - ADR 0019 records why replay is a sidecar, why origin is explicit, why actions are excluded, why
   checkpoint configuration is testimony, and why structural difference is not causal attribution.
 
-- [ ] Add/extend example tests first. Assert the Java recipe compiles/runs and the committed JSON
+- [x] Add/extend example tests first. Assert the Java recipe compiles/runs and the committed JSON
   transcript exactly matches generated 2.5 MCP traffic. Run
   `./gradlew :runtime-examples:test --tests '*ControlledWorkflowExampleTest' --tests
   '*McpTranscriptTest' --tests '*AgentCookbookContractTest' --warning-mode=fail` and observe the
   missing recipe/transcript expectations.
-- [ ] Extend `ControlledWorkflowExample` with the smallest deterministic replay-ready workflow and
+- [x] Extend `ControlledWorkflowExample` with the smallest deterministic replay-ready workflow and
   regenerate/update the checked transcript using the repository's existing deterministic mechanism;
   do not handwave values that the contract test can derive.
-- [ ] Add cookbook Java, protocol, and MCP recipes covering both origins, fixed-tick/input capture,
+- [x] Add cookbook Java, protocol, and MCP recipes covering both origins, fixed-tick/input capture,
   equal/diverged/inconclusive results, baseline versus tick divergence, timeout, truncation,
   eviction, unsupported 2.4 behavior, and application failure. State explicitly that ordinary
   `replayGuaranteed` recordings are not executable.
-- [ ] Add ADR 0019 and update the design contract/security boundary. Document application ownership,
+- [x] Add ADR 0019 and update the design contract/security boundary. Document application ownership,
   capture-thread requirements, no reflection/causality, bounded sidecar retention, and local stdio.
-- [ ] Update README compatibility/capability tables from protocol 2.4 to 2.5. Move deterministic
+- [x] Update README compatibility/capability tables from protocol 2.4 to 2.5. Move deterministic
   replay from roadmap research to delivered additive capability, add a concise `[Unreleased]`
   changelog entry, and leave frozen `docs/releases/2.1.0.md` unchanged.
-- [ ] Run the focused example/docs tests green, Javadocs for all changed public APIs, and
+- [x] Run the focused example/docs tests green, Javadocs for all changed public APIs, and
   `git diff --check`.
-- [ ] Commit `docs: document bounded replay execution`.
+- [x] Commit `docs: document bounded replay execution`.
 
 ### Task 10: Compatibility audit, independent review, and full verification
 

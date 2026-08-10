@@ -35,6 +35,7 @@ class AgentCookbookContractTest {
             "## Instrument and inspect state",
             "## Query changes, events, and decisions",
             "## Run controlled scenarios and input",
+            "## Capture and execute deterministic replay",
             "## Host same-JVM stdio MCP",
             "## Diagnose incomplete and failed evidence",
             "## Use the deterministic Box2D example");
@@ -64,14 +65,20 @@ class AgentCookbookContractTest {
         assertTrue(cookbook.contains("### Exact failure calls"));
         assertTrue(cookbook.contains("runtime.checkpoints().create"));
         assertTrue(cookbook.contains("runtime.recordings().start"));
+        assertTrue(cookbook.contains("runtime.replays().start"));
+        assertTrue(cookbook.contains("runtime_replay_recording_start"));
+        assertTrue(cookbook.contains("runtime_replay"));
+        assertTrue(cookbook.contains("ordinary recording is not executable replay evidence"));
         assertLocalLinksResolve(cookbook);
         assertCurrentConsumerVersions();
 
         String readme = read("README.md");
+        assertTrue(readme.contains("protocol 2.5"));
         assertTrue(readme.contains("runtime-examples"));
         assertTrue(readme.contains("Agent cookbook"));
         assertTrue(read("docs/guides/getting-started.md").contains("runtime-examples"));
         assertTrue(read("docs/guides/agent-tools.md").contains("controlled-workflow.json"));
+        assertTrue(read("docs/guides/agent-tools.md").contains("runtime_replay"));
         assertTrue(read("CHANGELOG.md").contains("tested agent cookbook"));
 
         String agents = read("AGENTS.md");

@@ -12,6 +12,7 @@
 - Closed declarative assertions and application-owned exact-tick control
 - Registered input injection, opaque checkpoints, and runtime/UI correlation
 - Bounded semantic recording and repeated-scenario determinism comparison
+- Bounded replay-ready capture and deterministic selected-evidence execution
 
 ## Potential V2
 
@@ -26,7 +27,6 @@ These are possibilities, not commitments.
 
 ## Research
 
-- Deterministic replay
 - Mutation attribution
 - Java agent or bytecode instrumentation
 - Source-location capture

@@ -71,6 +71,39 @@
       }
     },
     {
+      "name": "replay recording start",
+      "tool": "runtime_replay_recording_start",
+      "arguments": {
+        "sessionId": "controlled-workflow-example",
+        "recordingId": "transcript-replay",
+        "replayRequestId": "transcript-replay-start",
+        "originKind": "scenario",
+        "originId": "walk",
+        "randomSeed": 7,
+        "configuration": [],
+        "profile": {
+          "comparisonScope": {
+            "entityIds": ["player"],
+            "properties": ["position", "velocity"],
+            "excludedProperties": [],
+            "includeEvents": false,
+            "includeDecisions": false
+          },
+          "includeUiCorrelations": false
+        },
+        "configurationRequirements": [],
+        "evidenceRequirements": [],
+        "eventTypes": [],
+        "timeoutNanos": 5000000000
+      },
+      "dispatch": true,
+      "expected": {
+        "/type": "replayCapture",
+        "/operation/command/status/state": "SUCCEEDED",
+        "/operation/baselineExecutionEpochId/value": 2
+      }
+    },
+    {
       "name": "input",
       "tool": "runtime_input",
       "arguments": {
@@ -126,7 +159,7 @@
       "arguments": {
         "sessionId": "controlled-workflow-example",
         "fromFrame": 0,
-        "toFrame": 3,
+        "toFrame": 4,
         "eventType": "player.moved",
         "eventTypePrefix": false,
         "limit": 10
@@ -144,8 +177,8 @@
       "arguments": {
         "sessionId": "controlled-workflow-example",
         "fromFrame": 0,
-        "toFrame": 3,
-        "executionEpochId": 1,
+        "toFrame": 4,
+        "executionEpochId": 2,
         "evidenceLimit": 8,
         "assertion": {
           "assertionType": "eventOccurs",
@@ -164,7 +197,7 @@
       "tool": "runtime_simulation_assert",
       "arguments": {
         "sessionId": "controlled-workflow-example",
-        "executionEpochId": 1,
+        "executionEpochId": 2,
         "fromEpochTick": 1,
         "toEpochTick": 2,
         "evidenceLimit": 8,
@@ -184,6 +217,38 @@
         "/result/status": "PASS",
         "/result/assertionType": "vectorApproximatelyEquals",
         "/result/observed/valueType": "vector2"
+      }
+    },
+    {
+      "name": "replay recording stop",
+      "tool": "runtime_recording_stop",
+      "arguments": {
+        "sessionId": "controlled-workflow-example",
+        "recordingId": "transcript-replay",
+        "recordingRequestId": "transcript-replay-stop",
+        "timeoutNanos": 5000000000
+      },
+      "dispatch": true,
+      "expected": {
+        "/type": "recordingOperation",
+        "/operation/command/status/state": "SUCCEEDED"
+      }
+    },
+    {
+      "name": "replay",
+      "tool": "runtime_replay",
+      "arguments": {
+        "sessionId": "controlled-workflow-example",
+        "recordingId": "transcript-replay",
+        "replayRequestId": "transcript-replay-execute",
+        "timeoutNanos": 5000000000
+      },
+      "dispatch": true,
+      "expected": {
+        "/type": "replay",
+        "/operation/result/status": "EQUAL",
+        "/operation/result/bounds/requestedTicks": 2,
+        "/operation/result/bounds/completedTicks": 2
       }
     },
     {

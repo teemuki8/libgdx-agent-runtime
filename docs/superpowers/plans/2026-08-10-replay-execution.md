@@ -81,22 +81,22 @@ libGDX/LWJGL3/Box2D 1.14.2, Xvfb on Linux.
 - `ReplayCaptureOperation` and `ReplayOperation` mirror existing retained command-operation records:
   recording/request IDs, `CommandLookup`, and optional terminal evidence.
 
-- [ ] Write constructor tests for every null, blank/oversized string, negative/zero/excessive limit,
-  mutable collection, duplicate/unsorted requirement, invalid optional, and inconsistent counter.
-- [ ] Assert `ReplayCaptureSpec` rejects zero or two origins, `replayGuaranteed=false`, unsupported
-  recording protocol/capability metadata, and requirements beyond existing deterministic-selection
-  limits. Assert it copies and canonically sorts all lists without changing caller-owned values.
-- [ ] Assert baseline divergence forbids epoch tick/tick IDs, tick divergence requires a positive
+- [x] Write constructor tests for limit boundaries, mutable collection copying, duplicate/unsorted
+  requirements, invalid origin/phase/status optionals, identifiers, and inconsistent counters.
+- [x] Assert `ReplayCaptureSpec` rejects zero or two origins, `replayGuaranteed=false`, and
+  requirements beyond existing deterministic-selection limits. Assert it copies and canonically
+  sorts all lists without changing caller-owned values.
+- [x] Assert baseline divergence forbids epoch tick/tick IDs, tick divergence requires a positive
   epoch tick and both tick IDs, `EQUAL` forbids divergence/failure, and `DIVERGED` requires exactly
   one divergence. Assert `INCONCLUSIVE` never fabricates a difference.
-- [ ] Run
+- [x] Run
   `./gradlew :runtime-core:test --tests '*ReplayContractTest' --warning-mode=fail` and observe the
   expected missing-type compilation failure.
-- [ ] Implement only the immutable records, closed enum, validation, stable copies, defaults, and
+- [x] Implement only the immutable records, closed enum, validation, stable copies, defaults, and
   hard maxima. Reuse existing ID, profile, status, difference, requirement, and failure types; do
   not introduce replay execution behavior yet.
-- [ ] Run the focused test green, then `git diff --check`.
-- [ ] Commit `feat: define bounded replay contracts`.
+- [x] Run the focused test green, then `git diff --check`.
+- [x] Commit `feat: define bounded replay contracts`.
 
 ### Task 2: Shared observable-evidence comparator without determinism drift
 

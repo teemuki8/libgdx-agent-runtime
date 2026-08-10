@@ -217,6 +217,21 @@ public final class RecordingRegistry {
         return active != null;
     }
 
+    synchronized ReplayLookup replayLookup(String recordingId) {
+        if (active != null && active.spec.id().equals(recordingId)) {
+            return ReplayLookup.ACTIVE;
+        }
+        if (recordings.containsKey(recordingId)) {
+            return ReplayLookup.RETAINED;
+        }
+        if (evictedIds.contains(recordingId)) {
+            return ReplayLookup.EVICTED;
+        }
+        return ReplayLookup.UNKNOWN;
+    }
+
+    enum ReplayLookup { ACTIVE, RETAINED, EVICTED, UNKNOWN }
+
     private MutableRecording candidate(RecordingSpec spec) {
         if (active != null) {
             throw new AgentRuntimeException(

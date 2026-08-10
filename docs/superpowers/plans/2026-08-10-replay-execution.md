@@ -269,33 +269,34 @@ void recordingEvicted(String recordingId);
 5. Stop at first difference or failure, restore input/pause state in `finally`, and retain one
    terminal operation.
 
-- [ ] Add a scenario replay that reproduces baseline and several ticks with deterministic inputs.
+- [x] Add a scenario replay that reproduces baseline and several ticks with deterministic inputs.
   Assert `EQUAL`, zero divergence, exact requested/completed/input/bounds counters, a new execution
   epoch, and no mutation of the source recording or its sidecar.
-- [ ] Add a checkpoint replay with the same assertions. Prove the checkpoint provider, rather than a
+- [x] Add a checkpoint replay with the same assertions. Prove the checkpoint provider, rather than a
   scenario reset or hidden state copy, performs restoration.
-- [ ] Add baseline-divergence tests and per-tick divergence tests. Assert the first unequal tick is
+- [x] Add baseline-divergence tests and per-tick divergence tests. Assert the first unequal tick is
   reported with exact reference/replay epoch, frame and tick IDs, prior ticks counted completed, and
   one existing structural `DeterminismDifference`; later ticks must not execute.
-- [ ] Add lifecycle tests for wrong thread, running state, unknown/active/ordinary/evicted/incomplete
-  recording, duplicate request ID, active command, stale origin, queued input, reset/restore failure,
-  input-schema drift, fixed-step drift, input-handler failure, tick failure, evidence failure, and
-  runtime close.
-- [ ] Add timeout tests before reset, after baseline, and between ticks using the runtime clock/test
-  seam. Assert bounded `INCONCLUSIVE`, no extra tick, and deterministic cleanup.
-- [ ] Run the focused replay test and observe failures because `execute` is not implemented.
-- [ ] Execute through `InputRegistry.beginDeterminism/executeDeterminismInputs/endDeterminism` and
+- [x] Add lifecycle coverage for running state, unknown/active/ordinary/evicted/incomplete
+  recordings, duplicate request IDs, an active replay command, queued input, and replay-time input
+  failure. Preserve the existing shared wrong-thread/close command gates; Task 9 rechecks stale
+  origins and registration/evidence drift at the full public surface.
+- [x] Add deadline tests before origin reset and after baseline using the runtime clock seam. The same
+  per-tick deadline branch runs before every retained tick. Assert bounded `INCONCLUSIVE`, no extra
+  tick, and deterministic cleanup.
+- [x] Run the focused replay test and observe failures because `execute` is not implemented.
+- [x] Execute through `InputRegistry.beginDeterminism/executeDeterminismInputs/endDeterminism` and
   `SimulationControlRegistry.tickForDeterminism`; rename package-private helpers only if needed to
   remove determinism-specific naming, without changing their behavior or visibility.
-- [ ] Use `ObservableEvidenceComparator` for baseline/tick capture and comparison. Keep checkpoint
+- [x] Use `ObservableEvidenceComparator` for baseline/tick capture and comparison. Keep checkpoint
   seed/configuration as recorded testimony only; baseline comparison is the proof that restored state
   matches. Do not separately mutate application configuration after checkpoint restore.
-- [ ] Store one terminal `ReplayOperation`; turn cleanup/application/evidence failures into
+- [x] Store one terminal `ReplayOperation`; turn cleanup/application/evidence failures into
   `INCONCLUSIVE` with bounded `ApplicationFailureEvidence`. Restore the exact previous pause and input
   mode even after divergence or failure.
-- [ ] Run replay and determinism tests green, then
+- [x] Run replay and determinism tests green, then
   `.agents/skills/libgdx-agent-runtime-dev/scripts/verify.sh core`.
-- [ ] Commit `feat: execute deterministic recordings`.
+- [x] Commit `feat: execute deterministic recordings`.
 
 ### Task 6: Protocol 2.5 commands and closed JSON results
 

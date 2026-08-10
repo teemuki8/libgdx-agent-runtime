@@ -335,6 +335,15 @@ final class ReplayRegistryTest {
         assertTrue(replay.inputs().isEmpty());
         assertEquals(Optional.of("input did not complete with replayable parameters"),
                 replay.incompleteReason());
+
+        runtime.replays().execute(
+                "redacted-input", "execute-redacted-input", TIMEOUT);
+        queue.removeFirst().run();
+        ReplayResult result = runtime.replays().execute(
+                "redacted-input", "execute-redacted-input", TIMEOUT)
+                .result().orElseThrow();
+        assertEquals(DeterminismStatus.INCONCLUSIVE, result.status());
+        assertEquals(replay.incompleteReason().orElseThrow(), result.message());
     }
 
     @Test
@@ -483,6 +492,366 @@ final class ReplayRegistryTest {
         assertTrue(runtime.replays().replayEvicted("first-replay"));
         assertTrue(runtime.replays().retainedReplay("second-replay").isPresent());
         assertFalse(runtime.replays().replayEvicted("second-replay"));
+
+        runtime.replays().execute("first-replay", "execute-evicted-replay", TIMEOUT);
+        queue.removeFirst().run();
+        ReplayResult evicted = runtime.replays().execute(
+                "first-replay", "execute-evicted-replay", TIMEOUT)
+                .result().orElseThrow();
+        assertEquals(DeterminismStatus.INCONCLUSIVE, evicted.status());
+        assertTrue(evicted.message().contains("evicted"));
+    }
+
+    @Test
+    void executesScenarioReplayWithExactInputsAndTicks() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        long[] position = {0};
+        AgentRuntime runtime = runtime(queue, position);
+        runtime.inputs().register(InputSpec.builder("move")
+                .requiredInteger("amount")
+                .handler(parameters -> position[0] += parameters.requiredInteger("amount"))
+                .build());
+        runtime.scenarios().register("ball-drop", context -> position[0] = 0);
+        runtime.start();
+        pause(runtime, queue);
+        runtime.replays().start(scenarioSpec("equal-replay", "ball-drop"),
+                "start-equal-replay", TIMEOUT);
+        queue.removeFirst().run();
+        inject(runtime, queue, "equal-move", 5, 1);
+        advance(runtime, queue, "equal-advance-one");
+        advance(runtime, queue, "equal-advance-two");
+        runtime.recordings().stop("equal-replay", "stop-equal-replay", TIMEOUT);
+        queue.removeFirst().run();
+
+        ReplayOperation submitted = runtime.replays().execute(
+                "equal-replay", "execute-equal-replay", TIMEOUT);
+        assertEquals(CommandState.QUEUED,
+                submitted.command().status().orElseThrow().state());
+        assertTrue(submitted.result().isEmpty());
+        AgentRuntimeException pending = assertThrows(AgentRuntimeException.class,
+                () -> runtime.replays().execute(
+                        "equal-replay", "execute-equal-replay-again", TIMEOUT));
+        assertEquals(RuntimeErrorCode.INVALID_LIFECYCLE, pending.code());
+        assertThrows(IllegalArgumentException.class, () -> runtime.replays().execute(
+                "different-recording", "execute-equal-replay", TIMEOUT));
+        queue.removeFirst().run();
+        ReplayOperation completed = runtime.replays().execute(
+                "equal-replay", "execute-equal-replay", TIMEOUT);
+
+        ReplayResult result = completed.result().orElseThrow();
+        assertEquals(CommandState.SUCCEEDED,
+                completed.command().status().orElseThrow().state());
+        assertEquals(DeterminismStatus.EQUAL, result.status());
+        assertTrue(result.profile().isPresent());
+        assertTrue(result.divergence().isEmpty());
+        assertEquals(2, result.bounds().requestedTicks());
+        assertEquals(2, result.bounds().completedTicks());
+        assertEquals(1, result.bounds().recordedInputs());
+        assertEquals(new ExecutionEpochId(2), runtime.currentEpoch());
+        assertEquals(7, position[0]);
+        assertTrue(runtime.replays().retainedReplay("equal-replay").isPresent());
+    }
+
+    @Test
+    void reportsBaselineDivergenceBeforeExecutingTicks() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        long[] position = {0};
+        boolean[] divergentReset = {false};
+        AgentRuntime runtime = runtime(queue, position);
+        runtime.scenarios().register("changing-origin", context ->
+                position[0] = divergentReset[0] ? 10 : 0);
+        runtime.start();
+        pause(runtime, queue);
+        runtime.replays().start(scenarioSpec("divergent-replay", "changing-origin"),
+                "start-divergent-replay", TIMEOUT);
+        queue.removeFirst().run();
+        advance(runtime, queue, "divergent-source-tick");
+        runtime.recordings().stop(
+                "divergent-replay", "stop-divergent-replay", TIMEOUT);
+        queue.removeFirst().run();
+        divergentReset[0] = true;
+
+        runtime.replays().execute(
+                "divergent-replay", "execute-divergent-replay", TIMEOUT);
+        queue.removeFirst().run();
+        ReplayResult result = runtime.replays().execute(
+                "divergent-replay", "execute-divergent-replay", TIMEOUT)
+                .result().orElseThrow();
+
+        assertEquals(DeterminismStatus.DIVERGED, result.status());
+        ReplayDivergence divergence = result.divergence().orElseThrow();
+        assertEquals(ReplayPhase.BASELINE, divergence.phase());
+        assertTrue(divergence.epochTick().isEmpty());
+        assertEquals(0, result.bounds().completedTicks());
+        assertEquals(10, position[0]);
+    }
+
+    @Test
+    void ordinaryRecordingProducesTerminalInconclusiveReplayResult() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        long[] position = {0};
+        AgentRuntime runtime = runtime(queue, position);
+        runtime.scenarios().register("ball-drop", context -> position[0] = 0);
+        runtime.start();
+        pause(runtime, queue);
+        RecordingSpec ordinary = scenarioSpec("ordinary-recording", "ball-drop").recording();
+        runtime.recordings().start(ordinary, "start-ordinary-recording", TIMEOUT);
+        queue.removeFirst().run();
+        runtime.recordings().stop(
+                "ordinary-recording", "stop-ordinary-recording", TIMEOUT);
+        queue.removeFirst().run();
+
+        runtime.replays().execute(
+                "ordinary-recording", "execute-ordinary-recording", TIMEOUT);
+        queue.removeFirst().run();
+        ReplayResult result = runtime.replays().execute(
+                "ordinary-recording", "execute-ordinary-recording", TIMEOUT)
+                .result().orElseThrow();
+
+        assertEquals(DeterminismStatus.INCONCLUSIVE, result.status());
+        assertTrue(result.profile().isEmpty());
+        assertTrue(result.message().contains("replay evidence was not captured"));
+        assertEquals(0, result.bounds().completedTicks());
+    }
+
+    @Test
+    void stopsAtFirstTickDivergenceWithExactCorrelationEvidence() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        long[] position = {0};
+        boolean[] drift = {false};
+        AgentRuntime runtime = runtime(queue, position);
+        runtime.inputs().register(InputSpec.builder("move")
+                .requiredInteger("amount")
+                .handler(parameters -> position[0] += parameters.requiredInteger("amount")
+                        + (drift[0] ? 2 : 0))
+                .build());
+        runtime.scenarios().register("ball-drop", context -> position[0] = 0);
+        runtime.start();
+        pause(runtime, queue);
+        runtime.replays().start(scenarioSpec("tick-divergence", "ball-drop"),
+                "start-tick-divergence", TIMEOUT);
+        queue.removeFirst().run();
+        inject(runtime, queue, "divergent-move", 2, 2);
+        advance(runtime, queue, "source-divergence-one");
+        advance(runtime, queue, "source-divergence-two");
+        runtime.recordings().stop(
+                "tick-divergence", "stop-tick-divergence", TIMEOUT);
+        queue.removeFirst().run();
+        drift[0] = true;
+
+        runtime.replays().execute(
+                "tick-divergence", "execute-tick-divergence", TIMEOUT);
+        queue.removeFirst().run();
+        ReplayResult result = runtime.replays().execute(
+                "tick-divergence", "execute-tick-divergence", TIMEOUT)
+                .result().orElseThrow();
+
+        assertEquals(DeterminismStatus.DIVERGED, result.status());
+        ReplayDivergence divergence = result.divergence().orElseThrow();
+        assertEquals(ReplayPhase.SIMULATION_TICK, divergence.phase());
+        assertEquals(2, divergence.epochTick().orElseThrow());
+        assertTrue(divergence.referenceSimulationTickId().isPresent());
+        assertTrue(divergence.replaySimulationTickId().isPresent());
+        assertEquals(1, result.bounds().completedTicks());
+        assertEquals(2, result.bounds().requestedTicks());
+        assertEquals(6, position[0]);
+    }
+
+    @Test
+    void executesCheckpointReplayThroughApplicationOwnedProvider() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        long[] position = {5};
+        int[] restores = {0};
+        AgentRuntime runtime = runtime(queue, position);
+        runtime.checkpoints().register(new CheckpointProvider() {
+            @Override
+            public CheckpointHandle create() {
+                return new PositionHandle(position[0]);
+            }
+
+            @Override
+            public void restore(CheckpointHandle handle) {
+                restores[0]++;
+                position[0] = ((PositionHandle) handle).position();
+            }
+
+            @Override
+            public void dispose(CheckpointHandle handle) {}
+        });
+        runtime.start();
+        runtime.checkpoints().create("replay-origin", "origin", "create-replay-origin", TIMEOUT);
+        queue.removeFirst().run();
+        pause(runtime, queue);
+        runtime.replays().start(checkpointSpec("checkpoint-equal", "replay-origin"),
+                "start-checkpoint-equal", TIMEOUT);
+        queue.removeFirst().run();
+        advance(runtime, queue, "checkpoint-source-tick");
+        runtime.recordings().stop(
+                "checkpoint-equal", "stop-checkpoint-equal", TIMEOUT);
+        queue.removeFirst().run();
+
+        runtime.replays().execute(
+                "checkpoint-equal", "execute-checkpoint-equal", TIMEOUT);
+        queue.removeFirst().run();
+        ReplayResult result = runtime.replays().execute(
+                "checkpoint-equal", "execute-checkpoint-equal", TIMEOUT)
+                .result().orElseThrow();
+
+        assertEquals(DeterminismStatus.EQUAL, result.status());
+        assertEquals(2, restores[0]);
+        assertEquals(6, position[0]);
+    }
+
+    @Test
+    void unknownRecordingAndRunningSimulationRejectBeforeDispatch() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        long[] position = {0};
+        AgentRuntime runtime = runtime(queue, position);
+        runtime.inputs().register(InputSpec.builder("move")
+                .requiredInteger("amount")
+                .handler(parameters -> position[0] += parameters.requiredInteger("amount"))
+                .build());
+        runtime.scenarios().register("ball-drop", context -> position[0] = 0);
+        runtime.start();
+        pause(runtime, queue);
+
+        AgentRuntimeException unknown = assertThrows(AgentRuntimeException.class,
+                () -> runtime.replays().execute("missing", "execute-missing", TIMEOUT));
+        assertEquals(RuntimeErrorCode.INVALID_QUERY, unknown.code());
+        assertTrue(queue.isEmpty());
+
+        captureAndStop(runtime, queue, "paused-source");
+        inject(runtime, queue, "queued-before-replay", 1,
+                runtime.controls().currentTick() + 1);
+        AgentRuntimeException queued = assertThrows(AgentRuntimeException.class,
+                () -> runtime.replays().execute(
+                        "paused-source", "execute-with-queued-input", TIMEOUT));
+        assertEquals(RuntimeErrorCode.INVALID_LIFECYCLE, queued.code());
+        advance(runtime, queue, "clear-queued-before-replay");
+
+        RecordingSpec active = scenarioSpec("active-ordinary", "ball-drop").recording();
+        runtime.recordings().start(active, "start-active-ordinary", TIMEOUT);
+        queue.removeFirst().run();
+        AgentRuntimeException recording = assertThrows(AgentRuntimeException.class,
+                () -> runtime.replays().execute(
+                        "paused-source", "execute-with-active-recording", TIMEOUT));
+        assertEquals(RuntimeErrorCode.INVALID_LIFECYCLE, recording.code());
+        runtime.recordings().stop("active-ordinary", "stop-active-ordinary", TIMEOUT);
+        queue.removeFirst().run();
+
+        runtime.controls().control(false, "resume-before-replay", TIMEOUT);
+        queue.removeFirst().run();
+        AgentRuntimeException running = assertThrows(AgentRuntimeException.class,
+                () -> runtime.replays().execute(
+                        "paused-source", "execute-while-running", TIMEOUT));
+        assertEquals(RuntimeErrorCode.INVALID_LIFECYCLE, running.code());
+        assertTrue(queue.isEmpty());
+    }
+
+    @Test
+    void applicationFailurePreservesPriorTickCountAndReleasesInputMode() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        long[] position = {0};
+        boolean[] fail = {false};
+        AgentRuntime runtime = runtime(queue, position);
+        runtime.inputs().register(InputSpec.builder("move")
+                .requiredInteger("amount")
+                .handler(parameters -> {
+                    if (fail[0]) {
+                        throw new IllegalStateException("private replay input token");
+                    }
+                    position[0] += parameters.requiredInteger("amount");
+                })
+                .build());
+        runtime.scenarios().register("ball-drop", context -> position[0] = 0);
+        runtime.start();
+        pause(runtime, queue);
+        runtime.replays().start(scenarioSpec("failed-execution", "ball-drop"),
+                "start-failed-execution", TIMEOUT);
+        queue.removeFirst().run();
+        advance(runtime, queue, "failure-source-one");
+        inject(runtime, queue, "failure-source-input", 2, 2);
+        advance(runtime, queue, "failure-source-two");
+        runtime.recordings().stop(
+                "failed-execution", "stop-failed-execution", TIMEOUT);
+        queue.removeFirst().run();
+        fail[0] = true;
+
+        runtime.replays().execute(
+                "failed-execution", "execute-failed-execution", TIMEOUT);
+        queue.removeFirst().run();
+        ReplayResult result = runtime.replays().execute(
+                "failed-execution", "execute-failed-execution", TIMEOUT)
+                .result().orElseThrow();
+
+        assertEquals(DeterminismStatus.INCONCLUSIVE, result.status());
+        assertEquals(1, result.bounds().completedTicks());
+        assertTrue(result.applicationFailure().isPresent());
+        assertFalse(result.message().contains("private replay input token"));
+
+        fail[0] = false;
+        runtime.inputs().inject("move", "after-replay-failure", RuntimeValues.object(
+                        RuntimeValues.field("amount", RuntimeValues.integer(1))),
+                OptionalLong.of(runtime.controls().currentTick() + 1), TIMEOUT);
+        queue.removeFirst().run();
+    }
+
+    @Test
+    void deadlineAfterBaselineStopsBeforeTheFirstTick() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        long[] position = {0};
+        long[] now = {1};
+        boolean[] expireOnReset = {false};
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("replay-deadline"))
+                .clock(() -> now[0])
+                .commandDispatcher(queue::addLast)
+                .build();
+        registerRuntimeCapabilities(runtime, position);
+        runtime.scenarios().register("deadline-origin", context -> {
+            position[0] = 0;
+            if (expireOnReset[0]) {
+                now[0] = Duration.ofSeconds(2).toNanos();
+            }
+        });
+        runtime.start();
+        pause(runtime, queue);
+        runtime.replays().start(scenarioSpec("deadline-replay", "deadline-origin"),
+                "start-deadline-replay", TIMEOUT);
+        queue.removeFirst().run();
+        advance(runtime, queue, "deadline-source-tick");
+        runtime.recordings().stop(
+                "deadline-replay", "stop-deadline-replay", TIMEOUT);
+        queue.removeFirst().run();
+        expireOnReset[0] = true;
+
+        runtime.replays().execute(
+                "deadline-replay", "execute-deadline-replay", TIMEOUT);
+        queue.removeFirst().run();
+        ReplayResult result = runtime.replays().execute(
+                "deadline-replay", "execute-deadline-replay", TIMEOUT)
+                .result().orElseThrow();
+
+        assertEquals(DeterminismStatus.INCONCLUSIVE, result.status());
+        assertTrue(result.message().contains("deadline"));
+        assertEquals(0, result.bounds().completedTicks());
+        assertEquals(TIMEOUT.toNanos(), result.bounds().executionDeadlineNanos());
+        assertEquals(0, position[0]);
+
+        expireOnReset[0] = false;
+        long epochBeforeTimeout = runtime.currentEpoch().value();
+        runtime.replays().execute(
+                "deadline-replay", "execute-before-reset-timeout", TIMEOUT);
+        now[0] = Duration.ofSeconds(4).toNanos();
+        ReplayOperation timedOut = runtime.replays().execute(
+                "deadline-replay", "execute-before-reset-timeout", TIMEOUT);
+        assertEquals(CommandState.TIMED_OUT,
+                timedOut.command().status().orElseThrow().state());
+        assertEquals(DeterminismStatus.INCONCLUSIVE,
+                timedOut.result().orElseThrow().status());
+        assertTrue(timedOut.result().orElseThrow().message().contains("before execution"));
+        queue.removeFirst().run();
+        assertEquals(epochBeforeTimeout, runtime.currentEpoch().value());
     }
 
     private static AgentRuntime runtime(ArrayDeque<Runnable> queue, long[] position) {

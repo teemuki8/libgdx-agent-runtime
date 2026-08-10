@@ -152,19 +152,27 @@ final class ReplayContractTest {
                 difference());
         ReplayBounds bounds = new ReplayBounds(4, 0, 2, 6, 8, 128, 1_000);
         ReplayResult result = new ReplayResult(
-                DeterminismStatus.DIVERGED, "baseline differs", "recording", profile(false),
+                DeterminismStatus.DIVERGED, "baseline differs", "recording",
+                Optional.of(profile(false)),
                 Optional.of(divergence), bounds, Optional.empty());
 
         assertEquals(ReplayPhase.BASELINE, result.divergence().orElseThrow().phase());
         assertThrows(IllegalArgumentException.class, () -> new ReplayResult(
-                DeterminismStatus.EQUAL, "equal", "recording", profile(false),
+                DeterminismStatus.EQUAL, "equal", "recording", Optional.of(profile(false)),
                 Optional.of(divergence), bounds, Optional.empty()));
         assertThrows(IllegalArgumentException.class, () -> new ReplayResult(
-                DeterminismStatus.DIVERGED, "diverged", "recording", profile(false),
+                DeterminismStatus.DIVERGED, "diverged", "recording", Optional.of(profile(false)),
                 Optional.empty(), bounds, Optional.empty()));
         assertThrows(IllegalArgumentException.class, () -> new ReplayResult(
-                DeterminismStatus.EQUAL, "equal", "recording", profile(false), Optional.empty(),
-                bounds, Optional.of(applicationFailure())));
+                DeterminismStatus.EQUAL, "equal", "recording", Optional.of(profile(false)),
+                Optional.empty(), bounds, Optional.of(applicationFailure())));
+        assertThrows(IllegalArgumentException.class, () -> new ReplayResult(
+                DeterminismStatus.EQUAL, "equal", "recording", Optional.empty(),
+                Optional.empty(), bounds, Optional.empty()));
+        ReplayResult unavailable = new ReplayResult(
+                DeterminismStatus.INCONCLUSIVE, "replay evidence unavailable", "recording",
+                Optional.empty(), Optional.empty(), bounds, Optional.empty());
+        assertTrue(unavailable.profile().isEmpty());
         assertThrows(IllegalArgumentException.class, () -> new ReplayBounds(
                 3, 4, 0, 0, 0, 0, 1));
         assertThrows(IllegalArgumentException.class, () -> new ReplayBounds(

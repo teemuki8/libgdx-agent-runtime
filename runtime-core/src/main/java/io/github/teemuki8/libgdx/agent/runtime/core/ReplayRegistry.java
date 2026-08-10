@@ -7,6 +7,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalLong;
 
 /** Bounded replay-ready recording capture and deterministic replay execution registry. */
 public final class ReplayRegistry {
@@ -15,10 +16,14 @@ public final class ReplayRegistry {
     private final ObservableEvidenceComparator comparator;
     private final LinkedHashMap<String, CaptureEvidence> captureOperations =
             new LinkedHashMap<>();
+    private final LinkedHashMap<String, ExecutionEvidence> executionOperations =
+            new LinkedHashMap<>();
+    private final LinkedHashMap<String, OperationKind> operationOrder = new LinkedHashMap<>();
     private final LinkedHashMap<String, RetainedReplay> retainedReplays =
             new LinkedHashMap<>();
     private final ArrayDeque<String> evictedRecordingIds = new ArrayDeque<>();
     private MutableCapture activeCapture;
+    private boolean activeExecution;
 
     ReplayRegistry(AgentRuntime runtime, ReplayLimits limits) {
         this.runtime = Objects.requireNonNull(runtime, "runtime");
@@ -45,6 +50,14 @@ public final class ReplayRegistry {
                 }
                 return snapshot(requestId, existing, dispatch.status(requestId));
             }
+            if (executionOperations.containsKey(requestId)) {
+                throw new IllegalArgumentException(
+                        "replay request id is bound to a different operation");
+            }
+            if (activeExecution || hasNonterminalExecution(dispatch)) {
+                throw new AgentRuntimeException(RuntimeErrorCode.INVALID_LIFECYCLE,
+                        "another replay execution is active");
+            }
         }
 
         validateEnvironment(spec);
@@ -59,6 +72,14 @@ public final class ReplayRegistry {
                 }
                 return snapshot(requestId, concurrent, dispatch.status(requestId));
             }
+            if (executionOperations.containsKey(requestId)) {
+                throw new IllegalArgumentException(
+                        "replay request id is bound to a different operation");
+            }
+            if (activeExecution || hasNonterminalExecution(dispatch)) {
+                throw new AgentRuntimeException(RuntimeErrorCode.INVALID_LIFECYCLE,
+                        "another replay execution is active");
+            }
             if (dispatch.status(requestId).kind() != CommandLookup.Kind.UNKNOWN) {
                 throw new IllegalArgumentException(
                         "replay request correlation evidence is no longer retained");
@@ -66,6 +87,7 @@ public final class ReplayRegistry {
             makeRoom(dispatch);
             evidence = new CaptureEvidence(spec);
             captureOperations.put(requestId, evidence);
+            operationOrder.put(requestId, OperationKind.CAPTURE);
         }
         CaptureEvidence retained = evidence;
         CommandLookup lookup;
@@ -74,6 +96,7 @@ public final class ReplayRegistry {
         } catch (RuntimeException | Error failure) {
             synchronized (this) {
                 captureOperations.remove(requestId);
+                operationOrder.remove(requestId);
             }
             throw failure;
         }
@@ -83,6 +106,83 @@ public final class ReplayRegistry {
     /** Returns configured hard replay bounds. */
     public ReplayLimits limits() {
         return limits;
+    }
+
+    /** Executes or polls one stopped replay-ready recording at most once. */
+    public ReplayOperation execute(
+            String recordingId, String requestId, Duration timeout) {
+        runtime.requireSubmissionsOpen();
+        IdentifierSupport.validate(recordingId, "replay recording id");
+        IdentifierSupport.validate(requestId, "replay request id");
+        CommandDispatch dispatch = runtime.commands().orElseThrow(() ->
+                new IllegalStateException("replay execution requires application command dispatch"));
+        long timeoutNanos = requireValidTimeout(timeout, dispatch.limits().maximumTimeoutNanos());
+        long executionNanos = Math.min(timeoutNanos, limits.maximumExecutionNanos());
+        synchronized (this) {
+            ExecutionEvidence existing = executionOperations.get(requestId);
+            if (existing != null) {
+                if (!existing.recordingId.equals(recordingId)) {
+                    throw new IllegalArgumentException(
+                            "replay request id is bound to a different recording");
+                }
+                return executionSnapshot(requestId, existing, dispatch.status(requestId));
+            }
+            if (captureOperations.containsKey(requestId)) {
+                throw new IllegalArgumentException(
+                        "replay request id is bound to a different operation");
+            }
+        }
+        validateExecutionEnvironment(recordingId, dispatch);
+        ExecutionEvidence evidence;
+        synchronized (this) {
+            runtime.requireSubmissionsOpen();
+            ExecutionEvidence concurrent = executionOperations.get(requestId);
+            if (concurrent != null) {
+                if (!concurrent.recordingId.equals(recordingId)) {
+                    throw new IllegalArgumentException(
+                            "replay request id is bound to a different recording");
+                }
+                return executionSnapshot(requestId, concurrent, dispatch.status(requestId));
+            }
+            if (captureOperations.containsKey(requestId)
+                    || dispatch.status(requestId).kind() != CommandLookup.Kind.UNKNOWN) {
+                throw new IllegalArgumentException(
+                        "replay request correlation evidence is no longer retained");
+            }
+            if (activeCapture != null || activeExecution || hasNonterminalExecution(dispatch)) {
+                throw new AgentRuntimeException(RuntimeErrorCode.INVALID_LIFECYCLE,
+                        "another replay capture or execution is active");
+            }
+            makeRoom(dispatch);
+            evidence = new ExecutionEvidence(recordingId, executionNanos);
+            executionOperations.put(requestId, evidence);
+            operationOrder.put(requestId, OperationKind.EXECUTE);
+        }
+        long deadline = deadline(executionNanos);
+        ExecutionEvidence retained = evidence;
+        CommandLookup lookup;
+        try {
+            lookup = dispatch.submit(requestId, timeout, () -> {
+                synchronized (this) {
+                    activeExecution = true;
+                }
+                try {
+                    retained.result = Optional.of(executeNow(
+                            recordingId, requestId, deadline, executionNanos));
+                } finally {
+                    synchronized (this) {
+                        activeExecution = false;
+                    }
+                }
+            });
+        } catch (RuntimeException | Error failure) {
+            synchronized (this) {
+                executionOperations.remove(requestId);
+                operationOrder.remove(requestId);
+            }
+            throw failure;
+        }
+        return executionSnapshot(requestId, retained, lookup);
     }
 
     synchronized Optional<RetainedReplay> retainedReplay(String recordingId) {
@@ -155,6 +255,236 @@ public final class ReplayRegistry {
                 evictedRecordingIds.removeFirst();
             }
         }
+    }
+
+    private ReplayResult executeNow(String recordingId, String requestId,
+            long deadline, long executionNanos) {
+        RetainedReplay replay;
+        synchronized (this) {
+            replay = retainedReplays.get(recordingId);
+        }
+        if (replay == null) {
+            String message = replayEvicted(recordingId)
+                    || runtime.recordings().replayLookup(recordingId)
+                            == RecordingRegistry.ReplayLookup.EVICTED
+                    ? "recording or replay evidence was evicted"
+                    : "replay evidence was not captured for this ordinary recording";
+            return inconclusive(recordingId, Optional.empty(), 0, 0, 0,
+                    new ObservableEvidenceComparator.Counters(), executionNanos,
+                    message, Optional.empty());
+        }
+        if (replay.incompleteReason().isPresent()) {
+            return inconclusive(replay, 0, new ObservableEvidenceComparator.Counters(),
+                    executionNanos, replay.incompleteReason().orElseThrow(), Optional.empty());
+        }
+        SimulationState state = runtime.simulation().state();
+        if (!state.configured()
+                || state.configuredFixedStepNanos().orElseThrow() != replay.fixedStepNanos()) {
+            return inconclusive(replay, 0, new ObservableEvidenceComparator.Counters(),
+                    executionNanos, "configured fixed simulation step changed", Optional.empty());
+        }
+
+        ObservableEvidenceComparator.Counters counters =
+                new ObservableEvidenceComparator.Counters();
+        int[] completedTicks = {0};
+        boolean inputMode = false;
+        boolean pauseEstablished = false;
+        boolean previouslyPaused = true;
+        ReplayResult result;
+        try {
+            runtime.inputs().beginDeterminism(replay.inputs());
+            inputMode = true;
+            previouslyPaused = runtime.controls().pauseForDeterminism();
+            pauseEstablished = true;
+            result = executeWhilePaused(
+                    replay, deadline, executionNanos, counters, completedTicks);
+        } catch (RuntimeException | Error failure) {
+            result = inconclusive(replay, completedTicks[0], counters, executionNanos,
+                    failureEvidence(requestId, "replay.execute", failure));
+        }
+        if (pauseEstablished) {
+            try {
+                runtime.controls().restorePauseAfterDeterminism(previouslyPaused);
+            } catch (RuntimeException | Error failure) {
+                result = inconclusive(replay, completedTicks[0], counters, executionNanos,
+                        failureEvidence(requestId, "replay.restore", failure));
+            }
+        }
+        if (inputMode) {
+            runtime.inputs().endDeterminism();
+        }
+        return result;
+    }
+
+    private ReplayResult executeWhilePaused(RetainedReplay replay,
+            long deadline, long executionNanos,
+            ObservableEvidenceComparator.Counters counters, int[] completedTicks) {
+        if (expired(deadline)) {
+            return inconclusive(replay, 0, counters, executionNanos,
+                    "replay execution deadline elapsed", Optional.empty());
+        }
+        FrameId replayBaselineFrame = restoreOrigin(replay.spec().recording());
+        ExecutionEpochId replayEpoch = runtime.currentEpoch();
+        FrameSnapshot baseline = runtime.frame(replayBaselineFrame).orElseThrow();
+        Optional<String> problem = baselineProblem(replay.spec(), baseline, replayEpoch);
+        if (problem.isPresent()) {
+            return inconclusive(replay, 0, counters, executionNanos,
+                    problem.orElseThrow(), Optional.empty());
+        }
+        Optional<ObservableEvidenceComparator.FrameEvidence> baselineEvidence =
+                captureExecutionEvidence(replay, baseline, counters);
+        if (baselineEvidence.isEmpty()) {
+            return inconclusive(replay, 0, counters, executionNanos,
+                    counters.incompleteReason().orElse("replay baseline evidence is incomplete"),
+                    Optional.empty());
+        }
+        Optional<DeterminismDifference> baselineDifference = comparator.difference(
+                replay.baselineEvidence().orElseThrow(), baselineEvidence.orElseThrow());
+        if (baselineDifference.isPresent()) {
+            return diverged(replay, 0, counters, executionNanos,
+                    new ReplayDivergence(ReplayPhase.BASELINE, OptionalLong.empty(),
+                            Optional.empty(), Optional.empty(), replay.baselineEpoch(), replayEpoch,
+                            replay.baselineFrame(), replayBaselineFrame,
+                            baselineDifference.orElseThrow()));
+        }
+
+        for (CapturedTick reference : replay.ticks()) {
+            if (expired(deadline)) {
+                return inconclusive(replay, completedTicks[0], counters, executionNanos,
+                        "replay execution deadline elapsed", Optional.empty());
+            }
+            long epochTick = reference.tick().epochTick();
+            List<SimulationDeterminismInput> tickInputs = replay.inputs().stream()
+                    .filter(input -> input.epochTick() == epochTick).toList();
+            SimulationControlRegistry.DeterminismTickEvidence completed =
+                    runtime.controls().tickForDeterminism(replay.fixedStepNanos(), tickInputs);
+            Optional<String> tickProblem = replayTickProblem(
+                    completed, epochTick, replay.fixedStepNanos(), replayEpoch);
+            if (tickProblem.isPresent()) {
+                return inconclusive(replay, completedTicks[0], counters, executionNanos,
+                        tickProblem.orElseThrow(), Optional.empty());
+            }
+            Optional<String> evidenceProblem = comparator.evidenceProblem(
+                    completed.frame(), replay.spec().evidenceRequirements());
+            if (evidenceProblem.isEmpty()) {
+                evidenceProblem = comparator.selectionProblem(completed.frame(),
+                        replay.spec().profile().comparisonScope());
+            }
+            if (evidenceProblem.isPresent()) {
+                return inconclusive(replay, completedTicks[0], counters, executionNanos,
+                        evidenceProblem.orElseThrow(), Optional.empty());
+            }
+            Optional<ObservableEvidenceComparator.FrameEvidence> replayEvidence =
+                    captureExecutionEvidence(replay, completed.frame(), counters);
+            if (replayEvidence.isEmpty()) {
+                return inconclusive(replay, completedTicks[0], counters, executionNanos,
+                        counters.incompleteReason().orElse("replay tick evidence is incomplete"),
+                        Optional.empty());
+            }
+            Optional<DeterminismDifference> difference = comparator.difference(
+                    reference.evidence(), replayEvidence.orElseThrow());
+            if (difference.isPresent()) {
+                return diverged(replay, completedTicks[0], counters, executionNanos,
+                        new ReplayDivergence(ReplayPhase.SIMULATION_TICK,
+                                OptionalLong.of(epochTick),
+                                Optional.of(reference.tick().simulationTickId()),
+                                Optional.of(completed.tick().simulationTickId()),
+                                replay.baselineEpoch(), replayEpoch,
+                                reference.tick().resultingFrameId().orElseThrow(),
+                                completed.frame().frameId(), difference.orElseThrow()));
+            }
+            completedTicks[0]++;
+        }
+        return new ReplayResult(DeterminismStatus.EQUAL,
+                "equal for the selected replay evidence; whole-program determinism is not proven",
+                replay.spec().recording().id(), Optional.of(replay.spec().profile()),
+                Optional.empty(), bounds(replay, completedTicks[0], counters, executionNanos),
+                Optional.empty());
+    }
+
+    private Optional<ObservableEvidenceComparator.FrameEvidence> captureExecutionEvidence(
+            RetainedReplay replay, FrameSnapshot frame,
+            ObservableEvidenceComparator.Counters counters) {
+        return comparator.capture(frame, replay.spec().profile(), replay.spec().eventTypes(),
+                new ObservableEvidenceComparator.Limits(limits.maximumEntitiesPerFrame(),
+                        limits.maximumFactsPerFrame(), limits.maximumEncodedEvidenceBytes()),
+                counters);
+    }
+
+    private Optional<String> replayTickProblem(
+            SimulationControlRegistry.DeterminismTickEvidence evidence,
+            long expectedEpochTick, long fixedStepNanos, ExecutionEpochId expectedEpoch) {
+        SimulationTick tick = evidence.tick();
+        if (tick.epochTick() != expectedEpochTick
+                || !tick.executionEpochId().equals(expectedEpoch)
+                || tick.source() != SimulationTickSource.PAUSED
+                || tick.outcome() != SimulationTickOutcome.COMPLETED
+                || tick.mutationOutcome() != SimulationMutationOutcome.KNOWN_COMPLETED
+                || tick.configuredFixedStepNanos().orElse(-1) != fixedStepNanos
+                || tick.runtimeSuppliedDeltaNanos() != fixedStepNanos
+                || tick.executedDeltaNanos().orElse(-1) != fixedStepNanos
+                || tick.resultingFrameId().isEmpty()
+                || !tick.resultingFrameId().orElseThrow().equals(evidence.frame().frameId())
+                || !evidence.frame().executionEpochId().equals(expectedEpoch)) {
+            return Optional.of("replay simulation tick evidence is incomplete or mismatched");
+        }
+        return Optional.empty();
+    }
+
+    private ReplayResult diverged(RetainedReplay replay, int completedTicks,
+            ObservableEvidenceComparator.Counters counters, long executionNanos,
+            ReplayDivergence divergence) {
+        return new ReplayResult(DeterminismStatus.DIVERGED,
+                "first divergence in selected replay evidence",
+                replay.spec().recording().id(), Optional.of(replay.spec().profile()),
+                Optional.of(divergence), bounds(replay, completedTicks, counters, executionNanos),
+                Optional.empty());
+    }
+
+    private ReplayResult inconclusive(RetainedReplay replay, int completedTicks,
+            ObservableEvidenceComparator.Counters counters, long executionNanos,
+            String message, Optional<ApplicationFailureEvidence> failure) {
+        return inconclusive(replay.spec().recording().id(), Optional.of(replay.spec().profile()),
+                replay.ticks().size(), completedTicks, replay.inputs().size(), counters,
+                executionNanos, message, failure);
+    }
+
+    private ReplayResult inconclusive(RetainedReplay replay, int completedTicks,
+            ObservableEvidenceComparator.Counters counters, long executionNanos,
+            ApplicationFailureEvidence failure) {
+        return inconclusive(replay, completedTicks, counters, executionNanos,
+                failure.legacyEnvelope(), Optional.of(failure));
+    }
+
+    private ReplayResult inconclusive(String recordingId, Optional<DeterminismProfile> profile,
+            int requestedTicks, int completedTicks, int recordedInputs,
+            ObservableEvidenceComparator.Counters counters, long executionNanos,
+            String message, Optional<ApplicationFailureEvidence> failure) {
+        return new ReplayResult(DeterminismStatus.INCONCLUSIVE, boundedMessage(message),
+                recordingId, profile, Optional.empty(), new ReplayBounds(requestedTicks,
+                        completedTicks, recordedInputs, counters.observedEntities(),
+                        counters.observedFacts(), counters.encodedEvidenceBytes(), executionNanos),
+                failure);
+    }
+
+    private ReplayBounds bounds(RetainedReplay replay, int completedTicks,
+            ObservableEvidenceComparator.Counters counters, long executionNanos) {
+        return new ReplayBounds(replay.ticks().size(), completedTicks, replay.inputs().size(),
+                counters.observedEntities(), counters.observedFacts(),
+                counters.encodedEvidenceBytes(), executionNanos);
+    }
+
+    private ApplicationFailureEvidence failureEvidence(
+            String requestId, String category, Throwable failure) {
+        Optional<String> correlationId = runtime.commands().orElseThrow().correlationId(requestId);
+        return correlationId.isPresent()
+                ? runtime.diagnostics().describe(category, failure, correlationId.orElseThrow())
+                : runtime.diagnostics().describe(category, failure);
+    }
+
+    private static String boundedMessage(String message) {
+        int limit = ApplicationFailureEvidence.LEGACY_ENVELOPE_CAPACITY;
+        return message.length() <= limit ? message : message.substring(0, limit);
     }
 
     private void startNow(CaptureEvidence operation) {
@@ -370,9 +700,10 @@ public final class ReplayRegistry {
         runtime.inputs().validateReplayCaptureReady();
         runtime.recordings().validateReplayStart(spec.recording());
         synchronized (this) {
-            if (activeCapture != null) {
+            if (activeCapture != null || activeExecution
+                    || hasNonterminalExecution(runtime.commands().orElseThrow())) {
                 throw new AgentRuntimeException(RuntimeErrorCode.INVALID_LIFECYCLE,
-                        "a replay capture is already active");
+                        "another replay capture or execution is active");
             }
         }
         if (spec.recording().scenarioId().isPresent()) {
@@ -393,6 +724,50 @@ public final class ReplayRegistry {
         }
     }
 
+    private void validateExecutionEnvironment(
+            String recordingId, CommandDispatch dispatch) {
+        if (runtime.status() != RuntimeStatus.RUNNING) {
+            throw new AgentRuntimeException(
+                    RuntimeErrorCode.INVALID_LIFECYCLE, "replay execution requires a running runtime");
+        }
+        if (!runtime.controls().available() || !runtime.controls().acknowledgedTicksAvailable()
+                || !runtime.simulation().state().configured()) {
+            throw new AgentRuntimeException(RuntimeErrorCode.INVALID_QUERY,
+                    "replay execution capabilities are unavailable");
+        }
+        if (!runtime.controls().pauseStateKnown() || !runtime.controls().paused()) {
+            throw new AgentRuntimeException(RuntimeErrorCode.INVALID_LIFECYCLE,
+                    "replay execution requires an explicitly paused simulation");
+        }
+        RecordingRegistry.ReplayLookup lookup = runtime.recordings().replayLookup(recordingId);
+        if (lookup == RecordingRegistry.ReplayLookup.UNKNOWN) {
+            throw new AgentRuntimeException(
+                    RuntimeErrorCode.INVALID_QUERY, "recording does not exist");
+        }
+        if (lookup == RecordingRegistry.ReplayLookup.ACTIVE || runtime.recordings().active()) {
+            throw new AgentRuntimeException(RuntimeErrorCode.INVALID_LIFECYCLE,
+                    "replay execution requires no active recording");
+        }
+        runtime.inputs().validateReplayCaptureReady();
+        synchronized (this) {
+            if (activeCapture != null || activeExecution || hasNonterminalExecution(dispatch)) {
+                throw new AgentRuntimeException(RuntimeErrorCode.INVALID_LIFECYCLE,
+                        "another replay capture or execution is active");
+            }
+        }
+    }
+
+    private boolean hasNonterminalExecution(CommandDispatch dispatch) {
+        for (String requestId : executionOperations.keySet()) {
+            CommandLookup lookup = dispatch.status(requestId);
+            if (lookup.kind() == CommandLookup.Kind.FOUND
+                    && lookup.status().map(status -> !terminal(status.state())).orElse(false)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private synchronized ReplayCaptureOperation snapshot(
             String requestId, CaptureEvidence evidence, CommandLookup lookup) {
         return new ReplayCaptureOperation(evidence.spec.recording().id(), requestId, lookup,
@@ -400,23 +775,49 @@ public final class ReplayRegistry {
                 Optional.ofNullable(evidence.baselineFrame));
     }
 
+    private synchronized ReplayOperation executionSnapshot(
+            String requestId, ExecutionEvidence evidence, CommandLookup lookup) {
+        if (evidence.result.isEmpty() && lookup.status().isPresent()
+                && lookup.status().orElseThrow().state() == CommandState.TIMED_OUT) {
+            RetainedReplay replay = retainedReplays.get(evidence.recordingId);
+            ObservableEvidenceComparator.Counters counters =
+                    new ObservableEvidenceComparator.Counters();
+            evidence.result = Optional.of(replay == null
+                    ? inconclusive(evidence.recordingId, Optional.empty(), 0, 0, 0,
+                            counters, evidence.executionNanos,
+                            "replay command timed out before execution", Optional.empty())
+                    : inconclusive(replay, 0, counters, evidence.executionNanos,
+                            "replay command timed out before execution", Optional.empty()));
+        }
+        return new ReplayOperation(
+                evidence.recordingId, requestId, lookup, evidence.result);
+    }
+
     private synchronized void makeRoom(CommandDispatch dispatch) {
-        if (captureOperations.size() < limits.retainedOperations()) {
+        if (operationOrder.size() < limits.retainedOperations()) {
             return;
         }
-        String oldest = captureOperations.keySet().iterator().next();
+        String oldest = operationOrder.keySet().iterator().next();
         CommandLookup lookup = dispatch.status(oldest);
         if (lookup.kind() == CommandLookup.Kind.FOUND
                 && lookup.status().map(status -> !terminal(status.state())).orElse(false)) {
             throw new AgentRuntimeException(
                     RuntimeErrorCode.LIMIT_EXCEEDED, "replay operation retention is full");
         }
-        captureOperations.remove(oldest);
+        OperationKind kind = operationOrder.remove(oldest);
+        if (kind == OperationKind.CAPTURE) {
+            captureOperations.remove(oldest);
+        } else {
+            executionOperations.remove(oldest);
+        }
     }
 
     synchronized void close() {
         activeCapture = null;
+        activeExecution = false;
         captureOperations.clear();
+        executionOperations.clear();
+        operationOrder.clear();
         retainedReplays.clear();
         evictedRecordingIds.clear();
     }
@@ -425,7 +826,7 @@ public final class ReplayRegistry {
         return state != CommandState.QUEUED && state != CommandState.EXECUTING;
     }
 
-    private static void requireValidTimeout(Duration timeout, long maximumNanos) {
+    private static long requireValidTimeout(Duration timeout, long maximumNanos) {
         Objects.requireNonNull(timeout, "timeout");
         if (timeout.isNegative() || timeout.isZero()) {
             throw new IllegalArgumentException("timeout must be positive");
@@ -439,6 +840,19 @@ public final class ReplayRegistry {
         if (nanos > maximumNanos) {
             throw new IllegalArgumentException("timeout exceeds the configured limit");
         }
+        return nanos;
+    }
+
+    private long deadline(long executionNanos) {
+        try {
+            return Math.addExact(runtime.monotonicTimeNanos(), executionNanos);
+        } catch (ArithmeticException failure) {
+            return Long.MAX_VALUE;
+        }
+    }
+
+    private boolean expired(long deadline) {
+        return runtime.monotonicTimeNanos() >= deadline;
     }
 
     private static final class CaptureEvidence {
@@ -450,6 +864,19 @@ public final class ReplayRegistry {
             this.spec = spec;
         }
     }
+
+    private static final class ExecutionEvidence {
+        private final String recordingId;
+        private final long executionNanos;
+        private Optional<ReplayResult> result = Optional.empty();
+
+        private ExecutionEvidence(String recordingId, long executionNanos) {
+            this.recordingId = recordingId;
+            this.executionNanos = executionNanos;
+        }
+    }
+
+    private enum OperationKind { CAPTURE, EXECUTE }
 
     static record CapturedTick(SimulationTick tick,
             ObservableEvidenceComparator.FrameEvidence evidence) {

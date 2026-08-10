@@ -114,7 +114,8 @@ start command succeeds. `ReplayOperation` reports command status and an optional
 
 - `DeterminismStatus` (`EQUAL`, `DIVERGED`, or `INCONCLUSIVE`);
 - a bounded deterministic message;
-- the recording ID and comparison profile;
+- the recording ID and optional comparison profile, absent only when an ordinary or evicted
+  recording has no retained replay sidecar from which to report registered selectors;
 - optional first `ReplayDivergence` evidence;
 - `ReplayBounds` with requested/completed ticks, inputs, entities, facts, encoded evidence bytes,
   and execution deadline; and

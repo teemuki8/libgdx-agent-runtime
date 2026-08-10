@@ -5,14 +5,14 @@ import java.util.Optional;
 
 /** Immutable terminal result for one bounded replay execution. */
 public record ReplayResult(DeterminismStatus status, String message, String recordingId,
-        DeterminismProfile profile, Optional<ReplayDivergence> divergence, ReplayBounds bounds,
-        Optional<ApplicationFailureEvidence> applicationFailure) {
+        Optional<DeterminismProfile> profile, Optional<ReplayDivergence> divergence,
+        ReplayBounds bounds, Optional<ApplicationFailureEvidence> applicationFailure) {
     /** Validates closed status evidence and bounded messaging. */
     public ReplayResult {
         Objects.requireNonNull(status, "status");
         Objects.requireNonNull(message, "message");
         IdentifierSupport.validate(recordingId, "replay recording id");
-        Objects.requireNonNull(profile, "profile");
+        profile = Objects.requireNonNull(profile, "profile");
         divergence = Objects.requireNonNull(divergence, "divergence");
         Objects.requireNonNull(bounds, "bounds");
         applicationFailure = applicationFailure == null
@@ -23,6 +23,10 @@ public record ReplayResult(DeterminismStatus status, String message, String reco
         }
         if ((status == DeterminismStatus.DIVERGED) != divergence.isPresent()) {
             throw new IllegalArgumentException("replay divergence evidence is inconsistent");
+        }
+        if (status != DeterminismStatus.INCONCLUSIVE && profile.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "conclusive replay result requires its captured comparison profile");
         }
         if (status != DeterminismStatus.INCONCLUSIVE && applicationFailure.isPresent()) {
             throw new IllegalArgumentException(

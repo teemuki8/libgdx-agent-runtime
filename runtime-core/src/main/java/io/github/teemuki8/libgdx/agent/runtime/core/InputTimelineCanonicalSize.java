@@ -64,28 +64,56 @@ final class InputTimelineCanonicalSize {
     }
 
     /**
-     * Worst-case terminal reservation: frames may be present after partial completion, the first
-     * transition may carry a full failed injection with bounded diagnostic and structured failure,
-     * remaining transitions are unattempted with a bounded diagnostic, and the parent retains a
-     * structured failure. Fail-stop execution never produces more than one failed transition.
+     * Worst-case terminal reservation: frames may be present after partial completion, exactly one
+     * transition carries a full failed injection with a bounded presence flag, injection, and
+     * outer diagnostic, every other slot covers either a full attempted injection with bounded
+     * diagnostic or an unattempted transition with a bounded reason, and the parent retains a
+     * structured failure. Fail-stop execution never produces more than one failed transition, and
+     * executed children never carry structured failure evidence.
      */
     static long terminalResultReservation(InputTimelineSpec spec) {
         long size = resultPrefix(MAXIMUM_TERMINAL_MESSAGE);
         List<InputTimelineTransition> transitions = spec.transitions();
         for (int index = 0; index < transitions.size(); index++) {
             InputTimelineTransition transition = transitions.get(index);
-            size = add(size, transitionPrefix(
-                    transition.transitionId(), transition.timelineTick(), transition.inputId()));
-            size = add(size, 1);
             if (index == 0) {
-                size = add(size, failedInjection(transition));
+                size = add(size, failedTransition(transition));
             } else {
-                size = add(size, 1);
-                size = add(size, optionalString(Optional.of(MAXIMUM_TERMINAL_MESSAGE)));
+                size = add(size, Math.max(
+                        notExecutedTransition(transition),
+                        executedTransition(transition)));
             }
         }
         size = add(size, bounds());
         return add(size, maximumOptionalFailure());
+    }
+
+    private static long failedTransition(InputTimelineTransition transition) {
+        long size = transitionPrefix(
+                transition.transitionId(), transition.timelineTick(), transition.inputId());
+        size = add(size, 1);
+        size = add(size, 1);
+        size = add(size, failedInjection(transition));
+        return add(size, maximumOptionalString(
+                ApplicationFailureEvidence.LEGACY_ENVELOPE_CAPACITY));
+    }
+
+    private static long executedTransition(InputTimelineTransition transition) {
+        long size = transitionPrefix(
+                transition.transitionId(), transition.timelineTick(), transition.inputId());
+        size = add(size, 1);
+        size = add(size, 1);
+        size = add(size, executedInjection(transition));
+        return add(size, maximumOptionalString(
+                ApplicationFailureEvidence.LEGACY_ENVELOPE_CAPACITY));
+    }
+
+    private static long notExecutedTransition(InputTimelineTransition transition) {
+        long size = transitionPrefix(
+                transition.transitionId(), transition.timelineTick(), transition.inputId());
+        size = add(size, 1);
+        size = add(size, 1);
+        return add(size, maximumOptionalString(MAXIMUM_TERMINAL_MESSAGE.length()));
     }
 
     static long resultReservation(InputTimelineSpec spec) {
@@ -175,6 +203,28 @@ final class InputTimelineCanonicalSize {
         size = add(size, maximumOptionalString(
                 ApplicationFailureEvidence.LEGACY_ENVELOPE_CAPACITY));
         return add(size, maximumOptionalFailure());
+    }
+
+    /**
+     * Worst-case attempted-but-executed child injection: a succeeded logical command status with a
+     * bounded diagnostic (a failed tick can mark executed inputs), a present actual tick and
+     * frames, and recorded parameters; executed children never carry structured failure evidence.
+     */
+    private static long executedInjection(InputTimelineTransition transition) {
+        long size = DeterminismCanonicalSize.string(transition.inputId());
+        size = add(size, DeterminismCanonicalSize.string(transition.transitionId()));
+        size = add(size, successfulCommand(transition.transitionId()));
+        size = add(size, 1 + Long.BYTES);
+        size = add(size, optionalLong(true));
+        size = add(size, Long.BYTES);
+        size = add(size, optionalLong(true));
+        size = add(size, optionalLong(true));
+        size = add(size, 1);
+        size = add(size, DeterminismCanonicalSize.value(transition.parameters()));
+        size = add(size, 1);
+        size = add(size, maximumOptionalString(
+                ApplicationFailureEvidence.LEGACY_ENVELOPE_CAPACITY));
+        return add(size, 1);
     }
 
     private static long failedCommand(String requestId) {

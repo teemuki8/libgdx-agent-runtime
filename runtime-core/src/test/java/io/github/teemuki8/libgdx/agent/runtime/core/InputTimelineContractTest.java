@@ -430,12 +430,50 @@ final class InputTimelineContractTest {
         assertEquals(277, InputTimelineCanonicalSize.result(succeededResult));
         assertEquals(InputTimelineCanonicalSize.result(succeededResult),
                 InputTimelineCanonicalSize.successfulResultReservation(spec));
-        assertEquals(19_202,
+        assertEquals(21_134,
                 InputTimelineCanonicalSize.terminalResultReservation(spec));
         assertTrue(InputTimelineCanonicalSize.terminalResultReservation(spec)
                 > InputTimelineCanonicalSize.successfulResultReservation(spec));
         assertEquals(InputTimelineCanonicalSize.terminalResultReservation(spec),
                 InputTimelineCanonicalSize.resultReservation(spec));
+    }
+
+    @Test
+    void terminalReservationCoversNearCapacityFailedTransitionEvidence() {
+        ApplicationFailureEvidence failure = new ApplicationFailureEvidence(
+                "€".repeat(ApplicationFailureEvidence.MAX_CATEGORY_LENGTH),
+                "€".repeat(ApplicationFailureEvidence.MAX_EXCEPTION_CLASS_LENGTH),
+                "€".repeat(ApplicationFailureEvidence.MAX_CORRELATION_ID_LENGTH),
+                Optional.of("€".repeat(ApplicationFailureEvidence.MAX_SANITIZED_DETAIL_LENGTH)));
+        String envelope = failure.legacyEnvelope();
+        RuntimeValue.ObjectValue parameters = RuntimeValues.object(
+                RuntimeValues.field("value", RuntimeValues.string("€")));
+        InputInjection failedInjection = new InputInjection(
+                "button", "press",
+                CommandLookup.found(new CommandStatus(
+                        "press", CommandState.FAILED, 1, 10,
+                        Optional.of(2L), Optional.of(3L), true,
+                        Optional.of(envelope), Optional.of(failure))),
+                InputInjectionState.FAILED, 11, OptionalLong.of(11),
+                new ExecutionEpochId(1), Optional.of(new FrameId(0)), Optional.empty(),
+                Optional.of(parameters), false, Optional.of(envelope), Optional.of(failure));
+        InputTimelineTransitionEvidence failed = new InputTimelineTransitionEvidence(
+                "press", 1, "button", InputTimelineTransitionState.FAILED,
+                Optional.of(failedInjection), Optional.of(envelope));
+        InputTimelineResult failedResult = new InputTimelineResult(
+                InputTimelineStopReason.INPUT_FAILED,
+                InputTimelineCanonicalSize.INPUT_FAILED_MESSAGE, new ExecutionEpochId(1),
+                10, 16, Optional.empty(), Optional.empty(), List.of(failed),
+                new InputTimelineBounds(1, 0, 1, 0, 1, 0,
+                        0, 1, 1, 1_048_576, 10), Optional.of(failure));
+        InputTimelineSpec spec = new InputTimelineSpec(1, List.of(
+                new InputTimelineTransition("press", 1, "button", parameters)));
+
+        long encoded = InputTimelineCanonicalSize.result(failedResult);
+        assertTrue(encoded <= InputTimelineCanonicalSize.resultReservation(spec),
+                "failed result must fit its preflight reservation");
+        assertTrue(encoded <= InputTimelineCanonicalSize.terminalResultReservation(spec),
+                "failed result must fit the terminal reservation");
     }
 
     @Test

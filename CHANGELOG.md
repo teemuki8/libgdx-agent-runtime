@@ -4,6 +4,8 @@ All notable changes follow Keep a Changelog structure.
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-08-10
+
 ### Added
 
 - Protocol 2.5 adds bounded replay-ready recording capture and execution from exactly one

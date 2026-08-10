@@ -26,7 +26,7 @@ val artifactNames = mapOf(
     "runtime-protocol" to "agent-runtime-protocol",
     "runtime-mcp" to "agent-runtime-mcp",
 )
-val releaseVersion = providers.gradleProperty("releaseVersion").orElse("2.1.1-SNAPSHOT")
+val releaseVersion = providers.gradleProperty("releaseVersion").orElse("2.2.1-SNAPSHOT")
 val repositoryUrl = "https://github.com/teemuki8/libgdx-agent-runtime"
 val mavenCentralStagingUrl =
     "https://ossrh-staging-api.central.sonatype.com/service/local/staging/deploy/maven2/"

@@ -175,7 +175,7 @@ game running elsewhere. Remote process attachment is explicitly outside V1.
 | `runtime-fixtures` | deterministic LWJGL3 qualification | not published |
 | `runtime-examples` | compiled consumer examples and tested MCP transcript | not published |
 
-Group: `io.github.teemuki8`. Current release: `2.1.0`. Development version: `2.1.1-SNAPSHOT`.
+Group: `io.github.teemuki8`. Current release: `2.2.0`. Development version: `2.2.1-SNAPSHOT`.
 
 ## Build
 

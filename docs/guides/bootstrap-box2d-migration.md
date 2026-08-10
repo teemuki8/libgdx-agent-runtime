@@ -9,7 +9,7 @@ input mutation, and disposal. The runtime supplies the accumulator and immutable
 Use one runtime version and the same libGDX version for Java and native artifacts.
 
 ```kotlin
-val agentRuntimeVersion = "2.1.0"
+val agentRuntimeVersion = "2.2.0"
 val gdxVersion = "1.14.2"
 
 dependencies {

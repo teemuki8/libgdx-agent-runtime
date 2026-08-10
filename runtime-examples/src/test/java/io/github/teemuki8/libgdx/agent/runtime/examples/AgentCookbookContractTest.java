@@ -22,8 +22,8 @@ import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 
 class AgentCookbookContractTest {
-    private static final String CURRENT_RELEASE = "2.1.0";
-    private static final String NEXT_DEVELOPMENT = "2.1.1-SNAPSHOT";
+    private static final String CURRENT_RELEASE = "2.2.0";
+    private static final String NEXT_DEVELOPMENT = "2.2.1-SNAPSHOT";
     private static final Map<String, String> PUBLISHED_ARTIFACTS = Map.of(
             "runtime-core", "agent-runtime-core",
             "runtime-libgdx", "agent-runtime-libgdx",
@@ -75,7 +75,7 @@ class AgentCookbookContractTest {
         assertTrue(cookbook.contains("NOT_EXECUTED"));
         assertTrue(cookbook.contains("ordinary recording is not executable replay evidence"));
         assertTrue(cookbook.contains(
-                "Protocol 2.5 replay and protocol 2.6 input timelines are unreleased"));
+                "through protocol 2.6 are available in release 2.2.0"));
         assertTrue(cookbook.contains("DIVERGED path in `ControlledWorkflowExample`"));
         assertLocalLinksResolve(cookbook);
         assertCurrentConsumerVersions();
@@ -107,13 +107,13 @@ class AgentCookbookContractTest {
 
     @Test
     void releaseMetadataDescribesTheCurrentPublishedLine() throws Exception {
-        assertTrue(read("CHANGELOG.md").contains("## [2.1.0] - 2026-08-10"));
-        String release = read("docs/releases/2.1.0.md");
+        assertTrue(read("CHANGELOG.md").contains("## [2.2.0] - 2026-08-10"));
+        String release = read("docs/releases/2.2.0.md");
         String releaseArtifacts = release.substring(
                 release.indexOf("## Published artifacts"), release.indexOf("## Highlights"));
         assertTrue(tokens(releaseArtifacts, "agent-runtime-[a-z0-9-]+").equals(
                 Set.copyOf(PUBLISHED_ARTIFACTS.values())));
-        assertTrue(release.contains("Protocol 2.4"));
+        assertTrue(release.contains("Protocol 2.6"));
         assertTrue(release.contains("Maven Central publication requires separate authorization"));
 
         String rootBuild = read("build.gradle.kts");

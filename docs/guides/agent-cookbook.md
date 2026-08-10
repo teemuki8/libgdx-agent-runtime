@@ -5,10 +5,9 @@ the runtime. Every public Java API, protocol/MCP contract, dependency, or agent-
 change must update its affected recipe in the same pull request. Examples are exercised by the
 repository fixture tests.
 
-The simulation timeline, fixed-step, assertion, and determinism APIs through protocol 2.4 are
-available in release 2.1.0. Protocol 2.5 replay and protocol 2.6 input timelines are unreleased
-and currently require the repository development version, `2.1.1-SNAPSHOT`. Earlier 2.0.0
-artifacts do not contain the released 2.1 capabilities.
+The simulation timeline, fixed-step, assertion, determinism, replay, and input-timeline APIs
+through protocol 2.6 are available in release 2.2.0. Earlier 2.0.0 artifacts do not contain the
+released 2.1 or 2.2 capabilities.
 
 ## Task index
 
@@ -36,11 +35,9 @@ non-published `runtime-examples` module as ordinary consumers of the public arti
 | Interpret missing, bounded, or failed evidence | [Diagnose incomplete and failed evidence](#diagnose-incomplete-and-failed-evidence) | `AgentCookbookContractTest` and runtime fixture regressions |
 | Build a deterministic Box2D game | [Use the deterministic Box2D example](#use-the-deterministic-box2d-example) | [`DeterministicBox2dExample.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/DeterministicBox2dExample.java) |
 
-Use release `2.1.0` for recipes through protocol 2.4. The replay and input-timeline recipes
-document the unreleased 2.5/2.6 contracts and must not be presented as available from Maven
-Central until a later publication is explicitly authorized and verified. The examples module itself
+Use release `2.2.0` for recipes through protocol 2.6. The examples module itself
 is test scaffolding and is never a dependency or published artifact. Repository contributors use
-`2.1.1-SNAPSHOT`.
+`2.2.1-SNAPSHOT`.
 
 ## Instrument and inspect state
 
@@ -49,8 +46,8 @@ the libGDX render thread, and register only explicit safe properties. For releas
 inspection:
 
 ```kotlin
-implementation("io.github.teemuki8:agent-runtime-core:2.1.0")
-implementation("io.github.teemuki8:agent-runtime-libgdx:2.1.0")
+implementation("io.github.teemuki8:agent-runtime-core:2.2.0")
+implementation("io.github.teemuki8:agent-runtime-libgdx:2.2.0")
 ```
 
 The canonical order is register, start, capture, query, close. `start()` captures baseline frame
@@ -127,7 +124,7 @@ filters and unknown fields produce typed `INVALID_QUERY` transport failures.
 
 ## Run controlled scenarios and input
 
-This workflow requires `2.1.0` or later. Register the application dispatcher,
+This workflow requires `2.2.0` or later. Register the application dispatcher,
 scenario, closed input schema, optional checkpoint provider, and acknowledged fixed-step helper
 before `start()`. Then use idempotent request IDs and poll the exact same request after the
 application thread drains it:
@@ -493,7 +490,7 @@ opening `RuntimeMcpServer`; the next client read is not a JSON-RPC object. Put t
 ## Use the deterministic Box2D example
 
 Use dependencies `agent-runtime-core`, `agent-runtime-libgdx`, and
-`agent-runtime-box2d` at `2.1.0`. The consumer example explicitly owns a native `World`,
+`agent-runtime-box2d` at `2.2.0`. The consumer example explicitly owns a native `World`,
 registers stable world/body/fixture/joint IDs, installs an evidence-first/application-second
 listener from `Box2dContacts.compose(applicationListener)`, and steps only inside the acknowledged
 fixed-step callback:

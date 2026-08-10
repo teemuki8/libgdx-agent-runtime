@@ -23,18 +23,18 @@ inside its existing libGDX process and display session.
 
 ## Add dependencies
 
-For the current 2.1 release:
+For the current 2.2 release:
 
 ```kotlin
 dependencies {
-    implementation("io.github.teemuki8:agent-runtime-core:2.1.0")
-    implementation("io.github.teemuki8:agent-runtime-libgdx:2.1.0")
+    implementation("io.github.teemuki8:agent-runtime-core:2.2.0")
+    implementation("io.github.teemuki8:agent-runtime-libgdx:2.2.0")
 }
 ```
 
 V1 requires Java 25. It qualifies LWJGL3 desktop only; Android, iOS, and web are not release claims.
 The optional Box2D adapter is published separately as
-`io.github.teemuki8:agent-runtime-box2d:2.1.0`; add it only when the game uses Box2D inspection,
+`io.github.teemuki8:agent-runtime-box2d:2.2.0`; add it only when the game uses Box2D inspection,
 contact evidence, or the data-only physics assertion/determinism factories.
 
 ## Capture a fixed-step simulation

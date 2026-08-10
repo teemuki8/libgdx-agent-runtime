@@ -115,7 +115,10 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
         @JsonSubTypes.Type(value = Result.SimulationDeterminism.class,
                 name = "simulationDeterminism"),
         @JsonSubTypes.Type(value = Result.FixedStep.class, name = "fixedStep"),
-        @JsonSubTypes.Type(value = Result.FixedStepUpdates.class, name = "fixedStepUpdates")
+        @JsonSubTypes.Type(value = Result.FixedStepUpdates.class, name = "fixedStepUpdates"),
+        @JsonSubTypes.Type(value = Result.ReplayCapture.class, name = "replayCapture"),
+        @JsonSubTypes.Type(value = Result.Replay.class, name = "replay"),
+        @JsonSubTypes.Type(value = Result.InputTimeline.class, name = "inputTimeline")
     })
     sealed interface Result permits Result.Sessions, Result.Capabilities, Result.Frames,
             Result.Snapshot, Result.Entity, Result.Changes, Result.Events, Result.Decisions,
@@ -126,7 +129,8 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
             Result.RecordingChunkResult, Result.Determinism, Result.EntityHistory,
             Result.Simulation, Result.SimulationTicks, Result.SimulationAssertion,
             Result.SimulationDeterminism, Result.FixedStep,
-            Result.FixedStepUpdates {
+            Result.FixedStepUpdates, Result.ReplayCapture, Result.Replay,
+            Result.InputTimeline {
         /** Published session catalog. */
         record Sessions(List<SessionInfo> sessions) implements Result {
             /** Copies sessions. */
@@ -459,6 +463,41 @@ public sealed interface RuntimeResponse permits RuntimeResponse.Success, Runtime
                 @JsonInclude(JsonInclude.Include.NON_ABSENT)
                 Optional<ApplicationFailureEvidence> applicationFailure) implements Result {
             public SimulationDeterminism {
+                Objects.requireNonNull(operation, "operation");
+                applicationFailure = Objects.requireNonNull(
+                        applicationFailure, "applicationFailure");
+            }
+        }
+
+        /** Replay-ready recording start operation evidence. */
+        record ReplayCapture(
+                io.github.teemuki8.libgdx.agent.runtime.core.ReplayCaptureOperation operation,
+                @JsonInclude(JsonInclude.Include.NON_ABSENT)
+                Optional<ApplicationFailureEvidence> applicationFailure) implements Result {
+            public ReplayCapture {
+                Objects.requireNonNull(operation, "operation");
+                applicationFailure = Objects.requireNonNull(
+                        applicationFailure, "applicationFailure");
+            }
+        }
+
+        /** Deterministic replay execution operation evidence. */
+        record Replay(io.github.teemuki8.libgdx.agent.runtime.core.ReplayOperation operation,
+                @JsonInclude(JsonInclude.Include.NON_ABSENT)
+                Optional<ApplicationFailureEvidence> applicationFailure) implements Result {
+            public Replay {
+                Objects.requireNonNull(operation, "operation");
+                applicationFailure = Objects.requireNonNull(
+                        applicationFailure, "applicationFailure");
+            }
+        }
+
+        /** Exact-tick registered-input timeline operation evidence. */
+        record InputTimeline(
+                io.github.teemuki8.libgdx.agent.runtime.core.InputTimelineOperation operation,
+                @JsonInclude(JsonInclude.Include.NON_ABSENT)
+                Optional<ApplicationFailureEvidence> applicationFailure) implements Result {
+            public InputTimeline {
                 Objects.requireNonNull(operation, "operation");
                 applicationFailure = Objects.requireNonNull(
                         applicationFailure, "applicationFailure");

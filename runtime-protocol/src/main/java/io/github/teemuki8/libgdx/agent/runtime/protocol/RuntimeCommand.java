@@ -2,6 +2,7 @@ package io.github.teemuki8.libgdx.agent.runtime.protocol;
 
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
+import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue;
 
 /** Explicit allowlisted versioned command union. */
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "type")
@@ -47,7 +48,11 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
             name = "simulationDeterminismCheck"),
     @JsonSubTypes.Type(value = RuntimeCommand.FixedStep.class, name = "fixedStep"),
     @JsonSubTypes.Type(value = RuntimeCommand.FixedStepUpdates.class, name = "fixedStepUpdates"),
-    @JsonSubTypes.Type(value = RuntimeCommand.SimulationAdvance.class, name = "simulationAdvance")
+    @JsonSubTypes.Type(value = RuntimeCommand.SimulationAdvance.class, name = "simulationAdvance"),
+    @JsonSubTypes.Type(value = RuntimeCommand.ReplayRecordingStart.class,
+            name = "replayRecordingStart"),
+    @JsonSubTypes.Type(value = RuntimeCommand.Replay.class, name = "replay"),
+    @JsonSubTypes.Type(value = RuntimeCommand.InputTimeline.class, name = "inputTimeline")
 })
 public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeCommand.Capabilities,
         RuntimeCommand.Frames, RuntimeCommand.Snapshot, RuntimeCommand.Entity,
@@ -65,7 +70,8 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
         RuntimeCommand.EntityHistory, RuntimeCommand.Simulation, RuntimeCommand.SimulationTicks,
         RuntimeCommand.SimulationAssert, RuntimeCommand.SimulationDeterminismCheck,
         RuntimeCommand.FixedStep, RuntimeCommand.FixedStepUpdates,
-        RuntimeCommand.SimulationAdvance {
+        RuntimeCommand.SimulationAdvance, RuntimeCommand.ReplayRecordingStart,
+        RuntimeCommand.Replay, RuntimeCommand.InputTimeline {
     /** Lists published sessions. */
     record Sessions() implements RuntimeCommand {}
 
@@ -588,9 +594,90 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
         }
     }
 
+    /** Starts or polls one replay-ready recording from an explicit origin. */
+    record ReplayRecordingStart(String recordingId, String replayRequestId,
+            String scenarioId, String checkpointId, Long randomSeed,
+            io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue.ObjectValue configuration,
+            io.github.teemuki8.libgdx.agent.runtime.core.DeterminismProfile profile,
+            java.util.List<io.github.teemuki8.libgdx.agent.runtime.core
+                    .SimulationConfigurationRequirement> configurationRequirements,
+            java.util.List<io.github.teemuki8.libgdx.agent.runtime.core
+                    .SimulationEvidenceRequirement> evidenceRequirements,
+            java.util.List<io.github.teemuki8.libgdx.agent.runtime.core.EventType> eventTypes,
+            long timeoutNanos) implements RuntimeCommand {
+        public ReplayRecordingStart {
+            ProtocolJson.requireIdentifier(recordingId, "recordingId");
+            ProtocolJson.requireIdentifier(replayRequestId, "replayRequestId");
+            requireOptionalIdentifier(scenarioId, "scenarioId");
+            requireOptionalIdentifier(checkpointId, "checkpointId");
+            if ((scenarioId == null) == (checkpointId == null)) {
+                throw new IllegalArgumentException(
+                        "replay start requires exactly one scenario or checkpoint origin");
+            }
+            java.util.Objects.requireNonNull(configuration, "configuration");
+            configuration.fields().forEach(field -> requireReplayConfigurationValue(
+                    field.value()));
+            java.util.Objects.requireNonNull(profile, "profile");
+            java.util.Objects.requireNonNull(
+                    configurationRequirements, "configurationRequirements");
+            java.util.Objects.requireNonNull(evidenceRequirements, "evidenceRequirements");
+            java.util.Objects.requireNonNull(eventTypes, "eventTypes");
+            if (configurationRequirements.size() > io.github.teemuki8.libgdx.agent.runtime.core
+                    .ReplayCaptureSpec.MAX_CONFIGURATION_REQUIREMENTS
+                    || evidenceRequirements.size() > io.github.teemuki8.libgdx.agent.runtime.core
+                            .ReplayCaptureSpec.MAX_EVIDENCE_REQUIREMENTS
+                    || eventTypes.size() > io.github.teemuki8.libgdx.agent.runtime.core
+                            .ReplayCaptureSpec.MAX_EVENT_TYPES) {
+                throw new IllegalArgumentException("replay selector count exceeds a hard bound");
+            }
+            configurationRequirements = java.util.List.copyOf(configurationRequirements);
+            evidenceRequirements = java.util.List.copyOf(evidenceRequirements);
+            eventTypes = java.util.List.copyOf(eventTypes);
+            requirePositive(timeoutNanos, "timeoutNanos");
+        }
+    }
+
+    /** Executes or polls one stopped replay-ready recording. */
+    record Replay(String recordingId, String replayRequestId, long timeoutNanos)
+            implements RuntimeCommand {
+        public Replay {
+            ProtocolJson.requireIdentifier(recordingId, "recordingId");
+            ProtocolJson.requireIdentifier(replayRequestId, "replayRequestId");
+            requirePositive(timeoutNanos, "timeoutNanos");
+        }
+    }
+
+    /** Submits or polls one exact-tick registered-input timeline. */
+    record InputTimeline(String timelineRequestId, int totalTicks,
+            java.util.List<io.github.teemuki8.libgdx.agent.runtime.core.InputTimelineTransition>
+                    transitions,
+            long timeoutNanos) implements RuntimeCommand {
+        public InputTimeline {
+            ProtocolJson.requireIdentifier(timelineRequestId, "timelineRequestId");
+            requirePositive(totalTicks, "totalTicks");
+            transitions = java.util.List.copyOf(java.util.Objects.requireNonNull(
+                    transitions, "transitions"));
+            new io.github.teemuki8.libgdx.agent.runtime.core.InputTimelineSpec(
+                    totalTicks, transitions);
+            requirePositive(timeoutNanos, "timeoutNanos");
+        }
+    }
+
     private static void validateRange(long from, long to) {
         if (from < 0 || to < from) {
             throw new IllegalArgumentException("frame range must be non-negative and ascending");
+        }
+    }
+
+    private static void requireReplayConfigurationValue(RuntimeValue value) {
+        switch (value) {
+            case RuntimeValue.BooleanValue ignored -> { }
+            case RuntimeValue.IntegerValue ignored -> { }
+            case RuntimeValue.DecimalValue ignored -> { }
+            case RuntimeValue.StringValue ignored -> { }
+            case RuntimeValue.EnumValue ignored -> { }
+            default -> throw new IllegalArgumentException(
+                    "replay configuration values must be closed scalars");
         }
     }
 

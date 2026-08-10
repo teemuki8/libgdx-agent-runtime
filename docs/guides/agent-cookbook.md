@@ -5,8 +5,10 @@ the runtime. Every public Java API, protocol/MCP contract, dependency, or agent-
 change must update its affected recipe in the same pull request. Examples are exercised by the
 repository fixture tests.
 
-The simulation timeline, fixed-step, assertion, and determinism APIs and protocols 2.1-2.4
-described below are available in release 2.1.0. Earlier 2.0.0 artifacts do not contain them.
+The simulation timeline, fixed-step, assertion, and determinism APIs through protocol 2.4 are
+available in release 2.1.0. Protocol 2.5 replay and protocol 2.6 input timelines are unreleased
+and currently require the repository development version, `2.1.1-SNAPSHOT`. Earlier 2.0.0
+artifacts do not contain the released 2.1 capabilities.
 
 ## Task index
 
@@ -26,15 +28,19 @@ non-published `runtime-examples` module as ordinary consumers of the public arti
 | Create or restore a checkpoint | [Run controlled scenarios and input](#run-controlled-scenarios-and-input) | [`ControlledWorkflowExample.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/ControlledWorkflowExample.java) |
 | Evaluate an assertion | [Run controlled scenarios and input](#run-controlled-scenarios-and-input) | frame and simulation assertions in the transcript |
 | Record bounded execution | [Run controlled scenarios and input](#run-controlled-scenarios-and-input) | recording retrieval in `ControlledWorkflowExample` |
+| Execute a replay-ready recording | [Capture and execute deterministic replay](#capture-and-execute-deterministic-replay) | Java and MCP `EQUAL` and `DIVERGED` paths in `ControlledWorkflowExample` |
+| Execute a deterministic input timeline | [Execute a deterministic input timeline](#execute-a-deterministic-input-timeline) | `runtime_input_timeline` in the tested transcript and `InputTimelineResult` in `ControlledWorkflowExample` |
 | Compare deterministic reruns | [Run controlled scenarios and input](#run-controlled-scenarios-and-input) | selected `EQUAL` result in both controlled examples |
 | Correlate runtime and UI evidence | [Frame correlation](frame-correlation.md) | explicit `UiFrameCorrelation`, never guessed frames |
 | Connect an MCP coding agent | [Host same-JVM stdio MCP](#host-same-jvm-stdio-mcp) | [`SameJvmMcpApplication.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/SameJvmMcpApplication.java) and [`controlled-workflow.json`](../../runtime-examples/src/main/resources/transcripts/controlled-workflow.json) |
 | Interpret missing, bounded, or failed evidence | [Diagnose incomplete and failed evidence](#diagnose-incomplete-and-failed-evidence) | `AgentCookbookContractTest` and runtime fixture regressions |
 | Build a deterministic Box2D game | [Use the deterministic Box2D example](#use-the-deterministic-box2d-example) | [`DeterministicBox2dExample.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/DeterministicBox2dExample.java) |
 
-Use release `2.1.0` for every recipe in this cookbook. The examples module itself is test
-scaffolding and is never a dependency or published artifact. Repository contributors use the
-next development version, `2.1.1-SNAPSHOT`.
+Use release `2.1.0` for recipes through protocol 2.4. The replay and input-timeline recipes
+document the unreleased 2.5/2.6 contracts and must not be presented as available from Maven
+Central until a later publication is explicitly authorized and verified. The examples module itself
+is test scaffolding and is never a dependency or published artifact. Repository contributors use
+`2.1.1-SNAPSHOT`.
 
 ## Instrument and inspect state
 
@@ -154,6 +160,10 @@ RecordingChunk recording = runtime.recordings().get("walk-recording", 0, 64);
 runtime.checkpoints().restore("start", "checkpoint-restore-1", timeout);
 ```
 
+This ordinary recording is not executable replay evidence, even if its application testimony sets
+`replayGuaranteed=true`. Use the replay-ready start path below to capture the bounded comparison
+sidecar.
+
 After application dispatch, create/stop/restore report command `SUCCEEDED`; the chunk contains a
 bounded `RecordingInputEntry` and the exact retained `RecordingTickEntry` values. Restore produces
 a new epoch baseline and the example verifies position `(0,0)`. A recording chunk explicitly
@@ -176,6 +186,128 @@ application-owned Java sequence—including checkpoint restore, recording, PASS/
 and selected reruns—is
 [`ControlledWorkflowExample.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/ControlledWorkflowExample.java).
 
+## Capture and execute deterministic replay
+
+Protocol 2.5 adds bounded execution for recordings explicitly started through
+`ReplayRegistry`. Pause first, choose exactly one registered scenario or retained checkpoint
+origin, select observable evidence, then inject registered inputs and advance contiguous fixed
+ticks. The compiled workflow uses a scenario origin:
+
+```java
+RecordingSpec recording = new RecordingSpec(
+        "walk-recording", "2.5", capabilityVersions,
+        Optional.of("walk"), Optional.empty(), OptionalLong.of(7),
+        RuntimeValues.object(), true);
+ReplayCaptureSpec capture = new ReplayCaptureSpec(
+        recording, profile, configurationRequirements, evidenceRequirements, eventTypes);
+runtime.replays().start(capture, "replay-capture-1", timeout);
+// drain on the application thread; inject registered input; advance exact fixed ticks
+runtime.recordings().stop("walk-recording", "recording-stop-1", timeout);
+runtime.replays().execute("walk-recording", "replay-execute-1", timeout);
+ReplayResult result = runtime.replays()
+        .execute("walk-recording", "replay-execute-1", timeout)
+        .result().orElseThrow();
+```
+
+`EQUAL` means only the selected baseline and every retained tick observable matched. `DIVERGED`
+stops at the first complete difference: `BASELINE` has no tick ID, while `SIMULATION_TICK` includes
+the reference/replay epoch, tick, and frame correlations. The difference is observable evidence,
+not a claim that the recorded input caused it. `INCONCLUSIVE` covers ordinary recordings, missing
+or truncated evidence, skipped/non-fixed/unacknowledged ticks, actions, failed or redacted inputs,
+eviction, timeout, and bounded application failure. Application callback evidence never contains a
+serialized stack trace.
+
+The compiled DIVERGED path in `ControlledWorkflowExample` uses a second application-owned
+scenario whose registered input behavior changes between capture and replay. Its tested result is
+`SIMULATION_TICK` at epoch tick 1 with zero prior completed replay ticks. This deliberately reports
+the first structural mismatch without claiming why the application behavior changed.
+
+The checkpoint form changes only the origin fields: `scenarioId` is empty and `checkpointId` names
+one retained opaque application checkpoint. Its seed/configuration remain testimony; baseline
+comparison detects a bad restore. The application must restore all state that affects its selected
+observables, including native physics caches where relevant.
+
+The closed MCP calls used by the tested transcript are:
+
+```json
+{"name":"runtime_replay_recording_start","arguments":{"sessionId":"game","recordingId":"walk-recording","replayRequestId":"capture-1","originKind":"scenario","originId":"walk","randomSeed":7,"configuration":[],"profile":{"comparisonScope":{"entityIds":["player"],"properties":["position","velocity"],"excludedProperties":[],"includeEvents":false,"includeDecisions":false},"includeUiCorrelations":false},"configurationRequirements":[],"evidenceRequirements":[],"eventTypes":[],"timeoutNanos":5000000000}}
+```
+
+```json
+{"name":"runtime_replay","arguments":{"sessionId":"game","recordingId":"walk-recording","replayRequestId":"execute-1","timeoutNanos":5000000000}}
+```
+
+Poll either call with the identical fields while its command is `QUEUED` or `EXECUTING`. Protocol
+2.4 rejects both commands as requiring 2.5. Sidecars, scripts, tick evidence, operations, encoded
+bytes, and deadlines are independently bounded; recording or operation eviction is explicit.
+
+## Execute a deterministic input timeline
+
+Protocol 2.6 adds one bounded, application-dispatched operation that validates and executes an
+ordered sequence of explicit registered input transitions through exact fixed simulation ticks.
+Pause first with an acknowledged controller and a configured fixed step, then submit the whole
+timeline as one parent command. The compiled workflow uses a 60-tick scenario timeline:
+
+```java
+InputTimelineSpec timeline = new InputTimelineSpec(60, List.of(
+        new InputTimelineTransition("workflow-velocity", 1, "set-velocity",
+                velocityParameters(2))));
+runtime.inputs().executeTimeline(timeline, "workflow-input-timeline", timeout);
+// drain on the application thread, then poll with the identical request ID, spec, and timeout
+InputTimelineResult result = runtime.inputs()
+        .executeTimeline(timeline, "workflow-input-timeline", timeout)
+        .result().orElseThrow();
+```
+
+A timeline-local tick is relative to the timeline: local tick 1 is the next session controlled
+tick (`startingControlledTick + 1`), and every transition executes immediately before its local
+tick. The session controlled tick counter and epoch-relative simulation ticks remain authoritative
+in the resulting `InputInjection` and `SimulationTick` evidence, so callers can map local ticks,
+session ticks, and epoch ticks without guessing. Ticks without transitions still advance by the
+registered fixed step (idle ticks). Transitions sharing a tick execute in request-list order, so
+explicit boolean start/stop pairs and decimal analog values behave deterministically:
+
+```java
+new InputTimelineSpec(2, List.of(
+        new InputTimelineTransition("move-left-on", 1, "move-left",
+                RuntimeValues.object(RuntimeValues.field(
+                        "active", RuntimeValues.bool(true)))),
+        new InputTimelineTransition("steer", 1, "steer",
+                RuntimeValues.object(RuntimeValues.field(
+                        "amount", RuntimeValues.decimal("0.5")))),
+        new InputTimelineTransition("move-left-off", 2, "move-left",
+                RuntimeValues.object(RuntimeValues.field(
+                        "active", RuntimeValues.bool(false))))));
+```
+
+Held inputs are never inferred: the application must send both the `true` start and the `false`
+stop. Parameters stay closed scalar values (boolean, integer, decimal, string, enum, entity ID)
+validated against the registered descriptor before any handler runs.
+
+The closed MCP call used by the tested transcript is:
+
+```json
+{"name":"runtime_input_timeline","arguments":{"sessionId":"controlled-workflow-example","timelineRequestId":"transcript-input-timeline","totalTicks":2,"transitions":[{"transitionId":"transcript-velocity","timelineTick":1,"inputId":"set-velocity","parameters":{"velocityX":2}}],"timeoutNanos":5000000000}}
+```
+
+Poll with the identical fields while the parent command is `QUEUED` or `EXECUTING`; reusing the
+parent request ID with changed ticks, order, transition identity, input, parameters, or timeout is
+rejected. The terminal `InputTimelineResult` reports the stop reason plus requested/completed
+ticks and requested/executed/failed/not-executed transitions (`NOT_EXECUTED` transitions carry a
+bounded deterministic reason and no fabricated injection). `COMPLETED` requires every tick and
+transition inside the deadline; `TIMED_OUT`, `LIFECYCLE_CHANGED`, `INPUT_FAILED`, `TICK_FAILED`,
+`EVIDENCE_LIMIT`, and `CLEANUP_FAILED` retain authoritative completed work without claiming
+success. Execution is fail-stop: after the first failed transition or tick, later same-tick and
+later transitions are `NOT_EXECUTED`, and partial application mutation is never rolled back or
+retried. After a timeout or partial failure, recover by resetting or restoring a known
+scenario/checkpoint before deciding to retry under a new request ID.
+
+Recording schema 1 and replay consume the timeline's normal registered-input and controlled-tick
+evidence: successful timelines record normal `RecordingInputEntry` values and controlled-tick
+entries and replay `EQUAL`; failed, redacted, timed-out, lifecycle-invalidated, or otherwise
+incomplete timeline evidence makes replay capture inconclusive. The transcript proves the same
+trajectory through the later entity, event, assertion, and replay steps.
+
 ## Host same-JVM stdio MCP
 
 MCP is a local development transport, not remote attachment. Publish the started runtime and open
@@ -189,10 +321,11 @@ server = RuntimeMcpServer.open(
 
 Send MCP `initialize`, `notifications/initialized`, then closed `tools/call` requests. The tested
 [`controlled-workflow.json`](../../runtime-examples/src/main/resources/transcripts/controlled-workflow.json)
-transcript covers sessions, capabilities, scenarios, reset, pause, scheduled input, configured-step
-advance, entity/event inspection, frame and simulation assertions, and simulation determinism.
-Representative terminal results include command `SUCCEEDED`, assertion `PASS`, and selected
-comparison `EQUAL` with a null divergence.
+transcript covers sessions, capabilities, scenarios, reset, pause, replay-ready capture, scheduled
+input, configured-step advance, entity/event inspection, frame and simulation assertions, equal and
+first-divergence replay, and simulation determinism. Representative terminal results include
+command `SUCCEEDED`, assertion `PASS`, selected comparison `EQUAL` with a null divergence, and
+`DIVERGED` at `SIMULATION_TICK` epoch tick 1.
 
 `System.out` is exclusively newline-framed JSON-RPC. Put human logs on stderr or in a bounded file.
 The game owns dispatch via `Gdx.app.postRunnable`; the server creates no game loop. Inputs, nesting,
@@ -1542,7 +1675,7 @@ The unpublished `runtime-fixtures` module contains the copyable agent example:
   post-physics game logic;
 - `Box2dConformanceFixtureTest` proves ball drop, two-body collision, scheduled player movement,
   post-solve points/normal/impulses, active contacts, exact tick/frame evidence, checkpoint restore,
-  recording, protocol 2.3/2.4, MCP, render independence, and deterministic reruns;
+  recording/replay, protocol 2.3-2.5, MCP, render independence, and deterministic reruns;
 - `Box2dConformanceApplication` runs the same model from a hidden real LWJGL3 render loop, using
   `Gdx.graphics.getDeltaTime()` only as input to the canonical accumulator.
 

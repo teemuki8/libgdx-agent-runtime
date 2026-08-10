@@ -310,44 +310,39 @@ public final class SimulationControlRegistry {
     }
 
     FrameSnapshot tickForDeterminism(long deltaNanos) {
-        return tickForDeterminism(deltaNanos, List.of(), false).frame();
+        return tickExact(deltaNanos, () -> {}).frame();
     }
 
-    DeterminismTickEvidence tickForDeterminism(
+    ExactTickEvidence tickForDeterminism(
             long deltaNanos, List<SimulationDeterminismInput> inputsForTick) {
-        return tickForDeterminism(deltaNanos, inputsForTick, true);
+        Objects.requireNonNull(inputsForTick, "inputsForTick");
+        return tickExact(deltaNanos,
+                () -> runtime.inputs().executeDeterminismInputs(inputsForTick));
     }
 
-    private DeterminismTickEvidence tickForDeterminism(
-            long deltaNanos, List<SimulationDeterminismInput> inputsForTick, boolean scripted) {
+    ExactTickEvidence tickExact(long deltaNanos, Runnable beforeSimulation) {
         SimulationControllerSpec spec = requireController();
-        Objects.requireNonNull(inputsForTick, "inputsForTick");
+        Objects.requireNonNull(beforeSimulation, "beforeSimulation");
         long tick;
         synchronized (this) {
+            requireKnownPauseState();
             if (!paused) {
                 throw new AgentRuntimeException(
                         RuntimeErrorCode.INVALID_LIFECYCLE,
-                        "determinism execution requires paused simulation");
+                        "exact tick execution requires paused simulation");
             }
             tick = Math.addExact(currentTick, 1);
         }
-        SimulationTick simulationTick;
-        try {
-            simulationTick = runtime.simulation().tickControlled(
-                    deltaNanos, tick, spec.acknowledgedTick(), spec.tick(),
-                    scripted ? () -> runtime.inputs().executeDeterminismInputs(inputsForTick)
-                            : () -> {});
-        } catch (RuntimeException | Error failure) {
-            throw failure;
-        }
+        SimulationTick simulationTick = runtime.simulation().tickControlled(
+                deltaNanos, tick, spec.acknowledgedTick(), spec.tick(), beforeSimulation);
         FrameId resultingFrame = simulationTick.resultingFrameId().orElseThrow(() ->
-                new IllegalStateException("determinism tick did not complete a frame"));
+                new IllegalStateException("exact tick did not complete a frame"));
         synchronized (this) {
             currentTick = tick;
         }
         runtime.recordings().recordTick(
                 tick, deltaNanos, runtime.currentEpoch(), resultingFrame);
-        return new DeterminismTickEvidence(
+        return new ExactTickEvidence(
                 simulationTick, runtime.frame(resultingFrame).orElseThrow());
     }
 
@@ -506,10 +501,25 @@ public final class SimulationControlRegistry {
         }
     }
 
-    record DeterminismTickEvidence(SimulationTick tick, FrameSnapshot frame) {
-        DeterminismTickEvidence {
+    record ExactTickEvidence(SimulationTick tick, FrameSnapshot frame) {
+        ExactTickEvidence {
             Objects.requireNonNull(tick, "tick");
             Objects.requireNonNull(frame, "frame");
+        }
+
+        void requireCompleted(long requestedDeltaNanos) {
+            if (tick.source() != SimulationTickSource.PAUSED
+                    || tick.outcome() != SimulationTickOutcome.COMPLETED
+                    || tick.mutationOutcome() != SimulationMutationOutcome.KNOWN_COMPLETED
+                    || tick.configuredFixedStepNanos().orElse(-1) != requestedDeltaNanos
+                    || tick.runtimeSuppliedDeltaNanos() != requestedDeltaNanos
+                    || tick.executedDeltaNanos().orElse(-1) != requestedDeltaNanos
+                    || tick.resultingFrameId().isEmpty()
+                    || !tick.resultingFrameId().orElseThrow().equals(frame.frameId())
+                    || !tick.executionEpochId().equals(frame.executionEpochId())) {
+                throw new IllegalStateException(
+                        "exact tick evidence is incomplete or mismatched");
+            }
         }
     }
 }

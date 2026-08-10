@@ -12,6 +12,8 @@ import io.github.teemuki8.libgdx.agent.runtime.core.AssertionStatus;
 import io.github.teemuki8.libgdx.agent.runtime.core.CommandState;
 import io.github.teemuki8.libgdx.agent.runtime.core.DeterminismStatus;
 import io.github.teemuki8.libgdx.agent.runtime.core.ExecutionEpochId;
+import io.github.teemuki8.libgdx.agent.runtime.core.RecordingSpec;
+import io.github.teemuki8.libgdx.agent.runtime.core.ReplayCaptureSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertion;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertionScope;
@@ -20,6 +22,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
+import java.util.Optional;
 import java.util.OptionalLong;
 
 /** Hidden LWJGL3 application proving the complete actual-native Box2D vertical slice. */
@@ -34,6 +38,10 @@ public final class Box2dConformanceApplication extends ApplicationAdapter {
     private long runningTicks;
     private ExecutionEpochId playerEpoch;
     private Box2dDeterminism.WorldSettings settings;
+    private AssertionStatus playerPositionStatus;
+    private AssertionStatus playerContactStatus;
+    private DeterminismStatus determinismStatus;
+    private boolean frameCorrelated;
 
     private Box2dConformanceApplication(Path evidencePath) {
         this.evidencePath = evidencePath;
@@ -84,9 +92,12 @@ public final class Box2dConformanceApplication extends ApplicationAdapter {
             case RUNNING -> advanceRunning();
             case PAUSING -> awaitPause();
             case RESETTING -> awaitReset();
+            case REPLAY_STARTING -> awaitReplayStart();
             case INPUTTING -> awaitInput();
             case ADVANCING -> awaitAdvance();
+            case REPLAY_STOPPING -> awaitReplayStop();
             case DETERMINISM -> awaitDeterminism();
+            case REPLAYING -> awaitReplay();
             case COMPLETE -> {
                 // Exit is already requested.
             }
@@ -114,6 +125,14 @@ public final class Box2dConformanceApplication extends ApplicationAdapter {
 
     private void awaitReset() {
         if (succeeded("box2d-native-player-reset")) {
+            fixture.runtime().replays().start(replaySpec(),
+                    "box2d-native-replay-start", Duration.ofSeconds(10));
+            phase = Phase.REPLAY_STARTING;
+        }
+    }
+
+    private void awaitReplayStart() {
+        if (succeeded("box2d-native-replay-start")) {
             playerEpoch = fixture.runtime().currentEpoch();
             long targetTick = fixture.runtime().controls().currentTick() + 1;
             fixture.runtime().inputs().inject("move-player", "box2d-native-move",
@@ -135,6 +154,15 @@ public final class Box2dConformanceApplication extends ApplicationAdapter {
     private void awaitAdvance() {
         if (succeeded("box2d-native-advance")) {
             fixture.recordRender();
+            fixture.runtime().recordings().stop(
+                    "box2d-native-replay", "box2d-native-replay-stop",
+                    Duration.ofSeconds(10));
+            phase = Phase.REPLAY_STOPPING;
+        }
+    }
+
+    private void awaitReplayStop() {
+        if (succeeded("box2d-native-replay-stop")) {
             var spec = Box2dDeterminism.builder("main", settings,
                             Box2dConformanceSimulation.PLAYER_MOVEMENT, 7,
                             RuntimeValues.object(), 2, CONTROLLED_TICKS)
@@ -177,20 +205,49 @@ public final class Box2dConformanceApplication extends ApplicationAdapter {
                 new SimulationAssertionScope(playerEpoch, 1, CONTROLLED_TICKS, 8)).status();
         var tick = fixture.runtime().simulation().ticks(new SimulationTickQuery(
                 playerEpoch, CONTROLLED_TICKS, CONTROLLED_TICKS, 1)).ticks().getFirst();
-        writeEvidence(position, contact, operation.result().orElseThrow().status(),
-                tick.resultingFrameId().isPresent());
+        playerPositionStatus = position;
+        playerContactStatus = contact;
+        determinismStatus = operation.result().orElseThrow().status();
+        frameCorrelated = tick.resultingFrameId().isPresent();
+        fixture.runtime().replays().execute(
+                "box2d-native-replay", "box2d-native-replay-execute",
+                Duration.ofSeconds(20));
+        phase = Phase.REPLAYING;
+    }
+
+    private void awaitReplay() {
+        if (!succeeded("box2d-native-replay-execute")) {
+            return;
+        }
+        var result = fixture.runtime().replays().execute(
+                "box2d-native-replay", "box2d-native-replay-execute",
+                Duration.ofSeconds(20)).result().orElseThrow();
+        if (result.status() != DeterminismStatus.EQUAL) {
+            throw new IllegalStateException("native replay did not compare equal: " + result);
+        }
+        writeEvidence(playerPositionStatus, playerContactStatus, determinismStatus,
+                result.status(), result.bounds().completedTicks(), frameCorrelated);
         phase = Phase.COMPLETE;
         Gdx.app.exit();
     }
 
     private boolean succeeded(String requestId) {
-        return fixture.runtime().commands().orElseThrow().status(requestId).status()
-                .map(status -> status.state() == CommandState.SUCCEEDED)
-                .orElse(false);
+        var status = fixture.runtime().commands().orElseThrow().status(requestId).status();
+        if (status.isEmpty()) {
+            return false;
+        }
+        CommandState state = status.orElseThrow().state();
+        if (state == CommandState.FAILED || state == CommandState.TIMED_OUT
+                || state == CommandState.CANCELLED) {
+            throw new IllegalStateException(
+                    "native fixture command did not succeed: " + status.orElseThrow());
+        }
+        return state == CommandState.SUCCEEDED;
     }
 
     private void writeEvidence(AssertionStatus position, AssertionStatus contact,
-            DeterminismStatus determinism, boolean frameCorrelated) {
+            DeterminismStatus determinism, DeterminismStatus replay,
+            int replayTicks, boolean frameCorrelated) {
         String evidence = "session=" + fixture.runtime().sessionId().value()
                 + "\nrunningTicks=" + runningTicks
                 + "\ncontrolledTicks=" + CONTROLLED_TICKS
@@ -198,6 +255,8 @@ public final class Box2dConformanceApplication extends ApplicationAdapter {
                 + "\nposition=" + position
                 + "\ncontact=" + contact
                 + "\ndeterminism=" + determinism
+                + "\nreplay=" + replay
+                + "\nreplayTicks=" + replayTicks
                 + "\nframeCorrelated=" + frameCorrelated
                 + "\ndispatchThreadCorrect=" + dispatchThreadCorrect
                 + "\n";
@@ -208,7 +267,24 @@ public final class Box2dConformanceApplication extends ApplicationAdapter {
         }
     }
 
+    private ReplayCaptureSpec replaySpec() {
+        var template = Box2dDeterminism.builder("main", settings,
+                        Box2dConformanceSimulation.PLAYER_MOVEMENT, 7,
+                        RuntimeValues.object(), 2, CONTROLLED_TICKS)
+                .body("player", "position", "linearVelocity")
+                .activeContacts()
+                .build();
+        RecordingSpec recording = new RecordingSpec(
+                "box2d-native-replay", "2.5", List.of(),
+                Optional.of(Box2dConformanceSimulation.PLAYER_MOVEMENT), Optional.empty(),
+                OptionalLong.of(7), RuntimeValues.object(), true);
+        return new ReplayCaptureSpec(recording, template.execution().profile(),
+                template.configurationRequirements(), template.evidenceRequirements(),
+                template.eventTypes());
+    }
+
     private enum Phase {
-        RUNNING, PAUSING, RESETTING, INPUTTING, ADVANCING, DETERMINISM, COMPLETE
+        RUNNING, PAUSING, RESETTING, REPLAY_STARTING, INPUTTING, ADVANCING,
+        REPLAY_STOPPING, DETERMINISM, REPLAYING, COMPLETE
     }
 }

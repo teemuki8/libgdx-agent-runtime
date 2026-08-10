@@ -115,9 +115,9 @@ final class RuntimeProtocolTest {
         RuntimeProtocolService service = new RuntimeProtocolService(new RuntimeRegistry());
         RuntimeResponse.Failure version = assertInstanceOf(RuntimeResponse.Failure.class,
                 service.execute(new RuntimeRequest(
-                        new ProtocolVersion(2, 5), "v", null, new RuntimeCommand.Sessions())));
+                        new ProtocolVersion(2, 7), "v", null, new RuntimeCommand.Sessions())));
         assertEquals(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED, version.error().code());
-        assertEquals("1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10,1.11,1.12,1.13,2.0,2.1,2.2,2.3,2.4",
+        assertEquals("1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10,1.11,1.12,1.13,2.0,2.1,2.2,2.3,2.4,2.5,2.6",
                 version.error().details().get("supported"));
 
         RuntimeResponse.Failure future = assertInstanceOf(RuntimeResponse.Failure.class,
@@ -665,7 +665,7 @@ final class RuntimeProtocolTest {
                          "assertionType":"entityExists","entityId":{"value":"ball"},
                          "unknown":true}}}
                         """).getBytes(StandardCharsets.UTF_8)));
-        assertEquals(ProtocolVersion.V2_4, ProtocolVersion.CURRENT);
+        assertEquals(ProtocolVersion.V2_6, ProtocolVersion.CURRENT);
     }
 
     @Test

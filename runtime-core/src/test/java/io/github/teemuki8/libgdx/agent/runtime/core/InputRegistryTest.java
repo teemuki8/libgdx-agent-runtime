@@ -15,6 +15,49 @@ import org.junit.jupiter.api.Test;
 
 final class InputRegistryTest {
     @Test
+    void closeReleasesReservedTimelineStateWhileRetainingTheInputCatalog() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("input-timeline-close"))
+                .clock(() -> 1)
+                .commandDispatcher(dispatch::addLast)
+                .build();
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {})
+                .resume(() -> {})
+                .acknowledgedTick(deltaNanos -> deltaNanos)
+                .build());
+        runtime.simulation().register(SimulationTimelineSpec.fixedStep(10));
+        runtime.inputs().register(InputSpec.builder("keyboard")
+                .description("Registered keyboard fact")
+                .requiredString("key")
+                .handler(parameters -> {})
+                .build());
+        runtime.start();
+        runtime.controls().control(true, "pause", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        runtime.inputs().executeTimeline(new InputTimelineSpec(1, List.of(
+                new InputTimelineTransition("timeline-child", 1, "keyboard",
+                        RuntimeValues.object(RuntimeValues.field(
+                                "key", RuntimeValues.string("X")))))),
+                "timeline-parent", Duration.ofSeconds(1));
+        assertEquals(1, runtime.inputs().retainedPendingInjections());
+
+        runtime.close();
+
+        assertEquals(List.of("keyboard"),
+                runtime.inputs().list().stream().map(InputDescriptor::id).toList());
+        assertEquals(0, runtime.inputs().retainedPendingInjections());
+        AgentRuntimeException closed = assertThrows(AgentRuntimeException.class,
+                () -> runtime.inputs().executeTimeline(new InputTimelineSpec(1, List.of(
+                        new InputTimelineTransition("closed-child", 1, "keyboard",
+                                RuntimeValues.object(RuntimeValues.field(
+                                        "key", RuntimeValues.string("X")))))),
+                        "closed-parent", Duration.ofSeconds(1)));
+        assertEquals(RuntimeErrorCode.RUNTIME_CLOSED, closed.code());
+    }
+
+    @Test
     void closeReleasesHandlersAndScheduledInjectionsButRetainsTheCatalog() {
         ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
         AtomicInteger executions = new AtomicInteger();

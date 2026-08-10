@@ -3,12 +3,15 @@ package io.github.teemuki8.libgdx.agent.runtime.core;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.function.Consumer;
 
@@ -17,17 +20,24 @@ public final class InputRegistry {
     private final Object submissionLock = new Object();
     private final AgentRuntime runtime;
     private final InputLimits limits;
+    private final InputTimelineLimits timelineLimits;
+    private final InputTimelineExecutor timelines;
     private final LinkedHashMap<String, InputDescriptor> inputs = new LinkedHashMap<>();
     private final LinkedHashMap<String, Consumer<InputParameters>> handlers = new LinkedHashMap<>();
     private final LinkedHashMap<String, Evidence> requests = new LinkedHashMap<>();
+    private final LinkedHashSet<String> timelineParentIds = new LinkedHashSet<>();
     private final TreeMap<Long, ArrayDeque<Evidence>> scheduled = new TreeMap<>();
     private final Map<Long, List<Evidence>> executedByTick = new LinkedHashMap<>();
     private int outstanding;
     private boolean determinismExecuting;
+    private boolean timelineExecuting;
+    private long timelineDeadlineNanos = Long.MAX_VALUE;
 
-    InputRegistry(AgentRuntime runtime, InputLimits limits) {
+    InputRegistry(AgentRuntime runtime, InputLimits limits, InputTimelineLimits timelineLimits) {
         this.runtime = runtime;
         this.limits = limits;
+        this.timelineLimits = timelineLimits;
+        timelines = new InputTimelineExecutor(runtime, this, timelineLimits);
     }
 
     /** Registers one input type before runtime start. */
@@ -56,6 +66,28 @@ public final class InputRegistry {
         return limits;
     }
 
+    /** Submits or polls one at-most-once exact-tick input timeline. */
+    public InputTimelineOperation executeTimeline(
+            InputTimelineSpec spec, String requestId, Duration timeout) {
+        runtime.requireSubmissionsOpen();
+        synchronized (submissionLock) {
+            return timelines.execute(spec, requestId, timeout);
+        }
+    }
+
+    /** Returns configured hard input-timeline bounds. */
+    public InputTimelineLimits timelineLimits() {
+        return timelines.limits();
+    }
+
+    /** Reports whether the registrations required by input timelines are available. */
+    public synchronized boolean timelineAvailable() {
+        return runtime.commands().isPresent()
+                && runtime.controls().acknowledgedTicksAvailable()
+                && runtime.simulation().state().configured()
+                && !inputs.isEmpty();
+    }
+
     /** Package-private close observation: number of retained application input handlers. */
     synchronized int retainedInputHandlers() {
         return handlers.size();
@@ -76,12 +108,15 @@ public final class InputRegistry {
     void close() {
         synchronized (submissionLock) {
             synchronized (this) {
+                timelines.close();
                 handlers.clear();
                 requests.clear();
+                timelineParentIds.clear();
                 scheduled.clear();
                 executedByTick.clear();
                 outstanding = 0;
                 determinismExecuting = false;
+                timelineExecuting = false;
             }
         }
     }
@@ -114,9 +149,9 @@ public final class InputRegistry {
         Evidence evidence;
         boolean existing;
         synchronized (this) {
-            if (determinismExecuting) {
+            if (determinismExecuting || timelineExecuting) {
                 throw new AgentRuntimeException(RuntimeErrorCode.INVALID_LIFECYCLE,
-                        "input injection is unavailable during determinism execution");
+                        "input injection is unavailable during exclusive input execution");
             }
             descriptor = inputs.get(inputId);
             if (descriptor == null) {
@@ -124,8 +159,16 @@ public final class InputRegistry {
             }
             handler = handlers.get(inputId);
             validate(descriptor, parameters);
+            if (timelineParentIds.contains(requestId)) {
+                throw new IllegalArgumentException(
+                        "request id is reserved by an input timeline");
+            }
             evidence = requests.get(requestId);
             existing = evidence != null;
+            if (evidence != null && evidence.timelineParentId != null) {
+                throw new IllegalArgumentException(
+                        "request id is reserved by an input timeline");
+            }
             if (evidence != null && (!evidence.inputId.equals(inputId)
                     || !evidence.parameters.equals(parameters)
                     || !evidence.requestedTargetTick.equals(requestedTargetTick))) {
@@ -182,30 +225,75 @@ public final class InputRegistry {
         Error firstError = null;
         while (!due.isEmpty()) {
             Evidence evidence = due.removeFirst();
+            if (evidence.state != InputInjectionState.SCHEDULED) {
+                continue;
+            }
             outstanding--;
             evidence.actualTick = OptionalLong.of(tick);
             executed.add(evidence);
+            beginLogicalExecution(evidence);
             if (!evidence.executionEpochId.equals(epochId)) {
                 evidence.state = InputInjectionState.FAILED;
                 evidence.diagnostic = Optional.of("execution epoch changed before target tick");
+                completeLogicalExecution(evidence, CommandState.FAILED);
+                if (timelineExecuting) {
+                    evidence.timelineNotExecuted = true;
+                    stopRemainingTimelineChildren(due,
+                            InputTimelineCanonicalSize.LIFECYCLE_CHANGED_MESSAGE);
+                    executedByTick.put(tick, List.copyOf(executed));
+                    throw new AgentRuntimeException(RuntimeErrorCode.INVALID_LIFECYCLE,
+                            "input timeline lifecycle changed before target tick");
+                }
                 continue;
             }
             evidence.recordedParameters = evidence.parametersRedacted
                     ? Optional.empty() : Optional.of(evidence.parameters);
             try {
                 evidence.handler.accept(new InputParameters(evidence.parameters));
-                evidence.state = InputInjectionState.EXECUTED;
             } catch (RuntimeException failure) {
                 evidence.state = InputInjectionState.FAILED;
                 recordFailure(evidence, "input.execution", failure);
+                completeLogicalExecution(evidence, CommandState.FAILED);
+                if (timelineExecuting) {
+                    stopRemainingTimelineChildren(due,
+                            InputTimelineCanonicalSize.INPUT_FAILED_MESSAGE);
+                    executedByTick.put(tick, List.copyOf(executed));
+                    throw failure;
+                }
                 if (firstRuntimeFailure == null) {
                     firstRuntimeFailure = failure;
                 }
+                continue;
             } catch (Error failure) {
                 evidence.state = InputInjectionState.FAILED;
                 recordFailure(evidence, "input.execution", failure);
+                completeLogicalExecution(evidence, CommandState.FAILED);
+                if (timelineExecuting) {
+                    stopRemainingTimelineChildren(due,
+                            InputTimelineCanonicalSize.INPUT_FAILED_MESSAGE);
+                    executedByTick.put(tick, List.copyOf(executed));
+                    throw failure;
+                }
                 if (firstError == null) {
                     firstError = failure;
+                }
+                continue;
+            }
+            evidence.state = InputInjectionState.EXECUTED;
+            completeLogicalExecution(evidence, CommandState.SUCCEEDED);
+            if (timelineExecuting) {
+                if (runtime.monotonicTimeNanos() >= timelineDeadlineNanos) {
+                    stopRemainingTimelineChildren(due,
+                            InputTimelineCanonicalSize.TIMED_OUT_MESSAGE);
+                    executedByTick.put(tick, List.copyOf(executed));
+                    throw new InputTimelineExecutor.InputTimelineDeadlineExceeded();
+                }
+                if (!runtime.currentEpoch().equals(evidence.executionEpochId)) {
+                    stopRemainingTimelineChildren(due,
+                            InputTimelineCanonicalSize.LIFECYCLE_CHANGED_MESSAGE);
+                    executedByTick.put(tick, List.copyOf(executed));
+                    throw new AgentRuntimeException(RuntimeErrorCode.INVALID_LIFECYCLE,
+                            "input timeline lifecycle changed before the next transition");
                 }
             }
         }
@@ -218,11 +306,21 @@ public final class InputRegistry {
         }
     }
 
+    private void stopRemainingTimelineChildren(ArrayDeque<Evidence> due, String diagnostic) {
+        while (!due.isEmpty()) {
+            Evidence remaining = due.removeFirst();
+            outstanding--;
+            remaining.state = InputInjectionState.FAILED;
+            remaining.timelineNotExecuted = true;
+            remaining.diagnostic = Optional.of(boundedDiagnostic(diagnostic));
+        }
+    }
+
     void beginDeterminism(List<SimulationDeterminismInput> script) {
         Objects.requireNonNull(script, "script");
         synchronized (submissionLock) {
             synchronized (this) {
-                if (determinismExecuting) {
+                if (determinismExecuting || timelineExecuting) {
                     throw new IllegalStateException("determinism input execution is already active");
                 }
                 if (outstanding != 0 || !scheduled.isEmpty() || !executedByTick.isEmpty()) {
@@ -242,6 +340,14 @@ public final class InputRegistry {
                     "determinism execution requires an empty ordinary input queue");
         }
         validateDeterminismScript(script);
+    }
+
+    synchronized void validateReplayCaptureReady() {
+        if (determinismExecuting || timelineExecuting || outstanding != 0
+                || !scheduled.isEmpty() || !executedByTick.isEmpty()) {
+            throw new AgentRuntimeException(RuntimeErrorCode.INVALID_LIFECYCLE,
+                    "replay capture requires an empty ordinary input queue");
+        }
     }
 
     private void validateDeterminismScript(List<SimulationDeterminismInput> script) {
@@ -279,6 +385,8 @@ public final class InputRegistry {
         List<Evidence> executed = executedByTick.remove(tick);
         if (executed != null) {
             executed.forEach(evidence -> evidence.resultingFrameId = Optional.of(resultingFrameId));
+            executed.stream().filter(evidence -> evidence.timelineParentId != null)
+                    .forEach(evidence -> snapshot(evidence, logicalLookup(evidence)));
         }
     }
 
@@ -321,6 +429,7 @@ public final class InputRegistry {
                 evidence.recordedParameters, evidence.parametersRedacted, evidence.diagnostic,
                 evidence.applicationFailure);
         runtime.recordings().recordInput(injection);
+        runtime.replays().recordInput(injection);
         return injection;
     }
 
@@ -329,8 +438,260 @@ public final class InputRegistry {
         if (evidence == null || runtime.commands().isEmpty()) {
             return Optional.empty();
         }
-        return Optional.of(snapshot(
-                evidence, runtime.commands().orElseThrow().status(requestId)));
+        CommandLookup lookup = evidence.timelineParentId == null
+                ? runtime.commands().orElseThrow().status(requestId)
+                : logicalLookup(evidence);
+        return Optional.of(snapshot(evidence, lookup));
+    }
+
+    synchronized int effectiveTimelineTransitions() {
+        return Math.min(timelineLimits.maximumTransitions(),
+                Math.min(limits.queuedInputs(), limits.retainedInjections()));
+    }
+
+    synchronized TimelineReservation planTimelineReservation(InputTimelineSpec spec,
+            String parentRequestId, CommandDispatch dispatch, long startingControlledTick,
+            ExecutionEpochId executionEpochId, List<String> parentEvictions) {
+        Set<String> parentEvictionSet = new HashSet<>(parentEvictions);
+        validateTimeline(spec, parentRequestId, dispatch, parentEvictionSet);
+        long retained = requests.values().stream().filter(evidence ->
+                evidence.timelineParentId == null
+                        || !parentEvictionSet.contains(evidence.timelineParentId)).count();
+        ArrayList<String> ordinaryEvictions = new ArrayList<>();
+        for (Map.Entry<String, Evidence> entry : requests.entrySet()) {
+            if (retained + spec.transitions().size() <= limits.retainedInjections()) {
+                break;
+            }
+            Evidence evidence = entry.getValue();
+            if (evidence.timelineParentId == null
+                    && (evidence.state == InputInjectionState.EXECUTED
+                            || evidence.state == InputInjectionState.FAILED)) {
+                ordinaryEvictions.add(entry.getKey());
+                retained--;
+            }
+        }
+        if (retained + spec.transitions().size() > limits.retainedInjections()) {
+            throw new AgentRuntimeException(RuntimeErrorCode.LIMIT_EXCEEDED,
+                    "input result retention limit reached");
+        }
+        Optional<FrameId> submittedFrameId = runtime.latestFrame().map(FrameSnapshot::frameId);
+        ArrayList<Evidence> reservations = new ArrayList<>(spec.transitions().size());
+        for (InputTimelineTransition transition : spec.transitions()) {
+            long targetTick = Math.addExact(
+                    startingControlledTick, (long) transition.timelineTick());
+            InputDescriptor descriptor = inputs.get(transition.inputId());
+            Evidence evidence = new Evidence(transition.inputId(), transition.transitionId(),
+                    transition.parameters(), OptionalLong.of(targetTick), targetTick,
+                    executionEpochId, submittedFrameId,
+                    descriptor.redactionPolicy() == InputRedactionPolicy.OMIT_PARAMETERS);
+            evidence.handler = handlers.get(transition.inputId());
+            evidence.timelineParentId = parentRequestId;
+            reservations.add(evidence);
+        }
+        return new TimelineReservation(parentRequestId,
+                parentEvictions, ordinaryEvictions, reservations,
+                new LinkedHashMap<>(requests), List.copyOf(timelineParentIds),
+                outstanding, timelineExecuting);
+    }
+
+    synchronized void commitTimelineReservation(TimelineReservation reservation) {
+        Set<String> parentEvictions = new HashSet<>(reservation.parentEvictions);
+        requests.entrySet().removeIf(entry -> entry.getValue().timelineParentId != null
+                && parentEvictions.contains(entry.getValue().timelineParentId));
+        for (String requestId : reservation.ordinaryEvictions) {
+            requests.remove(requestId);
+        }
+        for (Evidence evidence : reservation.reservations) {
+            requests.put(evidence.requestId, evidence);
+        }
+        timelineParentIds.removeAll(reservation.parentEvictions);
+        timelineParentIds.add(reservation.parentRequestId);
+        outstanding += reservation.reservations.size();
+        timelineExecuting = true;
+    }
+
+    synchronized void rollbackTimelineReservation(TimelineReservation reservation) {
+        requests.clear();
+        requests.putAll(reservation.previousRequests);
+        timelineParentIds.clear();
+        timelineParentIds.addAll(reservation.previousParentIds);
+        outstanding = reservation.previousOutstanding;
+        timelineExecuting = reservation.previousTimelineExecuting;
+    }
+
+    private void validateTimeline(InputTimelineSpec spec, String parentRequestId,
+            CommandDispatch dispatch, Set<String> parentEvictions) {
+        if (determinismExecuting || timelineExecuting
+                || outstanding != 0 || !scheduled.isEmpty() || !executedByTick.isEmpty()) {
+            throw new AgentRuntimeException(RuntimeErrorCode.INVALID_LIFECYCLE,
+                    "input timeline requires an empty ordinary input queue");
+        }
+        if (spec.transitions().size() > effectiveTimelineTransitions()) {
+            throw new AgentRuntimeException(RuntimeErrorCode.LIMIT_EXCEEDED,
+                    "input timeline transition count exceeds the effective limit");
+        }
+        if (retainedAfterParentEvictions(parentRequestId, parentEvictions)
+                || retainedParentIdAfterEvictions(parentRequestId, parentEvictions)) {
+            throw new IllegalArgumentException(
+                    "input timeline parent id collides with input evidence");
+        }
+        for (InputTimelineTransition transition : spec.transitions()) {
+            if (transition.transitionId().equals(parentRequestId)) {
+                throw new IllegalArgumentException(
+                        "input timeline parent and transition ids must differ");
+            }
+            InputDescriptor descriptor = inputs.get(transition.inputId());
+            Consumer<InputParameters> handler = handlers.get(transition.inputId());
+            if (descriptor == null || handler == null) {
+                throw new IllegalArgumentException("unknown input timeline input id");
+            }
+            validate(descriptor, transition.parameters());
+            if (retainedAfterParentEvictions(
+                            transition.transitionId(), parentEvictions)
+                    || retainedParentIdAfterEvictions(
+                            transition.transitionId(), parentEvictions)
+                    || dispatch.status(transition.transitionId()).kind()
+                            != CommandLookup.Kind.UNKNOWN) {
+                throw new IllegalArgumentException(
+                        "input timeline transition id collides with retained evidence");
+            }
+        }
+    }
+
+    private boolean retainedAfterParentEvictions(
+            String requestId, Set<String> parentEvictions) {
+        Evidence evidence = requests.get(requestId);
+        return evidence != null && (evidence.timelineParentId == null
+                || !parentEvictions.contains(evidence.timelineParentId));
+    }
+
+    private boolean retainedParentIdAfterEvictions(
+            String requestId, Set<String> parentEvictions) {
+        return timelineParentIds.contains(requestId) && !parentEvictions.contains(requestId);
+    }
+
+    synchronized void stageTimeline(InputTimelineSpec spec, String parentRequestId,
+            long startingControlledTick, ExecutionEpochId executionEpochId,
+            CommandStatus parentStatus) {
+        if (!timelineExecuting) {
+            throw new IllegalStateException("input timeline execution is not reserved");
+        }
+        timelineDeadlineNanos = parentStatus.deadlineNanos();
+        for (InputTimelineTransition transition : spec.transitions()) {
+            Evidence evidence = requireTimelineEvidence(
+                    transition.transitionId(), parentRequestId);
+            evidence.targetTick = Math.addExact(
+                    startingControlledTick, (long) transition.timelineTick());
+            evidence.executionEpochId = executionEpochId;
+            evidence.logicalStatus = new CommandStatus(evidence.requestId, CommandState.QUEUED,
+                    parentStatus.submittedAtNanos(), parentStatus.deadlineNanos(),
+                    Optional.empty(), Optional.empty(), false,
+                    Optional.empty(), Optional.empty());
+            scheduled.computeIfAbsent(evidence.targetTick, ignored -> new ArrayDeque<>())
+                    .addLast(evidence);
+            evidence.state = InputInjectionState.SCHEDULED;
+            snapshot(evidence, logicalLookup(evidence));
+        }
+    }
+
+    /**
+     * Releases exclusive timeline staging, marking any unattempted child as terminal without
+     * running its handler, removing it from its future scheduled bucket, and always clearing the
+     * exclusive execution flag.
+     */
+    synchronized void releaseTimeline(String parentRequestId, String diagnostic) {
+        for (Evidence evidence : requests.values()) {
+            if (!parentRequestId.equals(evidence.timelineParentId)) {
+                continue;
+            }
+            if (evidence.state == InputInjectionState.QUEUED
+                    || evidence.state == InputInjectionState.SCHEDULED) {
+                outstanding--;
+                evidence.state = InputInjectionState.FAILED;
+                evidence.timelineNotExecuted = true;
+                evidence.diagnostic = Optional.of(boundedDiagnostic(diagnostic));
+                removeScheduled(evidence);
+            }
+        }
+        timelineExecuting = false;
+    }
+
+    private void removeScheduled(Evidence evidence) {
+        ArrayDeque<Evidence> bucket = scheduled.get(evidence.targetTick);
+        if (bucket == null) {
+            return;
+        }
+        bucket.removeIf(candidate -> candidate == evidence);
+        if (bucket.isEmpty()) {
+            scheduled.remove(evidence.targetTick);
+        }
+    }
+
+    /** Returns the first bounded structured failure of an attempted timeline child, if any. */
+    synchronized Optional<ApplicationFailureEvidence> timelineChildFailure(
+            String parentRequestId) {
+        for (Evidence evidence : requests.values()) {
+            if (parentRequestId.equals(evidence.timelineParentId)
+                    && evidence.state == InputInjectionState.FAILED
+                    && !evidence.timelineNotExecuted) {
+                return evidence.applicationFailure;
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Returns terminal injection evidence for an attempted timeline transition, or empty when the
+     * transition was never attempted and must be reported as {@code NOT_EXECUTED}.
+     */
+    synchronized Optional<InputInjection> attemptedTimelineInjection(
+            String transitionId, String parentRequestId) {
+        Evidence evidence = requireTimelineEvidence(transitionId, parentRequestId);
+        if (evidence.state != InputInjectionState.EXECUTED
+                && (evidence.state != InputInjectionState.FAILED
+                        || evidence.timelineNotExecuted)) {
+            return Optional.empty();
+        }
+        return Optional.of(snapshot(evidence, logicalLookup(evidence)));
+    }
+
+    private Evidence requireTimelineEvidence(String transitionId, String parentRequestId) {
+        Evidence evidence = requests.get(transitionId);
+        if (evidence == null || !parentRequestId.equals(evidence.timelineParentId)) {
+            throw new IllegalStateException("input timeline reservation is unavailable");
+        }
+        return evidence;
+    }
+
+    private void beginLogicalExecution(Evidence evidence) {
+        if (evidence.logicalStatus == null) {
+            return;
+        }
+        long started = Math.max(
+                evidence.logicalStatus.submittedAtNanos(), runtime.monotonicTimeNanos());
+        evidence.logicalStatus = new CommandStatus(evidence.requestId, CommandState.EXECUTING,
+                evidence.logicalStatus.submittedAtNanos(), evidence.logicalStatus.deadlineNanos(),
+                Optional.of(started), Optional.empty(), false,
+                Optional.empty(), Optional.empty());
+    }
+
+    private void completeLogicalExecution(Evidence evidence, CommandState state) {
+        if (evidence.logicalStatus == null) {
+            return;
+        }
+        long started = evidence.logicalStatus.startedAtNanos().orElseThrow();
+        long completed = Math.max(started, runtime.monotonicTimeNanos());
+        evidence.logicalStatus = new CommandStatus(evidence.requestId, state,
+                evidence.logicalStatus.submittedAtNanos(), evidence.logicalStatus.deadlineNanos(),
+                Optional.of(started), Optional.of(completed), true,
+                evidence.diagnostic, evidence.applicationFailure);
+    }
+
+    private static CommandLookup logicalLookup(Evidence evidence) {
+        if (evidence.logicalStatus == null) {
+            throw new IllegalStateException("logical input command status is unavailable");
+        }
+        return CommandLookup.found(evidence.logicalStatus);
     }
 
     private void reconcileTerminalDispatch(Evidence evidence, CommandLookup command) {
@@ -415,8 +776,13 @@ public final class InputRegistry {
     }
 
     private synchronized void makeRoom() {
-        while (requests.size() >= limits.retainedInjections()) {
+        makeRoom(1);
+    }
+
+    private synchronized void makeRoom(int requestedCapacity) {
+        while ((long) requests.size() + requestedCapacity > limits.retainedInjections()) {
             String removable = requests.entrySet().stream()
+                    .filter(entry -> entry.getValue().timelineParentId == null)
                     .filter(entry -> entry.getValue().state == InputInjectionState.EXECUTED
                             || entry.getValue().state == InputInjectionState.FAILED)
                     .map(Map.Entry::getKey).findFirst().orElseThrow(() ->
@@ -462,8 +828,8 @@ public final class InputRegistry {
         private final String requestId;
         private final RuntimeValue.ObjectValue parameters;
         private final OptionalLong requestedTargetTick;
-        private final long targetTick;
-        private final ExecutionEpochId executionEpochId;
+        private long targetTick;
+        private ExecutionEpochId executionEpochId;
         private final Optional<FrameId> submittedFrameId;
         private final boolean parametersRedacted;
         private Consumer<InputParameters> handler;
@@ -473,6 +839,9 @@ public final class InputRegistry {
         private Optional<RuntimeValue.ObjectValue> recordedParameters = Optional.empty();
         private Optional<String> diagnostic = Optional.empty();
         private Optional<ApplicationFailureEvidence> applicationFailure = Optional.empty();
+        private String timelineParentId;
+        private CommandStatus logicalStatus;
+        private boolean timelineNotExecuted;
 
         Evidence(String inputId, String requestId, RuntimeValue.ObjectValue parameters,
                 OptionalLong requestedTargetTick, long targetTick,
@@ -486,6 +855,32 @@ public final class InputRegistry {
             this.executionEpochId = executionEpochId;
             this.submittedFrameId = submittedFrameId;
             this.parametersRedacted = parametersRedacted;
+        }
+    }
+
+    static final class TimelineReservation {
+        private final String parentRequestId;
+        private final List<String> parentEvictions;
+        private final List<String> ordinaryEvictions;
+        private final List<Evidence> reservations;
+        private final LinkedHashMap<String, Evidence> previousRequests;
+        private final List<String> previousParentIds;
+        private final int previousOutstanding;
+        private final boolean previousTimelineExecuting;
+
+        private TimelineReservation(String parentRequestId, List<String> parentEvictions,
+                List<String> ordinaryEvictions, List<Evidence> reservations,
+                LinkedHashMap<String, Evidence> previousRequests,
+                List<String> previousParentIds, int previousOutstanding,
+                boolean previousTimelineExecuting) {
+            this.parentRequestId = parentRequestId;
+            this.parentEvictions = List.copyOf(parentEvictions);
+            this.ordinaryEvictions = List.copyOf(ordinaryEvictions);
+            this.reservations = List.copyOf(reservations);
+            this.previousRequests = previousRequests;
+            this.previousParentIds = previousParentIds;
+            this.previousOutstanding = previousOutstanding;
+            this.previousTimelineExecuting = previousTimelineExecuting;
         }
     }
 }

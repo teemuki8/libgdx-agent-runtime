@@ -40,8 +40,12 @@ public record ProtocolVersion(int major, int minor) {
     public static final ProtocolVersion V2_3 = new ProtocolVersion(2, 3);
     /** Tick-aware simulation determinism protocol version. */
     public static final ProtocolVersion V2_4 = new ProtocolVersion(2, 4);
+    /** Replay-ready recording and deterministic replay protocol version. */
+    public static final ProtocolVersion V2_5 = new ProtocolVersion(2, 5);
+    /** Bounded exact-tick registered-input timeline protocol version. */
+    public static final ProtocolVersion V2_6 = new ProtocolVersion(2, 6);
     /** Latest implemented protocol version. */
-    public static final ProtocolVersion CURRENT = V2_4;
+    public static final ProtocolVersion CURRENT = V2_6;
 
     /** Validates version components. */
     public ProtocolVersion {
@@ -72,6 +76,13 @@ public record ProtocolVersion(int major, int minor) {
      */
     public boolean capability(RuntimeCommand command) {
         if (isV2()) {
+            if (command instanceof RuntimeCommand.InputTimeline) {
+                return minor() >= 6;
+            }
+            if (command instanceof RuntimeCommand.ReplayRecordingStart
+                    || command instanceof RuntimeCommand.Replay) {
+                return minor() >= 5;
+            }
             if (command instanceof RuntimeCommand.SimulationDeterminismCheck) {
                 return minor() >= 4;
             }
@@ -93,6 +104,8 @@ public record ProtocolVersion(int major, int minor) {
             return false;
         }
         return switch (command) {
+            case RuntimeCommand.InputTimeline _ -> false;
+            case RuntimeCommand.ReplayRecordingStart _, RuntimeCommand.Replay _ -> false;
             case RuntimeCommand.SimulationDeterminismCheck _ -> false;
             case RuntimeCommand.SimulationAssert _ -> false;
             case RuntimeCommand.FixedStep _, RuntimeCommand.FixedStepUpdates _,
@@ -122,6 +135,9 @@ public record ProtocolVersion(int major, int minor) {
     /** Returns the exact required-version message for one unsupported command. */
     public String requiredVersionMessage(RuntimeCommand command) {
         return switch (command) {
+            case RuntimeCommand.InputTimeline _ -> "command requires protocol version 2.6";
+            case RuntimeCommand.ReplayRecordingStart _, RuntimeCommand.Replay _ ->
+                    "command requires protocol version 2.5";
             case RuntimeCommand.SimulationDeterminismCheck _ ->
                     "command requires protocol version 2.4";
             case RuntimeCommand.SimulationAssert _ ->

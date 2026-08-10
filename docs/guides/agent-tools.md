@@ -54,6 +54,9 @@ strict closed input schemas (`additionalProperties: false`), and a maximum reque
 | `runtime_simulation_advance`************ | `sessionId`, `controlRequestId`, `ticks`, `timeoutNanos` | none |
 | `runtime_simulation_assert`************* | `sessionId`, `executionEpochId`, `fromEpochTick`, `toEpochTick`, `evidenceLimit`, `evidenceRequirements`, `assertion` | assertion-specific closed fields |
 | `runtime_simulation_determinism_check`************** | `sessionId`, `determinismRequestId`, `scenarioId`, `randomSeed`, `configuration`, `repeatCount`, `ticksPerRepeat`, `deltaNanos`, `profile`, `inputs`, `configurationRequirements`, `evidenceRequirements`, `eventTypes`, `timeoutNanos` | none |
+| `runtime_replay_recording_start`*************** | `sessionId`, `recordingId`, `replayRequestId`, `originKind`, `originId`, `configuration`, `profile`, `configurationRequirements`, `evidenceRequirements`, `eventTypes`, `timeoutNanos` | `randomSeed` |
+| `runtime_replay`*************** | `sessionId`, `recordingId`, `replayRequestId`, `timeoutNanos` | none |
+| `runtime_input_timeline`**************** | `sessionId`, `timelineRequestId`, `totalTicks`, `transitions`, `timeoutNanos` | none |
 
 \* Command tools are included in the server-start catalog only when at least one published runtime
 has explicitly registered application command dispatch. They use protocol 1.2.
@@ -118,6 +121,20 @@ registered inputs, checks at most 32 exact configuration facts and eight per-tic
 facts, and compares at most 16 selected event types. Protocol 2.3 rejects the command before
 execution.
 
+\*\*\*\*\*\*\*\*\*\*\*\*\*\*\* Replay execution uses exact protocol 2.5 and is advertised only
+when a published runtime has application dispatch, acknowledged control, a fixed simulation step,
+recording support, and a registered scenario or checkpoint origin. Requests select at most 32
+configuration facts, eight completeness facts, and 16 event types; execution uses independent
+input, tick, entity, fact, byte, operation-retention, and deadline bounds.
+
+\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\* Input timelines use exact protocol 2.6 and are always present in
+the server-start catalog, but the capability is available only when a published runtime has
+application dispatch, acknowledged paused control, a configured fixed step, and at least one
+registered input. `runtime_input_timeline` submits or polls one bounded exact-tick sequence of
+registered scalar transitions; each transition constrains `inputId` to one registered input's
+exact descriptor, and the effective transition/tick ceilings are the minima of timeline, input,
+control, and dispatch bounds. Protocol 2.5 rejects the command before dispatch.
+
 Every identifier is a nonblank string of at most 256 UTF-16 code units. Frame fields are
 non-negative integers. Prefix matching is available only where the schema has an explicit prefix
 boolean; there are no regular expressions or generic expressions.
@@ -135,7 +152,11 @@ fixed-step accumulator state, update reports, and configured-step advancement. P
 additively provides exact-tick simulation assertions; protocol 2.2 rejects that command before
 execution. Protocol 2.4 additively provides
 exact-tick simulation determinism with scheduled registered inputs and actual tick correlations;
-protocol 2.3 rejects that command before execution. Earlier exact versions reject later commands.
+protocol 2.3 rejects that command before execution. Protocol 2.5 adds replay-ready capture and
+execution with `EQUAL`, first `DIVERGED`, or safe `INCONCLUSIVE` evidence; 2.4 rejects those
+commands before dispatch. Protocol 2.6 adds bounded exact-tick registered-input timelines with
+fail-stop transition evidence; 2.5 rejects that command before dispatch. Earlier exact versions
+reject later commands.
 Attributed fact queries use protocol 1.5. Their `sourceSubsystem` is separate from the event `source`
 entity ID. A `sourceLocation` in output is an unverified, bounded application-provided label;
 correlation indicates association, not inferred causality.
@@ -313,6 +334,29 @@ reports the exact dimension, observed value, retained value, configured limit, a
 incomplete-reproduction flag. Retention eviction returns `RECORDING_EVICTED`. The runtime does not
 record raw platform events and does not replay a manifest.
 
+`runtime_replay_recording_start` is the only path that captures an executable sidecar. It maps one
+closed `originKind` plus `originId` to exactly one registered scenario reset or retained opaque
+checkpoint, freezes selected baseline/tick evidence and successful non-redacted registered inputs,
+and shares ordinary recording stop/eviction. `runtime_replay` restores that origin, applies inputs
+in recorded tick/order, advances the registered fixed step, and stops at the first selected
+difference. It never replays semantic actions, OS input, arbitrary objects, or inferred mutations.
+
+`runtime_input_timeline` validates and reserves the complete request before mutation, submits one
+parent command through the application-owned dispatcher, and advances exactly one acknowledged
+fixed tick per local tick. Transitions sharing a local tick execute in list order immediately
+before that tick; ticks without transitions still advance (idle ticks). Local tick 1 is the next
+session controlled tick, and the authoritative epoch-relative tick and frame correlation stay on
+the normal `InputInjection` and `SimulationTick` evidence. Persistent held controls remain
+application-owned: callers send explicit boolean start/stop transitions and decimal analog values,
+and the runtime never interpolates, releases, or injects OS input. Execution is fail-stop with no
+rollback or automatic retry: a failed transition or tick stops later same-tick and later
+transitions as `NOT_EXECUTED`, partial mutation and authoritative completed ticks/frames are
+retained, and the terminal result reports the bounded reason with requested/completed ticks and
+executed/failed/not-executed transition counts. Timeout, lifecycle drift, evidence limits, and
+cleanup failures fail closed and never report false `COMPLETED`. Recording schema 1 and replay
+consume the timeline's normal input/tick evidence; failed, redacted, timed-out, or
+lifecycle-invalidated timeline evidence makes replay capture inconclusive.
+
 ## Determinism comparison
 
 `runtime_determinism_check` starts or polls one at-most-once repeated-scenario operation. Each
@@ -390,5 +434,6 @@ fixture retains stable frame-45 state until its client closes stdin.
 The same unpublished module contains `Box2dConformanceApplication` and
 `Box2dConformanceFixtureTest`. Under Xvfb they run actual LWJGL3 and Box2D desktop natives through
 the canonical fixed-step loop, stable registered physics evidence, contact callbacks, exact
-assertions, protocol 2.3/2.4, MCP, and selected-evidence determinism. Screenshots are not used as
+assertions, protocol 2.3-2.6, MCP, selected-evidence determinism, replay, and exact-tick input
+timelines. Screenshots are not used as
 authoritative evidence.

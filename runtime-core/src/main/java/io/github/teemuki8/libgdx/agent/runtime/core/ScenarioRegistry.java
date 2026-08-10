@@ -150,6 +150,15 @@ public final class ScenarioRegistry {
         return runtime.executeScenarioReset(() -> reset.reset(context));
     }
 
+    synchronized boolean replayAvailable(String scenarioId) {
+        CatalogEntry entry = entries.get(scenarioId);
+        return entry != null && entry.deterministic() && resetHandlers.containsKey(scenarioId);
+    }
+
+    FrameId resetForReplay(String scenarioId, ScenarioResetContext context) {
+        return resetForDeterminism(scenarioId, context);
+    }
+
     public ScenarioLimits limits() {
         return limits;
     }

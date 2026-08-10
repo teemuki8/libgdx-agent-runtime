@@ -6,6 +6,10 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.badlogic.gdx.physics.box2d.Box2D;
+import com.badlogic.gdx.utils.GdxNativesLoader;
+import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dDeterminism;
+import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dVector;
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
 import io.github.teemuki8.libgdx.agent.runtime.core.ApplicationFailureEvidence;
 import io.github.teemuki8.libgdx.agent.runtime.core.CommandState;
@@ -41,11 +45,109 @@ import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 final class FixtureProtocolAndMcpTest {
+    @Test
+    void actualNativeReplayCrossesProtocolAndMcpWithStructuredEquality() {
+        GdxNativesLoader.load();
+        Box2D.init();
+        ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
+        try (Box2dConformanceSimulation fixture =
+                new Box2dConformanceSimulation(applicationQueue::addLast)) {
+            AgentRuntime runtime = fixture.runtime();
+            runtime.controls().control(true, "transport-replay-pause", Duration.ofSeconds(2));
+            applicationQueue.removeFirst().run();
+            RuntimeRegistry registry = new RuntimeRegistry();
+            try (PublishedRuntime publication = registry.publish(runtime);
+                    RuntimeToolHandler handler =
+                            new RuntimeToolHandler(new RuntimeProtocolService(registry))) {
+                assertEquals(runtime.sessionId(), publication.sessionId());
+                var settings = new Box2dDeterminism.WorldSettings(
+                        Box2dConformanceSimulation.FIXED_STEP_NANOS,
+                        new Box2dVector(0, 0), 8, 3, true, true, true);
+                var template = Box2dDeterminism.builder(
+                                "main", settings, Box2dConformanceSimulation.PLAYER_MOVEMENT,
+                                7, RuntimeValues.object(), 2, 120)
+                        .body("player", "position", "linearVelocity")
+                        .activeContacts()
+                        .build();
+                RuntimeProtocolService protocol = new RuntimeProtocolService(registry);
+                RuntimeCommand.ReplayRecordingStart start =
+                        new RuntimeCommand.ReplayRecordingStart(
+                                "native-transport-replay", "start-native-transport-replay",
+                                Box2dConformanceSimulation.PLAYER_MOVEMENT, null, 7L,
+                                RuntimeValues.object(), template.execution().profile(),
+                                template.configurationRequirements(),
+                                template.evidenceRequirements(), template.eventTypes(),
+                                Duration.ofSeconds(5).toNanos());
+                RuntimeRequest startRequest = new RuntimeRequest(
+                        ProtocolVersion.V2_5, "native-replay-start",
+                        runtime.sessionId().value(), start);
+                assertInstanceOf(RuntimeResponse.Success.class,
+                        protocol.execute(startRequest));
+                applicationQueue.removeFirst().run();
+                RuntimeResponse.Result.ReplayCapture captured = assertInstanceOf(
+                        RuntimeResponse.Result.ReplayCapture.class,
+                        assertInstanceOf(RuntimeResponse.Success.class,
+                                protocol.execute(startRequest)).result());
+                assertEquals(CommandState.SUCCEEDED,
+                        captured.operation().command().status().orElseThrow().state());
+
+                long targetTick = runtime.controls().currentTick() + 1;
+                runtime.inputs().inject("move-player", "native-transport-input",
+                        RuntimeValues.object(RuntimeValues.field(
+                                "velocityX", RuntimeValues.decimal("4"))),
+                        OptionalLong.of(targetTick), Duration.ofSeconds(2));
+                applicationQueue.removeFirst().run();
+                runtime.controls().advanceFixed(
+                        "native-transport-advance", 120, Duration.ofSeconds(10));
+                applicationQueue.removeFirst().run();
+                RuntimeRequest stopRequest = new RuntimeRequest(
+                        ProtocolVersion.V2, "native-replay-stop",
+                        runtime.sessionId().value(),
+                        new RuntimeCommand.RecordingStop(
+                                "native-transport-replay",
+                                "stop-native-transport-replay",
+                                Duration.ofSeconds(5).toNanos()));
+                assertInstanceOf(RuntimeResponse.Success.class,
+                        protocol.execute(stopRequest));
+                applicationQueue.removeFirst().run();
+                RuntimeResponse.Result.RecordingOperationResult stopped = assertInstanceOf(
+                        RuntimeResponse.Result.RecordingOperationResult.class,
+                        assertInstanceOf(RuntimeResponse.Success.class,
+                                protocol.execute(stopRequest)).result());
+                assertEquals(CommandState.SUCCEEDED,
+                        stopped.operation().command().status().orElseThrow().state());
+
+                Map<String, Object> replayRequest = Map.of(
+                        "sessionId", runtime.sessionId().value(),
+                        "recordingId", "native-transport-replay",
+                        "replayRequestId", "execute-native-transport-replay",
+                        "timeoutNanos", Duration.ofSeconds(20).toNanos());
+                assertFalse(handler.handle(call("runtime_replay", replayRequest))
+                        .block(Duration.ofSeconds(25)).isError());
+                applicationQueue.removeFirst().run();
+                McpSchema.CallToolResult replayed = handler.handle(call(
+                        "runtime_replay", replayRequest))
+                        .block(Duration.ofSeconds(25));
+                assertFalse(replayed.isError(), replayed::toString);
+                Map<?, ?> content = assertInstanceOf(Map.class, replayed.structuredContent());
+                assertEquals("replay", content.get("type"));
+                Map<?, ?> operation = assertInstanceOf(Map.class, content.get("operation"));
+                Map<?, ?> result = assertInstanceOf(Map.class, operation.get("result"));
+                assertEquals("EQUAL", result.get("status"));
+                Map<?, ?> bounds = assertInstanceOf(Map.class, result.get("bounds"));
+                assertEquals(120, bounds.get("requestedTicks"));
+                assertEquals(120, bounds.get("completedTicks"));
+                assertEquals(1, bounds.get("recordedInputs"));
+            }
+        }
+    }
+
     @Test
     void fixtureSimulationTickCorrelatesThroughJavaProtocolAndMcp() {
         DeterministicSimulation simulation = new DeterministicSimulation();

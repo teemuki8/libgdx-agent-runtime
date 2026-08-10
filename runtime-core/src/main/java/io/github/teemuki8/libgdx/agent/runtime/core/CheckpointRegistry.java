@@ -70,6 +70,25 @@ public final class CheckpointRegistry {
         return limits;
     }
 
+    synchronized boolean replayAvailable(String checkpointId) {
+        return provider != null && checkpoints.containsKey(checkpointId);
+    }
+
+    FrameId restoreForReplay(String checkpointId) {
+        Retained retained;
+        CheckpointProvider callbacks;
+        synchronized (this) {
+            retained = checkpoints.get(checkpointId);
+            if (retained == null) {
+                throw new IllegalArgumentException("unknown checkpoint id");
+            }
+            callbacks = requireProvider();
+        }
+        runtime.requireCheckpointMutation();
+        callbacks.restore(retained.handle());
+        return runtime.startEpoch(BaselineKind.CHECKPOINT_RESTORE);
+    }
+
     private CheckpointOperation submit(Request request, String requestId, Duration timeout) {
         runtime.requireSubmissionsOpen();
         CommandDispatch dispatch = runtime.commands().orElseThrow(() ->

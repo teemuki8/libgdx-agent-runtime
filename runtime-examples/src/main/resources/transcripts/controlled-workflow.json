@@ -29,7 +29,9 @@
     {
       "name": "scenarios",
       "tool": "runtime_scenarios",
-      "arguments": {"sessionId": "controlled-workflow-example"},
+      "arguments": {
+        "sessionId": "controlled-workflow-example"
+      },
       "dispatch": false,
       "expected": {
         "/type": "scenarios",
@@ -71,39 +73,69 @@
       }
     },
     {
-      "name": "input",
-      "tool": "runtime_input",
+      "name": "replay recording start",
+      "tool": "runtime_replay_recording_start",
       "arguments": {
         "sessionId": "controlled-workflow-example",
-        "input": "set-velocity",
-        "inputRequestId": "transcript-input",
-        "parameters": {"velocityX": 2},
-        "targetTick": 1,
+        "recordingId": "transcript-replay",
+        "replayRequestId": "transcript-replay-start",
+        "originKind": "scenario",
+        "originId": "walk",
+        "randomSeed": 7,
+        "configuration": [],
+        "profile": {
+          "comparisonScope": {
+            "entityIds": [
+              "player"
+            ],
+            "properties": [
+              "position",
+              "velocity"
+            ],
+            "excludedProperties": [],
+            "includeEvents": false,
+            "includeDecisions": false
+          },
+          "includeUiCorrelations": false
+        },
+        "configurationRequirements": [],
+        "evidenceRequirements": [],
+        "eventTypes": [],
         "timeoutNanos": 5000000000
       },
       "dispatch": true,
       "expected": {
-        "/type": "input",
-        "/injection/inputId": "set-velocity",
-        "/injection/state": "SCHEDULED",
-        "/injection/actualTick": null
+        "/type": "replayCapture",
+        "/operation/command/status/state": "SUCCEEDED",
+        "/operation/baselineExecutionEpochId/value": 2
       }
     },
     {
-      "name": "advance",
-      "tool": "runtime_simulation_advance",
+      "name": "input timeline",
+      "tool": "runtime_input_timeline",
       "arguments": {
         "sessionId": "controlled-workflow-example",
-        "controlRequestId": "transcript-advance",
-        "ticks": 2,
+        "timelineRequestId": "transcript-input-timeline",
+        "totalTicks": 2,
+        "transitions": [
+          {
+            "transitionId": "transcript-velocity",
+            "timelineTick": 1,
+            "inputId": "set-velocity",
+            "parameters": {
+              "velocityX": 2
+            }
+          }
+        ],
         "timeoutNanos": 5000000000
       },
       "dispatch": true,
       "expected": {
-        "/type": "control",
-        "/operation/kind": "ADVANCE",
+        "/type": "inputTimeline",
         "/operation/command/status/state": "SUCCEEDED",
-        "/operation/completedTicks": 2
+        "/operation/result/stopReason": "COMPLETED",
+        "/operation/result/bounds/completedTicks": 2,
+        "/operation/result/transitions/0/state": "EXECUTED"
       }
     },
     {
@@ -126,7 +158,7 @@
       "arguments": {
         "sessionId": "controlled-workflow-example",
         "fromFrame": 0,
-        "toFrame": 3,
+        "toFrame": 4,
         "eventType": "player.moved",
         "eventTypePrefix": false,
         "limit": 10
@@ -144,8 +176,8 @@
       "arguments": {
         "sessionId": "controlled-workflow-example",
         "fromFrame": 0,
-        "toFrame": 3,
-        "executionEpochId": 1,
+        "toFrame": 4,
+        "executionEpochId": 2,
         "evidenceLimit": 8,
         "assertion": {
           "assertionType": "eventOccurs",
@@ -164,7 +196,7 @@
       "tool": "runtime_simulation_assert",
       "arguments": {
         "sessionId": "controlled-workflow-example",
-        "executionEpochId": 1,
+        "executionEpochId": 2,
         "fromEpochTick": 1,
         "toEpochTick": 2,
         "evidenceLimit": 8,
@@ -173,7 +205,10 @@
           "assertionType": "vectorApproximatelyEquals",
           "entityId": "player",
           "property": "position",
-          "expected": {"x": 0.04, "y": 0},
+          "expected": {
+            "x": 0.04,
+            "y": 0
+          },
           "absoluteTolerance": 0.0001,
           "toleranceMode": "COMPONENT"
         }
@@ -184,6 +219,145 @@
         "/result/status": "PASS",
         "/result/assertionType": "vectorApproximatelyEquals",
         "/result/observed/valueType": "vector2"
+      }
+    },
+    {
+      "name": "replay recording stop",
+      "tool": "runtime_recording_stop",
+      "arguments": {
+        "sessionId": "controlled-workflow-example",
+        "recordingId": "transcript-replay",
+        "recordingRequestId": "transcript-replay-stop",
+        "timeoutNanos": 5000000000
+      },
+      "dispatch": true,
+      "expected": {
+        "/type": "recordingOperation",
+        "/operation/command/status/state": "SUCCEEDED"
+      }
+    },
+    {
+      "name": "replay",
+      "tool": "runtime_replay",
+      "arguments": {
+        "sessionId": "controlled-workflow-example",
+        "recordingId": "transcript-replay",
+        "replayRequestId": "transcript-replay-execute",
+        "timeoutNanos": 5000000000
+      },
+      "dispatch": true,
+      "expected": {
+        "/type": "replay",
+        "/operation/result/status": "EQUAL",
+        "/operation/result/bounds/requestedTicks": 2,
+        "/operation/result/bounds/completedTicks": 2
+      }
+    },
+    {
+      "name": "divergent replay recording start",
+      "tool": "runtime_replay_recording_start",
+      "arguments": {
+        "sessionId": "controlled-workflow-example",
+        "recordingId": "transcript-divergent-replay",
+        "replayRequestId": "transcript-divergent-replay-start",
+        "originKind": "scenario",
+        "originId": "walk-divergence",
+        "randomSeed": 7,
+        "configuration": [],
+        "profile": {
+          "comparisonScope": {
+            "entityIds": [
+              "player"
+            ],
+            "properties": [
+              "position",
+              "velocity"
+            ],
+            "excludedProperties": [],
+            "includeEvents": false,
+            "includeDecisions": false
+          },
+          "includeUiCorrelations": false
+        },
+        "configurationRequirements": [],
+        "evidenceRequirements": [],
+        "eventTypes": [],
+        "timeoutNanos": 5000000000
+      },
+      "dispatch": true,
+      "expected": {
+        "/type": "replayCapture",
+        "/operation/command/status/state": "SUCCEEDED",
+        "/operation/baselineExecutionEpochId/value": 4
+      }
+    },
+    {
+      "name": "divergent input",
+      "tool": "runtime_input",
+      "arguments": {
+        "sessionId": "controlled-workflow-example",
+        "input": "set-velocity",
+        "inputRequestId": "transcript-divergent-input",
+        "parameters": {
+          "velocityX": 2
+        },
+        "targetTick": 5,
+        "timeoutNanos": 5000000000
+      },
+      "dispatch": true,
+      "expected": {
+        "/type": "input",
+        "/injection/inputId": "set-velocity",
+        "/injection/state": "SCHEDULED"
+      }
+    },
+    {
+      "name": "divergent advance",
+      "tool": "runtime_simulation_advance",
+      "arguments": {
+        "sessionId": "controlled-workflow-example",
+        "controlRequestId": "transcript-divergent-advance",
+        "ticks": 1,
+        "timeoutNanos": 5000000000
+      },
+      "dispatch": true,
+      "expected": {
+        "/type": "control",
+        "/operation/command/status/state": "SUCCEEDED",
+        "/operation/completedTicks": 1
+      }
+    },
+    {
+      "name": "divergent replay recording stop",
+      "tool": "runtime_recording_stop",
+      "arguments": {
+        "sessionId": "controlled-workflow-example",
+        "recordingId": "transcript-divergent-replay",
+        "recordingRequestId": "transcript-divergent-replay-stop",
+        "timeoutNanos": 5000000000
+      },
+      "dispatch": true,
+      "expected": {
+        "/type": "recordingOperation",
+        "/operation/command/status/state": "SUCCEEDED"
+      }
+    },
+    {
+      "name": "divergent replay",
+      "tool": "runtime_replay",
+      "arguments": {
+        "sessionId": "controlled-workflow-example",
+        "recordingId": "transcript-divergent-replay",
+        "replayRequestId": "transcript-divergent-replay-execute",
+        "timeoutNanos": 5000000000
+      },
+      "dispatch": true,
+      "expected": {
+        "/type": "replay",
+        "/operation/result/status": "DIVERGED",
+        "/operation/result/divergence/phase": "SIMULATION_TICK",
+        "/operation/result/divergence/epochTick": 1,
+        "/operation/result/bounds/completedTicks": 0
       }
     },
     {
@@ -200,8 +374,13 @@
         "deltaNanos": 10000000,
         "profile": {
           "comparisonScope": {
-            "entityIds": ["player"],
-            "properties": ["position", "velocity"],
+            "entityIds": [
+              "player"
+            ],
+            "properties": [
+              "position",
+              "velocity"
+            ],
             "excludedProperties": [],
             "includeEvents": false,
             "includeDecisions": false
@@ -212,7 +391,9 @@
           {
             "epochTick": 1,
             "inputId": "set-velocity",
-            "parameters": {"velocityX": 2}
+            "parameters": {
+              "velocityX": 2
+            }
           }
         ],
         "configurationRequirements": [],

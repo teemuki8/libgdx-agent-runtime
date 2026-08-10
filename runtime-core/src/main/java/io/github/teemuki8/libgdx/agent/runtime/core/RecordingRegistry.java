@@ -198,6 +198,41 @@ public final class RecordingRegistry {
 
     private synchronized void startNow(RecordingSpec spec) {
         runtime.requireRecordingMutation();
+        active = candidate(spec);
+    }
+
+    synchronized void validateReplayStart(RecordingSpec spec) {
+        Objects.requireNonNull(spec, "spec");
+        requireConfiguredLengths(spec);
+        candidate(spec);
+    }
+
+    synchronized void startNowForReplay(RecordingSpec spec) {
+        runtime.requireRecordingMutation();
+        requireConfiguredLengths(spec);
+        active = candidate(spec);
+    }
+
+    synchronized boolean active() {
+        return active != null;
+    }
+
+    synchronized ReplayLookup replayLookup(String recordingId) {
+        if (active != null && active.spec.id().equals(recordingId)) {
+            return ReplayLookup.ACTIVE;
+        }
+        if (recordings.containsKey(recordingId)) {
+            return ReplayLookup.RETAINED;
+        }
+        if (evictedIds.contains(recordingId)) {
+            return ReplayLookup.EVICTED;
+        }
+        return ReplayLookup.UNKNOWN;
+    }
+
+    enum ReplayLookup { ACTIVE, RETAINED, EVICTED, UNKNOWN }
+
+    private MutableRecording candidate(RecordingSpec spec) {
         if (active != null) {
             throw new AgentRuntimeException(
                     RuntimeErrorCode.INVALID_LIFECYCLE, "a recording is already active");
@@ -215,7 +250,7 @@ public final class RecordingRegistry {
             throw new AgentRuntimeException(
                     RuntimeErrorCode.LIMIT_EXCEEDED, "recording metadata exceeds encoded size limit");
         }
-        active = new MutableRecording(spec, runtime.currentEpoch(), baseBytes);
+        return new MutableRecording(spec, runtime.currentEpoch(), baseBytes);
     }
 
     private synchronized void stopNow(String recordingId, RecordingStopReason reason,
@@ -238,6 +273,8 @@ public final class RecordingRegistry {
         reconcileRequests(stopping);
         stopping.reconciling = false;
         RecordingStopReason effectiveReason = stopping.forcedStopReason.orElse(reason);
+        runtime.replays().freeze(
+                recordingId, effectiveReason, stopping.truncations.isEmpty());
         List<RecordingEntry> entries = List.copyOf(stopping.entries.values());
         RecordingMetadata preliminary = metadata(
                 stopping, effectiveReason, entries.size(), 0);
@@ -249,6 +286,7 @@ public final class RecordingRegistry {
         while (recordings.size() > limits.retainedRecordings()) {
             String evicted = recordings.keySet().iterator().next();
             recordings.remove(evicted);
+            runtime.replays().recordingEvicted(evicted);
             evictedIds.addLast(evicted);
             while (evictedIds.size() > limits.retainedRecordings()) {
                 evictedIds.removeFirst();
@@ -263,13 +301,16 @@ public final class RecordingRegistry {
                         (RecordingActionEntry) recording.entries.get("action:" + requestId);
                 replace(recording, "action:" + requestId,
                         new RecordingActionEntry(prior.order(), invocation, prior.parameters()));
+                runtime.replays().recordAction(invocation, prior.parameters());
             });
         }
         for (String requestId : recording.inputRequestIds) {
-            runtime.inputs().recording(requestId).ifPresent(injection ->
+            runtime.inputs().recording(requestId).ifPresent(injection -> {
                     replace(recording, "input:" + requestId,
                             new RecordingInputEntry(
-                                    recording.entries.get("input:" + requestId).order(), injection)));
+                                    recording.entries.get("input:" + requestId).order(), injection));
+                    runtime.replays().recordInput(injection);
+                });
         }
     }
 

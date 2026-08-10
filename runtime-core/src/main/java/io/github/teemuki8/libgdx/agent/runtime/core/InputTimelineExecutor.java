@@ -12,8 +12,6 @@ import java.util.Optional;
 final class InputTimelineExecutor {
     private static final String NOT_EXECUTED_MESSAGE =
             InputTimelineCanonicalSize.PRE_EXECUTION_MESSAGE;
-    private static final String EPOCH_CHANGED_MESSAGE =
-            "input timeline lifecycle changed before target tick";
 
     private final AgentRuntime runtime;
     private final InputRegistry inputs;

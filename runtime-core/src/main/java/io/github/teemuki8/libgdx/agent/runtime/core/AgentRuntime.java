@@ -93,7 +93,7 @@ public final class AgentRuntime implements AutoCloseable {
         controls = new SimulationControlRegistry(this, builder.controlLimits);
         simulation = new SimulationTimelineRegistry(this, builder.simulationTimelineLimits);
         fixedStepSimulation = new FixedStepSimulationRegistry(this);
-        inputs = new InputRegistry(this, builder.inputLimits);
+        inputs = new InputRegistry(this, builder.inputLimits, builder.inputTimelineLimits);
         checkpoints = new CheckpointRegistry(this, builder.checkpointLimits);
         uiCorrelations = new UiCorrelationRegistry(this, builder.uiCorrelationLimits);
         recordings = new RecordingRegistry(this, builder.recordingLimits);
@@ -1447,6 +1447,8 @@ public final class AgentRuntime implements AutoCloseable {
         private SimulationTimelineLimits simulationTimelineLimits =
                 SimulationTimelineLimits.developmentDefaults();
         private InputLimits inputLimits = InputLimits.developmentDefaults();
+        private InputTimelineLimits inputTimelineLimits =
+                InputTimelineLimits.developmentDefaults();
         private CheckpointLimits checkpointLimits = CheckpointLimits.developmentDefaults();
         private UiCorrelationLimits uiCorrelationLimits =
                 UiCorrelationLimits.developmentDefaults();
@@ -1555,6 +1557,12 @@ public final class AgentRuntime implements AutoCloseable {
         /** Configures hard bounds for registered and scheduled input facts. */
         public Builder inputLimits(InputLimits value) {
             inputLimits = Objects.requireNonNull(value, "value");
+            return this;
+        }
+
+        /** Configures hard bounds for exact-tick input timeline retention and evidence. */
+        public Builder inputTimelineLimits(InputTimelineLimits value) {
+            inputTimelineLimits = Objects.requireNonNull(value, "value");
             return this;
         }
 

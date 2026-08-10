@@ -17,6 +17,7 @@ public final class InputRegistry {
     private final Object submissionLock = new Object();
     private final AgentRuntime runtime;
     private final InputLimits limits;
+    private final InputTimelineLimits timelineLimits;
     private final LinkedHashMap<String, InputDescriptor> inputs = new LinkedHashMap<>();
     private final LinkedHashMap<String, Consumer<InputParameters>> handlers = new LinkedHashMap<>();
     private final LinkedHashMap<String, Evidence> requests = new LinkedHashMap<>();
@@ -25,9 +26,10 @@ public final class InputRegistry {
     private int outstanding;
     private boolean determinismExecuting;
 
-    InputRegistry(AgentRuntime runtime, InputLimits limits) {
+    InputRegistry(AgentRuntime runtime, InputLimits limits, InputTimelineLimits timelineLimits) {
         this.runtime = runtime;
         this.limits = limits;
+        this.timelineLimits = timelineLimits;
     }
 
     /** Registers one input type before runtime start. */

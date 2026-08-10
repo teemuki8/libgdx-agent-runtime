@@ -87,3 +87,13 @@ jobs:
             --request POST \
             --header "Authorization: Bearer $authorization" \
             "https://ossrh-staging-api.central.sonatype.com/manual/upload/defaultRepository/${MAVEN_CENTRAL_NAMESPACE}?publishing_type=user_managed"
+      - name: Retain failed reports
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: failed-reports-staging
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            **/build/reports/**
+            **/build/test-results/**

@@ -6,12 +6,10 @@ input mutation, and disposal. The runtime supplies the accumulator and immutable
 
 ## Generated application setup
 
-Use one runtime version and the same libGDX version for Java and native artifacts. The Box2D adapter
-is currently a development snapshot, so bootstrap consumers must resolve it from a local build or
-the repository configured for development; this guide does not authorize publication.
+Use one runtime version and the same libGDX version for Java and native artifacts.
 
 ```kotlin
-val agentRuntimeVersion = "2.0.1-SNAPSHOT"
+val agentRuntimeVersion = "2.1.0"
 val gdxVersion = "1.14.2"
 
 dependencies {

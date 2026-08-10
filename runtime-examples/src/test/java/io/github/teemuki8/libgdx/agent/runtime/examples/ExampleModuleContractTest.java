@@ -19,7 +19,7 @@ final class ExampleModuleContractTest {
                 rootBuild.indexOf("val publishedModules"),
                 rootBuild.indexOf("val artifactNames"));
         assertFalse(publishedModules.contains("runtime-examples"));
-        assertEquals("2.0.1-SNAPSHOT", capture(rootBuild,
+        assertEquals("2.1.1-SNAPSHOT", capture(rootBuild,
                 "orElse\\(\"([^\"]+)\"\\)"));
 
         String versions = Files.readString(repositoryFile("gradle/libs.versions.toml"));

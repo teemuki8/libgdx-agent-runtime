@@ -4,19 +4,39 @@ All notable changes follow Keep a Changelog structure.
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-08-10
+
 ### Added
 
-- A non-published `runtime-examples` module now provides a tested agent cookbook, runnable hidden
-  LWJGL3 state inspection, a complete application-owned controlled workflow, a same-JVM stdio MCP
-  launcher with replayable closed transcript, and an actual-native deterministic Box2D consumer
-  example. Documentation drift tests keep example paths, tools, versions, and the mandatory
-  same-PR cookbook-update policy aligned (#73).
+- A JDK-only application-reported simulation timeline separates authoritative simulation ticks
+  from render and runtime-capture frames. Session-monotonic and epoch-relative tick identity,
+  fixed-step testimony, elapsed simulation time, tick-to-frame correlation, failure outcomes,
+  bounded history, and closed protocol 2.1/MCP queries make mismatched or incomplete timing
+  explicit (#65).
 
-- An unpublished actual-native LWJGL3 + Box2D conformance fixture proves ball drop, dynamic
-  collision, scheduled player movement, fixed-step render integration, exact controlled ticks,
-  structured inspection/contacts/assertions, protocol and MCP access, deterministic selected-
-  evidence reruns, render independence, and explicit timing/configuration failures under Xvfb.
-  The agent cookbook and bootstrap migration guide point to the runnable example (#71).
+- The canonical application-owned fixed-step accumulator uses exact integer nanoseconds, bounded
+  render delta and accumulated time, a catch-up limit, explicit dropped tick/time evidence, exact
+  configured-step advancement while paused, and interpolation that never mutates authoritative
+  state. A thin libGDX facade and closed protocol 2.2/MCP tools expose the same timeline without
+  creating a loop, thread, timer, sleep, render call, or disposal responsibility (#66).
+
+- The new published `agent-runtime-box2d` adapter exposes only explicitly registered worlds,
+  bodies, fixtures, shapes, and joints under application-supplied stable IDs. Native values are
+  copied into closed bounded immutable runtime entities, metres/radians and render-unit conversion
+  remain explicit, and application code retains world, listener, stepping, rebind, and disposal
+  ownership (#67).
+
+- Explicit Box2D contact integration copies begin/end/pre-solve/post-solve callbacks immediately,
+  publishes canonically ordered bounded events and active-contact tick snapshots, preserves
+  phase-specific points/normals/impulses, and reports truncation, missing correlation, unmapped
+  endpoints, reset, and listener lifecycle as typed incomplete evidence instead of treating it as
+  proof that no contact occurred (#68).
+
+- JDK-only simulation assertions evaluate immutable exact-tick evidence with scalar/vector
+  tolerance, wrapped angles, areas, distance, events, list subsets, conjunctions, and every-tick
+  semantics. `Box2dAssertions` adds data-only body/contact factories, while closed protocol 2.3
+  and MCP preserve PASS / FAIL / INCONCLUSIVE results and never pass negative or temporal claims
+  over incomplete evidence (#69).
 
 - Additive exact-tick simulation determinism reuses the existing bounded repeated-scenario engine
   with scheduled registered inputs, exact reset-baseline configuration facts, per-tick completeness
@@ -24,6 +44,18 @@ All notable changes follow Keep a Changelog structure.
   `Box2dDeterminism` builder, closed protocol 2.4, and
   `runtime_simulation_determinism_check`. Incomplete or truncated physics evidence cannot report
   equality (#70).
+
+- An unpublished actual-native LWJGL3 + Box2D conformance fixture proves ball drop, dynamic
+  collision, scheduled player movement, fixed-step render integration, exact controlled ticks,
+  structured inspection/contacts/assertions, protocol and MCP access, deterministic selected-
+  evidence reruns, render independence, and explicit timing/configuration failures under Xvfb.
+  The agent cookbook and bootstrap migration guide point to the runnable example (#71).
+
+- A non-published `runtime-examples` module now provides a tested agent cookbook, runnable hidden
+  LWJGL3 state inspection, a complete application-owned controlled workflow, a same-JVM stdio MCP
+  launcher with replayable closed transcript, and an actual-native deterministic Box2D consumer
+  example. Documentation drift tests keep example paths, tools, versions, and the mandatory
+  same-PR cookbook-update policy aligned (#73).
 
 ## [2.0.0] - 2026-08-08
 

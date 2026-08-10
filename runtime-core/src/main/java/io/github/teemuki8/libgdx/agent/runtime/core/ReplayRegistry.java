@@ -385,7 +385,7 @@ public final class ReplayRegistry {
             long epochTick = reference.tick().epochTick();
             List<SimulationDeterminismInput> tickInputs = replay.inputs().stream()
                     .filter(input -> input.epochTick() == epochTick).toList();
-            SimulationControlRegistry.DeterminismTickEvidence completed =
+            SimulationControlRegistry.ExactTickEvidence completed =
                     runtime.controls().tickForDeterminism(replay.fixedStepNanos(), tickInputs);
             Optional<String> tickProblem = replayTickProblem(
                     completed, epochTick, replay.fixedStepNanos(), replayEpoch);
@@ -457,7 +457,7 @@ public final class ReplayRegistry {
     }
 
     private Optional<String> replayTickProblem(
-            SimulationControlRegistry.DeterminismTickEvidence evidence,
+            SimulationControlRegistry.ExactTickEvidence evidence,
             long expectedEpochTick, long fixedStepNanos, ExecutionEpochId expectedEpoch) {
         SimulationTick tick = evidence.tick();
         if (tick.epochTick() != expectedEpochTick

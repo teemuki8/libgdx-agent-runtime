@@ -3,6 +3,7 @@ package io.github.teemuki8.libgdx.agent.runtime.core;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -357,6 +358,92 @@ final class InputTimelineContractTest {
                 "timeline", expired, Optional.of(result)));
         assertDoesNotThrow(() -> new InputTimelineOperation(
                 "timeline", unknown, Optional.of(result)));
+    }
+
+    @Test
+    void timelineResultPublicationWaitsForTheParentOutcome() {
+        InputTimelineResult result = result(InputTimelineStopReason.COMPLETED,
+                List.of(executedEvidence("press", 1, "button", 1)),
+                completedBounds(1, 1, 64), Optional.empty());
+
+        assertEquals(Optional.empty(), InputTimelineExecutor.visibleResult(
+                found("timeline", CommandState.EXECUTING), result));
+        assertEquals(Optional.of(result), InputTimelineExecutor.visibleResult(
+                found("timeline", CommandState.SUCCEEDED), result));
+        assertEquals(Optional.of(result), InputTimelineExecutor.visibleResult(
+                CommandLookup.missing(CommandLookup.Kind.EXPIRED), result));
+    }
+
+    @Test
+    void canonicalRequestSizeCountsAsciiAndMultibyteStringsExactly() {
+        InputTimelineSpec ascii = new InputTimelineSpec(1, List.of(
+                transition("t", 1, "label", RuntimeValues.string("A"))));
+        InputTimelineSpec multibyte = new InputTimelineSpec(1, List.of(
+                transition("t", 1, "label", RuntimeValues.string("€"))));
+
+        assertEquals(46, InputTimelineCanonicalSize.request(ascii));
+        assertEquals(48, InputTimelineCanonicalSize.request(multibyte));
+    }
+
+    @Test
+    void canonicalResultSizeCountsMultibyteChildAndStructuredFailureEvidence() {
+        ApplicationFailureEvidence failure = new ApplicationFailureEvidence(
+                "input.execution", IllegalStateException.class.getName(),
+                "session-failure-1", Optional.of("é"));
+        RuntimeValue.ObjectValue parameters = RuntimeValues.object(
+                RuntimeValues.field("value", RuntimeValues.string("€")));
+        InputInjection failedInjection = new InputInjection(
+                "button", "press",
+                CommandLookup.found(new CommandStatus(
+                        "press", CommandState.FAILED, 1, 10,
+                        Optional.of(2L), Optional.of(3L), true,
+                        Optional.of("é"), Optional.of(failure))),
+                InputInjectionState.FAILED, 11, OptionalLong.of(11),
+                new ExecutionEpochId(1), Optional.of(new FrameId(0)), Optional.empty(),
+                Optional.of(parameters), false, Optional.of("é"), Optional.of(failure));
+        InputTimelineTransitionEvidence failed = new InputTimelineTransitionEvidence(
+                "press", 1, "button", InputTimelineTransitionState.FAILED,
+                Optional.of(failedInjection), Optional.of("é"));
+        InputTimelineResult failedResult = new InputTimelineResult(
+                InputTimelineStopReason.INPUT_FAILED, "é", new ExecutionEpochId(1),
+                10, 16, Optional.empty(), Optional.empty(), List.of(failed),
+                new InputTimelineBounds(1, 0, 1, 0, 1, 0,
+                        0, 1, 1, 1_024, 10), Optional.of(failure));
+
+        assertEquals(510, InputTimelineCanonicalSize.result(failedResult));
+
+        InputInjection succeededInjection = new InputInjection(
+                "button", "press", command("press"), InputInjectionState.EXECUTED,
+                11, OptionalLong.of(11), new ExecutionEpochId(1),
+                Optional.of(new FrameId(0)), Optional.of(new FrameId(1)),
+                Optional.of(parameters), false, Optional.empty(), Optional.empty());
+        InputTimelineTransitionEvidence succeeded = new InputTimelineTransitionEvidence(
+                "press", 1, "button", InputTimelineTransitionState.EXECUTED,
+                Optional.of(succeededInjection), Optional.empty());
+        InputTimelineResult succeededResult = new InputTimelineResult(
+                InputTimelineStopReason.COMPLETED, "completed", new ExecutionEpochId(1),
+                10, 16, Optional.of(new FrameId(1)), Optional.of(new FrameId(1)),
+                List.of(succeeded), completedBounds(1, 1, 0), Optional.empty());
+        InputTimelineSpec spec = new InputTimelineSpec(1, List.of(
+                new InputTimelineTransition("press", 1, "button", parameters)));
+
+        assertEquals(277, InputTimelineCanonicalSize.result(succeededResult));
+        assertEquals(InputTimelineCanonicalSize.result(succeededResult),
+                InputTimelineCanonicalSize.successfulResultReservation(spec));
+        assertEquals(5_219,
+                InputTimelineCanonicalSize.terminalResultReservation(spec));
+        assertTrue(InputTimelineCanonicalSize.terminalResultReservation(spec)
+                > InputTimelineCanonicalSize.successfulResultReservation(spec));
+        assertEquals(InputTimelineCanonicalSize.terminalResultReservation(spec),
+                InputTimelineCanonicalSize.resultReservation(spec));
+    }
+
+    @Test
+    void canonicalSizeAdditionSaturatesInsteadOfOverflowing() {
+        assertEquals(Long.MAX_VALUE,
+                InputTimelineCanonicalSize.add(Long.MAX_VALUE - 1, 2));
+        assertEquals(Long.MAX_VALUE,
+                InputTimelineCanonicalSize.add(Long.MAX_VALUE, Long.MAX_VALUE));
     }
 
     private static InputTimelineTransition transition(

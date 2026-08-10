@@ -268,6 +268,25 @@ final class SimulationDeterminismRegistryTest {
     }
 
     @Test
+    void mismatchedExecutedDeltaRetainsInconclusiveEvidenceShape() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        AgentRuntime runtime = customRuntime(queue, new long[] {0}, new long[] {8},
+                new boolean[] {true}, delta -> delta + 1, context -> {});
+        runtime.start();
+        SimulationDeterminismSpec spec = spec(List.of());
+        runtime.determinism().checkSimulation(
+                spec, "delta-mismatch", Duration.ofSeconds(1));
+        queue.removeFirst().run();
+
+        SimulationDeterminismResult result = runtime.determinism().checkSimulation(
+                spec, "delta-mismatch", Duration.ofSeconds(1)).result().orElseThrow();
+
+        assertEquals(DeterminismStatus.INCONCLUSIVE, result.status());
+        assertEquals("simulation tick evidence is incomplete or mismatched", result.message());
+        assertTrue(result.applicationFailure().isEmpty());
+    }
+
+    @Test
     void failedResumeMakesResultInconclusiveAndRequiresExplicitReconciliation() {
         ArrayDeque<Runnable> queue = new ArrayDeque<>();
         boolean[] failResume = {true};

@@ -322,7 +322,7 @@ public final class DeterminismRegistry {
                     }
                     List<SimulationDeterminismInput> tickInputs = inputsAt(
                             spec.inputs(), epochTick);
-                    SimulationControlRegistry.DeterminismTickEvidence completed =
+                    SimulationControlRegistry.ExactTickEvidence completed =
                             runtime.controls().tickForDeterminism(
                                     spec.execution().deltaNanos(), tickInputs);
                     Optional<String> tickProblem = tickProblem(
@@ -411,7 +411,7 @@ public final class DeterminismRegistry {
     }
 
     private Optional<String> tickProblem(
-            SimulationControlRegistry.DeterminismTickEvidence evidence,
+            SimulationControlRegistry.ExactTickEvidence evidence,
             long expectedEpochTick, long fixedStepNanos) {
         SimulationTick tick = evidence.tick();
         if (tick.epochTick() != expectedEpochTick

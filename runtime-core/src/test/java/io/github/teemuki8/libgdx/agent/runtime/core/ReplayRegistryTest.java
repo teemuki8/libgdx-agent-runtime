@@ -786,6 +786,47 @@ final class ReplayRegistryTest {
     }
 
     @Test
+    void mismatchedExecutedDeltaRetainsReplayInconclusiveEvidenceShape() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        long[] position = {0};
+        boolean[] mismatch = {false};
+        AgentRuntime runtime = runtimeBuilder(queue, position).build();
+        runtime.simulation().register(SimulationTimelineSpec.fixedStep(STEP));
+        runtime.entities().register(EntityId.of("world"), EntityType.of("state"),
+                () -> "World", inspector -> inspector
+                        .property("fixedStepNanos", () -> STEP)
+                        .property("position", () -> position[0]));
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {}).resume(() -> {}).acknowledgedTick(delta -> {
+                    position[0]++;
+                    return mismatch[0] ? delta + 1 : delta;
+                }).build());
+        runtime.scenarios().register("ball-drop", context -> position[0] = 0);
+        runtime.start();
+        pause(runtime, queue);
+        runtime.replays().start(scenarioSpec("delta-mismatch", "ball-drop"),
+                "start-delta-mismatch", TIMEOUT);
+        queue.removeFirst().run();
+        advance(runtime, queue, "capture-delta-mismatch");
+        runtime.recordings().stop(
+                "delta-mismatch", "stop-delta-mismatch", TIMEOUT);
+        queue.removeFirst().run();
+        mismatch[0] = true;
+
+        runtime.replays().execute(
+                "delta-mismatch", "execute-delta-mismatch", TIMEOUT);
+        queue.removeFirst().run();
+        ReplayResult result = runtime.replays().execute(
+                "delta-mismatch", "execute-delta-mismatch", TIMEOUT)
+                .result().orElseThrow();
+
+        assertEquals(DeterminismStatus.INCONCLUSIVE, result.status());
+        assertEquals("replay simulation tick evidence is incomplete or mismatched",
+                result.message());
+        assertTrue(result.applicationFailure().isEmpty());
+    }
+
+    @Test
     void executesCheckpointReplayThroughApplicationOwnedProvider() {
         ArrayDeque<Runnable> queue = new ArrayDeque<>();
         long[] position = {5};

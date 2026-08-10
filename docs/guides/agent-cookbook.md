@@ -345,7 +345,8 @@ enter protocol evidence:
 
 ```java
 AgentRuntime runtime = AgentRuntime.builder()
-        .applicationFailureSanitizer(context -> Optional.of("reset callback failed"))
+        .applicationFailureSanitizer(
+                (context, failure) -> Optional.of("reset callback failed"))
         .build();
 // ApplicationFailureEvidence = category + exceptionClass + correlationId + bounded detail.
 ```

@@ -1,6 +1,6 @@
 # Replay Execution Design
 
-**Status:** Architecture approved; written specification pending review  
+**Status:** Approved
 **Date:** 2026-08-10  
 **Scope:** Bounded deterministic execution of replay-ready recordings
 

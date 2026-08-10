@@ -29,18 +29,22 @@ harness through explicit per-frame correlation and the harness `ui_runtime_compa
 V1 includes registered entities, bounded immutable values, baseline/frame capture, structural diffs,
 events, decisions, completed-frame queries, execution epochs, explicit attribution, typed actions,
 and declarative assertions. Optional application-owned capabilities add scenarios, exact-tick
-control, registered input, opaque checkpoints, runtime/UI correlation, recording, and determinism
-comparison and bounded replay through closed protocol 1.0-1.13 and additive protocol 2.0-2.5
+control, registered input, opaque checkpoints, runtime/UI correlation, recording, determinism
+comparison, bounded replay, and exact-tick input timelines through closed protocol 1.0-1.13 and
+additive protocol 2.0-2.6
 stdio MCP surfaces.
 Protocol 2.1 adds application-reported simulation timing and tick-to-frame evidence; protocol 2.2
 adds the canonical fixed-step accumulator, loss reports, and configured-step advance; protocol 2.3
 adds exact-tick declarative assertions; protocol 2.4 adds repeated exact-tick simulation
 determinism with scheduled registered inputs and explicit configuration/completeness testimony;
 protocol 2.5 executes explicitly replay-ready recordings from registered scenario or checkpoint
-origins and reports equal, first divergence, or inconclusive selected evidence. A
+origins and reports equal, first divergence, or inconclusive selected evidence; protocol 2.6
+executes one bounded exact-tick sequence of explicit registered input transitions with fail-stop
+completed/failed/not-executed evidence and schema-1 recording/replay integration. A
 deterministic LWJGL3 fixture
 qualifies the full workflow. Its actual-native Box2D conformance scenario covers ball drop,
-dynamic collision, scheduled player movement, exact assertions, deterministic reruns, protocol,
+dynamic collision, scheduled and timeline-driven player movement, application-owned boolean
+control state, exact assertions, deterministic reruns, protocol,
 MCP, and render-independent evidence under Xvfb. The runtime also provides an optional
 explicit Box2D inspection and contact-evidence adapter; it never traverses an application world,
 installs a contact listener, or steps physics automatically. Applications retain ownership of the

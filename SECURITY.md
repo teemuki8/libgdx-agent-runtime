@@ -30,12 +30,19 @@ Simulation waits accept only registered named predicates or the same closed decl
 union. They do not accept scripts, expressions, class names, reflection, or caller-defined code.
 Registered input injection accepts only application-declared IDs and closed scalar parameters on
 paused controlled ticks. It cannot address arbitrary classes or operating-system input, and
-application-selected redaction can omit parameter values from retained evidence.
+application-selected redaction can omit parameter values from retained evidence. Input timelines
+are closed registered scalar sequences: one parent command executes explicit local-tick transitions
+in list order through the same registered handlers and exact acknowledged fixed ticks, with no
+interpolation, implicit release, OS/global input hook, script, expression, reflection, hidden loop,
+or arbitrary object value.
 Recording captures only explicitly registered semantic inputs/actions, including validated closed
 action parameters, and bounded completed-runtime evidence. Applications must omit secrets from action
 schemas and allowlisted configuration; input recording policy can omit or redact input values. The
-runtime installs no global or operating-system input hook, serializes no application object, and
-provides no replay executor. Manifest configuration is closed scalar data; opaque checkpoint handles,
+runtime installs no global or operating-system input hook and serializes no application object.
+Replay-ready capture couples one bounded sidecar to an ordinary schema-1 recording; the sidecar
+restores exactly one registered scenario or checkpoint origin and replays only successful
+non-redacted registered inputs and acknowledged fixed ticks. Manifest configuration is closed
+scalar data; opaque checkpoint handles,
 callbacks, and arbitrary payloads never cross Java, protocol, or MCP boundaries.
 Determinism comparison accepts only a registered scenario ID, an application-acknowledged seed,
 closed scalar configuration, exact controlled ticks, and a closed observable profile. It executes

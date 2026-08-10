@@ -44,7 +44,7 @@ class McpTranscriptTest {
         Transcript transcript = transcript();
         assertEquals(List.of(
                 "sessions", "capabilities", "scenarios", "reset", "pause",
-                "replay recording start", "input", "advance", "entity", "events",
+                "replay recording start", "input timeline", "entity", "events",
                 "frame assertion", "assertion", "replay recording stop", "replay",
                 "divergent replay recording start", "divergent input", "divergent advance",
                 "divergent replay recording stop", "divergent replay",
@@ -101,13 +101,13 @@ class McpTranscriptTest {
     }
 
     @Test
-    void representativeProtocol25EnvelopesRoundTripExactly() {
+    void representativeProtocol26EnvelopesRoundTripExactly() {
         RuntimeRequest request = new RuntimeRequest(
-                ProtocolVersion.V2_5, "example-request", null, new RuntimeCommand.Sessions());
+                ProtocolVersion.V2_6, "example-request", null, new RuntimeCommand.Sessions());
         assertEquals(request, ProtocolJson.decodeRequest(ProtocolJson.encode(request)));
 
         RuntimeResponse response = new RuntimeResponse.Success(
-                ProtocolVersion.V2_5, "example-request",
+                ProtocolVersion.V2_6, "example-request",
                 new RuntimeResponse.Result.Sessions(List.of()));
         assertEquals(response, ProtocolJson.decodeResponse(ProtocolJson.encode(response)));
     }

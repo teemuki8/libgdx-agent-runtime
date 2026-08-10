@@ -15,6 +15,10 @@ import io.github.teemuki8.libgdx.agent.runtime.core.EventSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.FixedStepSimulationConfiguration;
 import io.github.teemuki8.libgdx.agent.runtime.core.FixedStepUpdateReport;
 import io.github.teemuki8.libgdx.agent.runtime.core.InputSpec;
+import io.github.teemuki8.libgdx.agent.runtime.core.InputTimelineResult;
+import io.github.teemuki8.libgdx.agent.runtime.core.InputTimelineSpec;
+import io.github.teemuki8.libgdx.agent.runtime.core.InputTimelineStopReason;
+import io.github.teemuki8.libgdx.agent.runtime.core.InputTimelineTransition;
 import io.github.teemuki8.libgdx.agent.runtime.core.RecordingCapabilityVersion;
 import io.github.teemuki8.libgdx.agent.runtime.core.RecordingEntry;
 import io.github.teemuki8.libgdx.agent.runtime.core.RecordingInputEntry;
@@ -186,16 +190,13 @@ public final class ControlledWorkflowExample implements AutoCloseable {
                 replayCaptureSpec, "workflow-replay-capture-start", TIMEOUT);
         var epoch = replayCapture.baselineExecutionEpochId().orElseThrow();
 
-        RuntimeValue.ObjectValue velocity = velocityParameters(2);
-        long targetTick = runtime.controls().currentTick() + 1;
-        runtime.inputs().inject("set-velocity", "workflow-input", velocity,
-                OptionalLong.of(targetTick), TIMEOUT);
+        InputTimelineSpec timeline = new InputTimelineSpec(60, List.of(
+                new InputTimelineTransition("workflow-velocity", 1, "set-velocity",
+                        velocityParameters(2))));
+        runtime.inputs().executeTimeline(timeline, "workflow-input-timeline", TIMEOUT);
         drainAll();
-        runtime.controls().advanceFixed("workflow-advance", 60, TIMEOUT);
-        drainAll();
-        var advanced = runtime.controls().advanceFixed("workflow-advance", 60, TIMEOUT);
-        var injection = runtime.inputs().inject("set-velocity", "workflow-input", velocity,
-                OptionalLong.of(targetTick), TIMEOUT);
+        InputTimelineResult timelineResult = runtime.inputs().executeTimeline(
+                timeline, "workflow-input-timeline", TIMEOUT).result().orElseThrow();
 
         SimulationAssertionResultPair assertions = assertions(epoch);
         runtime.recordings().stop(
@@ -212,7 +213,7 @@ public final class ControlledWorkflowExample implements AutoCloseable {
 
         var divergentReplay = runDivergentReplay();
 
-        SimulationDeterminismSpec determinismSpec = determinismSpec(velocity);
+        SimulationDeterminismSpec determinismSpec = determinismSpec(velocityParameters(2));
         runtime.determinism().checkSimulation(
                 determinismSpec, "workflow-determinism", TIMEOUT);
         drainAll();
@@ -230,8 +231,13 @@ public final class ControlledWorkflowExample implements AutoCloseable {
                         epoch, 60, 60, 1)).ticks().getFirst().resultingFrameId().isPresent();
 
         return new WorkflowResult(
-                reset.command().status().orElseThrow().state(), advanced.completedTicks(),
-                injection.actualTick().orElseThrow(), assertions.expected().name(),
+                reset.command().status().orElseThrow().state(),
+                timelineResult.stopReason(),
+                timelineResult.bounds().completedTicks(),
+                timelineResult.bounds().executedTransitions(),
+                timelineResult.transitions().getFirst().injection().orElseThrow()
+                        .actualTick().orElseThrow(),
+                assertions.expected().name(),
                 assertions.wrong().name(),
                 Math.toIntExact(entries.stream().filter(RecordingInputEntry.class::isInstance)
                         .count()),
@@ -313,8 +319,8 @@ public final class ControlledWorkflowExample implements AutoCloseable {
             String recordingId, String scenarioId) {
         SimulationDeterminismSpec template = determinismSpec(velocityParameters(2));
         RecordingSpec recording = new RecordingSpec(
-                recordingId, "2.5",
-                List.of(new RecordingCapabilityVersion("fixed-step-simulation", "2.2")),
+                recordingId, "2.6",
+                List.of(new RecordingCapabilityVersion("input-timelines", "2.6")),
                 Optional.of(scenarioId), Optional.empty(), OptionalLong.of(7),
                 RuntimeValues.object(), true);
         return new ReplayCaptureSpec(recording, template.execution().profile(),
@@ -353,14 +359,17 @@ public final class ControlledWorkflowExample implements AutoCloseable {
     }
 
     /** Immutable result of the complete controlled workflow. */
-    public record WorkflowResult(CommandState resetState, int completedTicks,
-            long firstAppliedEpochTick, String expectedPosition, String wrongPosition,
+    public record WorkflowResult(CommandState resetState,
+            InputTimelineStopReason timelineStopReason, int completedTicks,
+            int executedTransitions, long firstAppliedControlledTick,
+            String expectedPosition, String wrongPosition,
             int recordedInputs, int recordedTicks, DeterminismStatus replay, int replayedTicks,
             DeterminismStatus divergentReplay, DeterminismStatus determinism,
             RuntimeValue.Vector2Value restoredPosition, boolean tickFrameCorrelated) {
         /** Validates required immutable evidence. */
         public WorkflowResult {
             Objects.requireNonNull(resetState, "resetState");
+            Objects.requireNonNull(timelineStopReason, "timelineStopReason");
             Objects.requireNonNull(expectedPosition, "expectedPosition");
             Objects.requireNonNull(wrongPosition, "wrongPosition");
             Objects.requireNonNull(replay, "replay");

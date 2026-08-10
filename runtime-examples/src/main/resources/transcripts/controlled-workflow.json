@@ -29,7 +29,9 @@
     {
       "name": "scenarios",
       "tool": "runtime_scenarios",
-      "arguments": {"sessionId": "controlled-workflow-example"},
+      "arguments": {
+        "sessionId": "controlled-workflow-example"
+      },
       "dispatch": false,
       "expected": {
         "/type": "scenarios",
@@ -83,8 +85,13 @@
         "configuration": [],
         "profile": {
           "comparisonScope": {
-            "entityIds": ["player"],
-            "properties": ["position", "velocity"],
+            "entityIds": [
+              "player"
+            ],
+            "properties": [
+              "position",
+              "velocity"
+            ],
             "excludedProperties": [],
             "includeEvents": false,
             "includeDecisions": false
@@ -104,39 +111,31 @@
       }
     },
     {
-      "name": "input",
-      "tool": "runtime_input",
+      "name": "input timeline",
+      "tool": "runtime_input_timeline",
       "arguments": {
         "sessionId": "controlled-workflow-example",
-        "input": "set-velocity",
-        "inputRequestId": "transcript-input",
-        "parameters": {"velocityX": 2},
-        "targetTick": 1,
+        "timelineRequestId": "transcript-input-timeline",
+        "totalTicks": 2,
+        "transitions": [
+          {
+            "transitionId": "transcript-velocity",
+            "timelineTick": 1,
+            "inputId": "set-velocity",
+            "parameters": {
+              "velocityX": 2
+            }
+          }
+        ],
         "timeoutNanos": 5000000000
       },
       "dispatch": true,
       "expected": {
-        "/type": "input",
-        "/injection/inputId": "set-velocity",
-        "/injection/state": "SCHEDULED",
-        "/injection/actualTick": null
-      }
-    },
-    {
-      "name": "advance",
-      "tool": "runtime_simulation_advance",
-      "arguments": {
-        "sessionId": "controlled-workflow-example",
-        "controlRequestId": "transcript-advance",
-        "ticks": 2,
-        "timeoutNanos": 5000000000
-      },
-      "dispatch": true,
-      "expected": {
-        "/type": "control",
-        "/operation/kind": "ADVANCE",
+        "/type": "inputTimeline",
         "/operation/command/status/state": "SUCCEEDED",
-        "/operation/completedTicks": 2
+        "/operation/result/stopReason": "COMPLETED",
+        "/operation/result/bounds/completedTicks": 2,
+        "/operation/result/transitions/0/state": "EXECUTED"
       }
     },
     {
@@ -206,7 +205,10 @@
           "assertionType": "vectorApproximatelyEquals",
           "entityId": "player",
           "property": "position",
-          "expected": {"x": 0.04, "y": 0},
+          "expected": {
+            "x": 0.04,
+            "y": 0
+          },
           "absoluteTolerance": 0.0001,
           "toleranceMode": "COMPONENT"
         }
@@ -264,8 +266,13 @@
         "configuration": [],
         "profile": {
           "comparisonScope": {
-            "entityIds": ["player"],
-            "properties": ["position", "velocity"],
+            "entityIds": [
+              "player"
+            ],
+            "properties": [
+              "position",
+              "velocity"
+            ],
             "excludedProperties": [],
             "includeEvents": false,
             "includeDecisions": false
@@ -291,7 +298,9 @@
         "sessionId": "controlled-workflow-example",
         "input": "set-velocity",
         "inputRequestId": "transcript-divergent-input",
-        "parameters": {"velocityX": 2},
+        "parameters": {
+          "velocityX": 2
+        },
         "targetTick": 5,
         "timeoutNanos": 5000000000
       },
@@ -365,8 +374,13 @@
         "deltaNanos": 10000000,
         "profile": {
           "comparisonScope": {
-            "entityIds": ["player"],
-            "properties": ["position", "velocity"],
+            "entityIds": [
+              "player"
+            ],
+            "properties": [
+              "position",
+              "velocity"
+            ],
             "excludedProperties": [],
             "includeEvents": false,
             "includeDecisions": false
@@ -377,7 +391,9 @@
           {
             "epochTick": 1,
             "inputId": "set-velocity",
-            "parameters": {"velocityX": 2}
+            "parameters": {
+              "velocityX": 2
+            }
           }
         ],
         "configurationRequirements": [],

@@ -26,9 +26,11 @@ import io.github.teemuki8.libgdx.agent.runtime.core.EntityType;
 import io.github.teemuki8.libgdx.agent.runtime.core.FixedStepDropPolicy;
 import io.github.teemuki8.libgdx.agent.runtime.core.FixedStepSimulationConfiguration;
 import io.github.teemuki8.libgdx.agent.runtime.core.InputSpec;
+import io.github.teemuki8.libgdx.agent.runtime.core.RecordingLimits;
 import io.github.teemuki8.libgdx.agent.runtime.core.SessionId;
 import io.github.teemuki8.libgdx.agent.runtime.libgdx.LibGdxAgentRuntime;
 import io.github.teemuki8.libgdx.agent.runtime.libgdx.LibGdxFixedStepSimulation;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -78,6 +80,7 @@ public final class Box2dConformanceSimulation implements AutoCloseable {
     private int renderCount;
     private int sceneGeneration;
     private long postPhysicsTicks;
+    private boolean playerControlActive = true;
     private boolean closed;
 
     /** Creates, registers, and starts the fixture on the application/capture thread. */
@@ -99,6 +102,8 @@ public final class Box2dConformanceSimulation implements AutoCloseable {
                 .captureThread(Thread.currentThread())
                 .sessionId(SESSION_ID)
                 .commandDispatcher(dispatcher)
+                .recordingLimits(new RecordingLimits(16, 64, 4_096, 100_000,
+                        Duration.ofHours(1).toNanos(), 1_048_576, 256, 512))
                 .build();
         scene = createScene(Scenario.BALL_DROP);
         inspection = new Box2dInspection(runtime, Objects.requireNonNull(adapterLimits,
@@ -122,9 +127,19 @@ public final class Box2dConformanceSimulation implements AutoCloseable {
                     scene.bodies().get("player").setLinearVelocity(velocity, 0);
                 })
                 .build());
+        runtime.inputs().register(InputSpec.builder("set-player-control")
+                .description("Activates or deactivates the player body before the selected tick")
+                .requiredBoolean("active")
+                .handler(parameters -> {
+                    playerControlActive = parameters.requiredBoolean("active");
+                })
+                .build());
         runtime.entities().register(EntityId.of("fixture.post-physics"),
                 EntityType.of("fixture.game-logic"), () -> "post-physics",
                 inspector -> inspector.property("completedTicks", () -> postPhysicsTicks));
+        runtime.entities().register(EntityId.of("fixture.player-control"),
+                EntityType.of("fixture.game-logic"), () -> "player-control",
+                inspector -> inspector.property("active", () -> playerControlActive));
         runtime.checkpoints().register(new CheckpointProvider() {
             @Override public CheckpointHandle create() {
                 return checkpoint();
@@ -153,9 +168,12 @@ public final class Box2dConformanceSimulation implements AutoCloseable {
                         FIXED_STEP_NANOS, FIXED_STEP_NANOS * 32,
                         FIXED_STEP_NANOS * 16, 8, 1_024,
                         FixedStepDropPolicy.DROP_WHOLE_TICKS_KEEP_REMAINDER, true), tick -> {
-                            contacts.captureStep(() -> scene.world().step(
-                                    tick.fixedStepSeconds(),
-                                    VELOCITY_ITERATIONS, POSITION_ITERATIONS));
+                            contacts.captureStep(() -> {
+                                scene.bodies().get("player").setActive(playerControlActive);
+                                scene.world().step(
+                                        tick.fixedStepSeconds(),
+                                        VELOCITY_ITERATIONS, POSITION_ITERATIONS);
+                            });
                             gameLogicAfterPhysics();
                             return reportedExecutedStepNanos;
                         });
@@ -196,6 +214,7 @@ public final class Box2dConformanceSimulation implements AutoCloseable {
     private void reset(Scenario scenario) {
         replaceScene(createScene(scenario));
         postPhysicsTicks = 0;
+        playerControlActive = scene.bodies().get("player").isActive();
     }
 
     private void replaceScene(NativeScene replacement) {
@@ -354,6 +373,7 @@ public final class Box2dConformanceSimulation implements AutoCloseable {
             body.setAwake(state.awake());
         });
         postPhysicsTicks = checkpoint.postPhysicsTicks();
+        playerControlActive = scene.bodies().get("player").isActive();
     }
 
     private enum Scenario {

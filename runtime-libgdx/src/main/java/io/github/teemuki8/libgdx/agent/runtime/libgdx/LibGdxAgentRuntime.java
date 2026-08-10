@@ -24,6 +24,7 @@ public final class LibGdxAgentRuntime {
         private ApplicationCommandDispatcher commandDispatcher;
         private CommandDispatchLimits commandDispatchLimits =
                 CommandDispatchLimits.developmentDefaults();
+        private io.github.teemuki8.libgdx.agent.runtime.core.RecordingLimits recordingLimits;
 
         private Builder() {}
 
@@ -57,6 +58,13 @@ public final class LibGdxAgentRuntime {
             return this;
         }
 
+        /** Sets hard recording evidence and retrieval bounds. */
+        public Builder recordingLimits(
+                io.github.teemuki8.libgdx.agent.runtime.core.RecordingLimits value) {
+            recordingLimits = Objects.requireNonNull(value, "recordingLimits");
+            return this;
+        }
+
         /** Builds an unstarted core runtime. */
         public AgentRuntime build() {
             AgentRuntime.Builder builder = AgentRuntime.builder()
@@ -69,6 +77,9 @@ public final class LibGdxAgentRuntime {
             if (commandDispatcher != null) {
                 builder.commandDispatcher(commandDispatcher)
                         .commandDispatchLimits(commandDispatchLimits);
+            }
+            if (recordingLimits != null) {
+                builder.recordingLimits(recordingLimits);
             }
             return builder.build();
         }

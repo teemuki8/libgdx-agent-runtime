@@ -20,10 +20,16 @@ import io.github.teemuki8.libgdx.agent.runtime.core.CommandState;
 import io.github.teemuki8.libgdx.agent.runtime.core.DeterminismStatus;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntitySnapshot;
+import io.github.teemuki8.libgdx.agent.runtime.core.FrameSnapshot;
 import io.github.teemuki8.libgdx.agent.runtime.core.EventQuery;
 import io.github.teemuki8.libgdx.agent.runtime.core.ExecutionEpochId;
 import io.github.teemuki8.libgdx.agent.runtime.core.FrameRange;
 import io.github.teemuki8.libgdx.agent.runtime.core.FixedStepUpdateDiagnostic;
+import io.github.teemuki8.libgdx.agent.runtime.core.InputTimelineResult;
+import io.github.teemuki8.libgdx.agent.runtime.core.InputTimelineSpec;
+import io.github.teemuki8.libgdx.agent.runtime.core.InputTimelineStopReason;
+import io.github.teemuki8.libgdx.agent.runtime.core.InputTimelineTransition;
+import io.github.teemuki8.libgdx.agent.runtime.core.InputTimelineTransitionState;
 import io.github.teemuki8.libgdx.agent.runtime.core.RecordingInputEntry;
 import io.github.teemuki8.libgdx.agent.runtime.core.RecordingSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.RecordingTickEntry;
@@ -294,6 +300,83 @@ final class Box2dConformanceFixtureTest {
             assertEquals(RuntimeValues.integer(120), runtime.entity(
                     EntityId.of("fixture.post-physics")).orElseThrow()
                     .property("completedTicks").orElseThrow());
+        }
+    }
+
+    @Test
+    void inputTimelineExecutesExactNativeTicksWithApplicationOwnedControlState() {
+        try (Box2dConformanceSimulation fixture =
+                new Box2dConformanceSimulation(Runnable::run)) {
+            AgentRuntime runtime = fixture.runtime();
+            runtime.controls().control(true, "timeline-pause", Duration.ofSeconds(2));
+            runtime.replays().start(replaySpec(
+                    "native-timeline-replay", Optional.of("player-movement"), Optional.empty()),
+                    "start-native-timeline-replay", Duration.ofSeconds(5));
+
+            InputTimelineSpec timeline = new InputTimelineSpec(60, List.of(
+                    new InputTimelineTransition("control-on", 1, "set-player-control",
+                            RuntimeValues.object(RuntimeValues.field(
+                                    "active", RuntimeValues.bool(true)))),
+                    new InputTimelineTransition("velocity-two", 1, "move-player",
+                            RuntimeValues.object(RuntimeValues.field(
+                                    "velocityX", RuntimeValues.decimal("2")))),
+                    new InputTimelineTransition("velocity-four", 1, "move-player",
+                            RuntimeValues.object(RuntimeValues.field(
+                                    "velocityX", RuntimeValues.decimal("4")))),
+                    new InputTimelineTransition("control-off", 60, "set-player-control",
+                            RuntimeValues.object(RuntimeValues.field(
+                                    "active", RuntimeValues.bool(false))))));
+            InputTimelineResult result = runtime.inputs().executeTimeline(
+                    timeline, "native-input-timeline", Duration.ofSeconds(10))
+                    .result().orElseThrow();
+
+            assertEquals(InputTimelineStopReason.COMPLETED, result.stopReason());
+            assertEquals(60, result.bounds().completedTicks());
+            assertEquals(4, result.bounds().executedTransitions());
+            assertEquals(0, result.bounds().failedTransitions());
+            assertEquals(0, result.bounds().notExecutedTransitions());
+            assertTrue(result.transitions().stream().allMatch(value ->
+                    value.state() == InputTimelineTransitionState.EXECUTED
+                            && value.injection().orElseThrow().resultingFrameId().isPresent()));
+            assertEquals(List.of(1L, 1L, 1L, 60L), result.transitions().stream()
+                    .map(value -> value.injection().orElseThrow().actualTick().orElseThrow())
+                    .toList());
+
+            FrameSnapshot controlOnFrame = runtime.frame(result.transitions().get(0)
+                    .injection().orElseThrow().resultingFrameId().orElseThrow()).orElseThrow();
+            assertEquals(RuntimeValues.bool(true), controlOnFrame.entity(
+                    EntityId.of("fixture.player-control")).orElseThrow()
+                    .property("active").orElseThrow());
+            FrameSnapshot velocityFrame = runtime.frame(result.transitions().get(2)
+                    .injection().orElseThrow().resultingFrameId().orElseThrow()).orElseThrow();
+            RuntimeValue.Vector2Value firstVelocity = assertInstanceOf(
+                    RuntimeValue.Vector2Value.class, velocityFrame.entity(
+                            EntityId.of("box2d.body.player")).orElseThrow()
+                            .property("linearVelocity").orElseThrow());
+            assertTrue(firstVelocity.x().value().doubleValue() > 3,
+                    "same-tick list order must leave velocity 4 rather than 2");
+            FrameSnapshot controlOffFrame = runtime.frame(result.transitions().get(3)
+                    .injection().orElseThrow().resultingFrameId().orElseThrow()).orElseThrow();
+            assertEquals(RuntimeValues.bool(false), controlOffFrame.entity(
+                    EntityId.of("fixture.player-control")).orElseThrow()
+                    .property("active").orElseThrow());
+            assertTrue(position(runtime, "player").x().value().doubleValue() > 0,
+                    "the player must move through idle ticks");
+
+            runtime.recordings().stop("native-timeline-replay",
+                    "stop-native-timeline-replay", Duration.ofSeconds(5));
+            var recording = runtime.recordings().get("native-timeline-replay", 0, 256);
+            assertEquals(4, recording.entries().stream()
+                    .filter(RecordingInputEntry.class::isInstance).count());
+            assertEquals(60, recording.entries().stream()
+                    .filter(RecordingTickEntry.class::isInstance).count());
+
+            var replay = runtime.replays().execute(
+                    "native-timeline-replay", "execute-native-timeline-replay",
+                    Duration.ofSeconds(20)).result().orElseThrow();
+            assertEquals(DeterminismStatus.EQUAL, replay.status(), replay::toString);
+            assertEquals(60, replay.bounds().completedTicks());
+            assertEquals(4, replay.bounds().recordedInputs());
         }
     }
 

@@ -233,8 +233,20 @@ Disabled runtimes retain no providers or frames and perform no serialization.
     reports `INCONCLUSIVE` whenever loss, bounds, timeout, lifecycle, or application failure makes
     equality unsafe. Correlation is not causality. Protocol 2.5 and local stdio MCP expose the
     closed bounded result without changing older protocol or recording shapes.
-42. The unpublished native conformance fixture composes the public fixed-step, Box2D inspection,
-    contact, scenario, registered-input, controlled-tick, assertion, determinism, protocol, and MCP
+42. Bounded input timeline execution is one application-dispatched parent command. Discrete
+    registered transitions are explicit local-tick facts that execute in request-list order
+    immediately before exact acknowledged fixed ticks; ticks without transitions still advance.
+    Persistent input state is application-owned; the runtime never interpolates, releases, or
+    injects OS input. Execution is fail-stop with no rollback or automatic retry: hard input, tick,
+    canonical-evidence, retention, and monotonic-deadline limits fail closed with explicit
+    completed, failed, and not-executed transition testimony, and partial application mutation is
+    never described as undone. Recording schema 1 and replay consume the normal registered-input
+    and controlled-tick evidence; failed, redacted, timed-out, or lifecycle-invalidated timeline
+    evidence never leaves replay conclusive. Protocol 2.6 and local stdio MCP expose the closed
+    bounded result without changing older protocol shapes.
+43. The unpublished native conformance fixture composes the public fixed-step, Box2D inspection,
+    contact, scenario, registered-input, controlled-tick, assertion, determinism, replay,
+    input-timeline, protocol, and MCP
     contracts in one application-owned model. Linux qualification launches a hidden real LWJGL3
     application and actual Box2D desktop natives only under Xvfb. The fixture proves that many
     controlled simulation ticks remain valid with one supplementary render and records structured

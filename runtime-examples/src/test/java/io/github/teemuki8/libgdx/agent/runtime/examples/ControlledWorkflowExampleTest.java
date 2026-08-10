@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntimeException;
 import io.github.teemuki8.libgdx.agent.runtime.core.CommandState;
 import io.github.teemuki8.libgdx.agent.runtime.core.DeterminismStatus;
+import io.github.teemuki8.libgdx.agent.runtime.core.InputTimelineStopReason;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicReference;
@@ -19,8 +20,10 @@ final class ControlledWorkflowExampleTest {
             ControlledWorkflowExample.WorkflowResult result = example.runWorkflow();
 
             assertEquals(CommandState.SUCCEEDED, result.resetState());
+            assertEquals(InputTimelineStopReason.COMPLETED, result.timelineStopReason());
             assertEquals(60, result.completedTicks());
-            assertEquals(1, result.firstAppliedEpochTick());
+            assertEquals(1, result.executedTransitions());
+            assertEquals(1, result.firstAppliedControlledTick());
             assertEquals("PASS", result.expectedPosition());
             assertEquals("FAIL", result.wrongPosition());
             assertTrue(result.recordedInputs() >= 1);

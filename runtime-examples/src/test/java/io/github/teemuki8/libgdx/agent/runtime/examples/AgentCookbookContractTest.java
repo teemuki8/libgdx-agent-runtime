@@ -36,6 +36,7 @@ class AgentCookbookContractTest {
             "## Query changes, events, and decisions",
             "## Run controlled scenarios and input",
             "## Capture and execute deterministic replay",
+            "## Execute a deterministic input timeline",
             "## Host same-JVM stdio MCP",
             "## Diagnose incomplete and failed evidence",
             "## Use the deterministic Box2D example");
@@ -68,8 +69,13 @@ class AgentCookbookContractTest {
         assertTrue(cookbook.contains("runtime.replays().start"));
         assertTrue(cookbook.contains("runtime_replay_recording_start"));
         assertTrue(cookbook.contains("runtime_replay"));
+        assertTrue(cookbook.contains("runtime.inputs().executeTimeline"));
+        assertTrue(cookbook.contains("runtime_input_timeline"));
+        assertTrue(cookbook.contains("Protocol 2.6"));
+        assertTrue(cookbook.contains("NOT_EXECUTED"));
         assertTrue(cookbook.contains("ordinary recording is not executable replay evidence"));
-        assertTrue(cookbook.contains("Protocol 2.5 and replay execution are unreleased"));
+        assertTrue(cookbook.contains(
+                "Protocol 2.5 replay and protocol 2.6 input timelines are unreleased"));
         assertTrue(cookbook.contains("DIVERGED path in `ControlledWorkflowExample`"));
         assertLocalLinksResolve(cookbook);
         assertCurrentConsumerVersions();

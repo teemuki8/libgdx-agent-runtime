@@ -13,6 +13,18 @@ All notable changes follow Keep a Changelog structure.
   sanitized application failures. Closed local-stdio MCP tools, a compiled workflow transcript,
   and real Box2D/LWJGL3 fixtures qualify the additive contract without changing recording schema 1.
 
+- Protocol 2.6 adds one bounded application-dispatched operation that validates and executes an
+  ordered sequence of explicit registered input transitions through exact acknowledged fixed
+  ticks. Transitions sharing a local tick execute in request-list order; ticks without transitions
+  still advance; persistent held controls remain application-owned. Execution is fail-stop with
+  hard input/tick/evidence/retention/deadline limits, explicit completed/failed/not-executed
+  transition testimony, no rollback or automatic retry, and never false `COMPLETED`. Recording
+  schema 1 and replay consume the normal registered-input and controlled-tick evidence; failed,
+  redacted, timed-out, or lifecycle-invalidated timeline evidence keeps replay inconclusive.
+  Closed protocol 2.6 JSON, the `runtime_input_timeline` MCP tool with registered-input-specific
+  scalar variants, a compiled workflow recipe, a tested MCP transcript step, and actual-native
+  Box2D/LWJGL3 fixture coverage qualify the additive contract.
+
 ## [2.1.0] - 2026-08-10
 
 ### Added

@@ -244,6 +244,14 @@ public final class InputRegistry {
         validateDeterminismScript(script);
     }
 
+    synchronized void validateReplayCaptureReady() {
+        if (determinismExecuting || outstanding != 0
+                || !scheduled.isEmpty() || !executedByTick.isEmpty()) {
+            throw new AgentRuntimeException(RuntimeErrorCode.INVALID_LIFECYCLE,
+                    "replay capture requires an empty ordinary input queue");
+        }
+    }
+
     private void validateDeterminismScript(List<SimulationDeterminismInput> script) {
         for (SimulationDeterminismInput input : script) {
             InputDescriptor descriptor = inputs.get(input.inputId());

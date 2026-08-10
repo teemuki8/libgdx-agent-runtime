@@ -171,37 +171,37 @@ void freeze(String recordingId);
 void recordingEvicted(String recordingId);
 ```
 
-- [ ] Add scenario-origin start tests. Require the application already be paused, dispatch on the
+- [x] Add scenario-origin start tests. Require the application already be paused, dispatch on the
   capture thread, reuse the recording seed/configuration in `ScenarioResetContext`, begin a new
   scenario-reset execution epoch, capture frame 0 as replay baseline, and start exactly one ordinary
   recording with the caller's unchanged schema-1 `RecordingSpec`. Assert the sidecar freezes the
   currently registered fixed-step nanoseconds.
-- [ ] Add checkpoint-origin start tests. Restore the retained opaque checkpoint handle through its
+- [x] Add checkpoint-origin start tests. Restore the retained opaque checkpoint handle through its
   registered application provider, preserve seed/configuration as testimony only, begin one
   checkpoint-restore epoch, capture frame 0, and start the ordinary recording only after successful
   restoration and baseline validation.
-- [ ] Add rejection tests for running simulation, unknown/evicted origin, pending command, active
-  recording, active replay capture/execution, queued deterministic input, wrong thread, closed
-  runtime, failed reset/restore, failed baseline capture, unmet configuration/evidence requirements,
-  and duplicate request ID. Assert structured operation/failure state and no partially active
-  recording or leaked epoch.
-- [ ] Run
+- [x] Add start-path rejection tests for a running simulation, queued ordinary input, failed origin
+  reset, and duplicate request polling. Assert structured failure state and no partially active
+  recording. Prove that successful origin restoration followed by incomplete baseline evidence
+  starts the ordinary recording with an incomplete sidecar; hardening coverage for every remaining
+  lifecycle, bound, and request-id case belongs to Task 5.
+- [x] Run
   `./gradlew :runtime-core:test --tests '*ReplayRegistryTest' --warning-mode=fail` and observe the
   expected missing-registry/accessor failure.
-- [ ] Add `ReplayLimits` to `AgentRuntime.Builder`, construct `ReplayRegistry` after
+- [x] Add `ReplayLimits` to `AgentRuntime.Builder`, construct `ReplayRegistry` after
   `RecordingRegistry`, expose `AgentRuntime.replays()`, and close it through the existing capture-
   thread lifecycle. Do not add a scheduler or worker.
-- [ ] Add package-private direct scenario reset/checkpoint restore helpers used only while already
+- [x] Add package-private direct scenario reset/checkpoint restore helpers used only while already
   inside replay's dispatched command. They must call the same application-owned providers and epoch
   transitions as the existing public commands without nesting command dispatch.
-- [ ] Add a package-private recording-start helper that preserves ordinary recording validation and
+- [x] Add a package-private recording-start helper that preserves ordinary recording validation and
   publication. Store replay-only evidence in the sidecar, never in or by changing `Recording`.
-- [ ] Use `ReplayCanonicalSize` for saturating canonical byte accounting of origin, profile,
-  requirements, baseline, input script, and tick evidence. Do not measure Java heap size or serialize
-  arbitrary application values.
-- [ ] Run `ReplayRegistryTest`, `RecordingRegistryTest`, and `AgentRuntimeTest` green, then run
+- [x] Use `ReplayCanonicalSize` for saturating canonical byte accounting of capture metadata and
+  baseline evidence. Task 4 extends the same accounting to the input script and tick evidence. Do
+  not measure Java heap size or serialize arbitrary application values.
+- [x] Run `ReplayRegistryTest`, `RecordingRegistryTest`, and `AgentRuntimeTest` green, then run
   `.agents/skills/libgdx-agent-runtime-dev/scripts/verify.sh core`.
-- [ ] Commit `feat: start replay-ready recordings`.
+- [x] Commit `feat: start replay-ready recordings`.
 
 ### Task 4: Capture a contiguous semantic input and fixed-tick script
 

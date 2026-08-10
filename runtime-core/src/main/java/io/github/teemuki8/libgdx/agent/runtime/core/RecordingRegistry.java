@@ -198,6 +198,26 @@ public final class RecordingRegistry {
 
     private synchronized void startNow(RecordingSpec spec) {
         runtime.requireRecordingMutation();
+        active = candidate(spec);
+    }
+
+    synchronized void validateReplayStart(RecordingSpec spec) {
+        Objects.requireNonNull(spec, "spec");
+        requireConfiguredLengths(spec);
+        candidate(spec);
+    }
+
+    synchronized void startNowForReplay(RecordingSpec spec) {
+        runtime.requireRecordingMutation();
+        requireConfiguredLengths(spec);
+        active = candidate(spec);
+    }
+
+    synchronized boolean active() {
+        return active != null;
+    }
+
+    private MutableRecording candidate(RecordingSpec spec) {
         if (active != null) {
             throw new AgentRuntimeException(
                     RuntimeErrorCode.INVALID_LIFECYCLE, "a recording is already active");
@@ -215,7 +235,7 @@ public final class RecordingRegistry {
             throw new AgentRuntimeException(
                     RuntimeErrorCode.LIMIT_EXCEEDED, "recording metadata exceeds encoded size limit");
         }
-        active = new MutableRecording(spec, runtime.currentEpoch(), baseBytes);
+        return new MutableRecording(spec, runtime.currentEpoch(), baseBytes);
     }
 
     private synchronized void stopNow(String recordingId, RecordingStopReason reason,

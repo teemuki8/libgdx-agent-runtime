@@ -225,6 +225,9 @@ public final class InputRegistry {
         Error firstError = null;
         while (!due.isEmpty()) {
             Evidence evidence = due.removeFirst();
+            if (evidence.state != InputInjectionState.SCHEDULED) {
+                continue;
+            }
             outstanding--;
             evidence.actualTick = OptionalLong.of(tick);
             executed.add(evidence);
@@ -234,6 +237,7 @@ public final class InputRegistry {
                 evidence.diagnostic = Optional.of("execution epoch changed before target tick");
                 completeLogicalExecution(evidence, CommandState.FAILED);
                 if (timelineExecuting) {
+                    evidence.timelineNotExecuted = true;
                     stopRemainingTimelineChildren(due,
                             InputTimelineCanonicalSize.LIFECYCLE_CHANGED_MESSAGE);
                     executedByTick.put(tick, List.copyOf(executed));
@@ -592,7 +596,8 @@ public final class InputRegistry {
 
     /**
      * Releases exclusive timeline staging, marking any unattempted child as terminal without
-     * running its handler, and always clears the exclusive execution flag.
+     * running its handler, removing it from its future scheduled bucket, and always clearing the
+     * exclusive execution flag.
      */
     synchronized void releaseTimeline(String parentRequestId, String diagnostic) {
         for (Evidence evidence : requests.values()) {
@@ -605,9 +610,21 @@ public final class InputRegistry {
                 evidence.state = InputInjectionState.FAILED;
                 evidence.timelineNotExecuted = true;
                 evidence.diagnostic = Optional.of(boundedDiagnostic(diagnostic));
+                removeScheduled(evidence);
             }
         }
         timelineExecuting = false;
+    }
+
+    private void removeScheduled(Evidence evidence) {
+        ArrayDeque<Evidence> bucket = scheduled.get(evidence.targetTick);
+        if (bucket == null) {
+            return;
+        }
+        bucket.removeIf(candidate -> candidate == evidence);
+        if (bucket.isEmpty()) {
+            scheduled.remove(evidence.targetTick);
+        }
     }
 
     /** Returns the first bounded structured failure of an attempted timeline child, if any. */

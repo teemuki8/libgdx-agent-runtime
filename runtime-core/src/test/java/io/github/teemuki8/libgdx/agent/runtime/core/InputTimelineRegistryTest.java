@@ -844,6 +844,62 @@ final class InputTimelineRegistryTest {
         assertTrue(dispatch.isEmpty());
     }
 
+    @Test
+    void failedTimelineNeverExecutesLaterStagedTransitionsOnOrdinaryTicks() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        ArrayList<String> observed = new ArrayList<>();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("timeline-stale-scheduled"))
+                .clock(() -> 1)
+                .commandDispatcher(dispatch::addLast)
+                .build();
+        runtime.simulation().register(SimulationTimelineSpec.fixedStep(10));
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {})
+                .resume(() -> {})
+                .acknowledgedTick(deltaNanos -> deltaNanos)
+                .build());
+        runtime.inputs().register(InputSpec.builder("button")
+                .requiredBoolean("active")
+                .handler(parameters -> observed.add(
+                        "button:" + parameters.requiredBoolean("active")))
+                .build());
+        runtime.inputs().register(InputSpec.builder("boom")
+                .requiredBoolean("active")
+                .handler(parameters -> {
+                    throw new IllegalStateException("timeline failed");
+                })
+                .build());
+        runtime.start();
+        runtime.controls().control(true, "pause", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+
+        InputTimelineSpec spec = new InputTimelineSpec(3, List.of(
+                transition("boom", 1, "boom", "active", RuntimeValues.bool(true)),
+                transition("later-one", 2, "button", "active", RuntimeValues.bool(true)),
+                transition("later-two", 3, "button", "active", RuntimeValues.bool(false))));
+        runtime.inputs().executeTimeline(spec, "stale-parent", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        InputTimelineResult result = runtime.inputs().executeTimeline(
+                spec, "stale-parent", Duration.ofSeconds(1)).result().orElseThrow();
+        assertEquals(InputTimelineStopReason.INPUT_FAILED, result.stopReason());
+        assertEquals(InputTimelineTransitionState.NOT_EXECUTED,
+                result.transitions().get(1).state());
+        assertEquals(InputTimelineTransitionState.NOT_EXECUTED,
+                result.transitions().get(2).state());
+
+        // Stale later-tick buckets are drained at release: ordinary advancement never re-runs
+        // a NOT_EXECUTED handler, and a new timeline is admitted without draining stale ticks.
+        runtime.controls().advanceFixed("stale-tick", 1, Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        assertEquals(0, observed.size());
+        assertEquals(0, runtime.inputs().retainedPendingInjections());
+        InputTimelineResult next = execute(dispatch, runtime,
+                oneTransition("next-child"), "next-parent");
+        assertEquals(InputTimelineStopReason.COMPLETED, next.stopReason());
+        assertEquals(List.of("button:true"), observed);
+    }
+
     private static AgentRuntime runtime(ArrayDeque<Runnable> dispatch,
             InputLimits inputLimits, InputTimelineLimits timelineLimits) {
         return runtime(dispatch, CommandDispatchLimits.developmentDefaults(),

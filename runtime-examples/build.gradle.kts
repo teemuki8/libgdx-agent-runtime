@@ -29,8 +29,6 @@ tasks.withType<Test>().configureEach {
     systemProperty("example.classpath", sourceSets.main.get().runtimeClasspath.asPath)
     systemProperty(
         "example.mcp.launcher",
-        layout.buildDirectory.file(
-            "install/runtime-mcp-example/bin/runtime-mcp-example",
-        ).get().asFile.absolutePath,
+        project.file("run-mcp-example-xvfb.sh").absolutePath,
     )
 }

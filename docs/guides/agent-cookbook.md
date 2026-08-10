@@ -209,16 +209,17 @@ Prepare the tested application distribution once (and after dependency/source ch
 ./gradlew :runtime-examples:installDist
 ```
 
-The installed script invokes Java directly, so Gradle cannot prefix stdout with build or JVM
-diagnostics. From the repository, a client configuration can then launch the same-JVM example under
-the required isolated Linux display:
+The repository wrapper invokes the installed script directly. It also preserves the original
+stderr on file descriptor 3 because Debian/Ubuntu `xvfb-run` otherwise merges child stderr into
+stdout. The MCP command therefore emits only JSON-RPC on stdout while Java/LWJGL diagnostics remain
+on stderr. From the repository, use this client configuration:
 
 ```json
 {
   "mcpServers": {
     "libgdx-runtime-example": {
-      "command": "xvfb-run",
-      "args": ["-a", "./runtime-examples/build/install/runtime-mcp-example/bin/runtime-mcp-example"]
+      "command": "./runtime-examples/run-mcp-example-xvfb.sh",
+      "args": []
     }
   }
 }

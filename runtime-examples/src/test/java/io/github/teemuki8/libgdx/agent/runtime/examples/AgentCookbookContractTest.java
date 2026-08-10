@@ -50,7 +50,7 @@ class AgentCookbookContractTest {
         assertTrue(cookbook.contains("WRONG_THREAD"));
         assertTrue(cookbook.contains("unknown mutation outcome"));
         assertTrue(cookbook.contains(":runtime-examples:installDist"));
-        assertTrue(cookbook.contains("runtime-mcp-example/bin/runtime-mcp-example"));
+        assertTrue(cookbook.contains("run-mcp-example-xvfb.sh"));
         assertTrue(cookbook.contains("### Exact failure calls"));
         assertTrue(cookbook.contains("runtime.checkpoints().create"));
         assertTrue(cookbook.contains("runtime.recordings().start"));
@@ -76,6 +76,8 @@ class AgentCookbookContractTest {
         String exampleBuild = read("runtime-examples/build.gradle.kts");
         assertTrue(exampleBuild.contains("applicationName = \"runtime-mcp-example\""));
         assertTrue(exampleBuild.contains("example.mcp.launcher"));
+        assertTrue(Files.isExecutable(repositoryFile(
+                "runtime-examples/run-mcp-example-xvfb.sh")));
     }
 
     @Test

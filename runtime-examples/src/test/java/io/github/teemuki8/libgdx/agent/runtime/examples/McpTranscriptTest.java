@@ -112,6 +112,8 @@ class McpTranscriptTest {
     @Test
     @Timeout(90)
     void sameJvmLwjgl3LauncherReservesStdoutForMcp() throws Exception {
+        assertTrue(System.getProperty("example.mcp.launcher")
+                .endsWith("run-mcp-example-xvfb.sh"));
         Path errors = Files.createTempFile("agent-runtime-example-mcp-", ".txt");
         List<String> command = new ArrayList<>();
         command.add(System.getProperty("example.mcp.launcher"));

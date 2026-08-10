@@ -68,10 +68,10 @@ final class SimulationProtocolTest {
         assertEquals(ProtocolVersion.V2, old.version());
 
         RuntimeResponse.Failure future = assertInstanceOf(RuntimeResponse.Failure.class,
-                service.execute(new RuntimeRequest(new ProtocolVersion(2, 6), "future",
+                service.execute(new RuntimeRequest(new ProtocolVersion(2, 7), "future",
                         "simulation-version", new RuntimeCommand.Simulation())));
         assertEquals(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED, future.error().code());
-        assertEquals(ProtocolVersion.V2_5, future.version());
+        assertEquals(ProtocolVersion.V2_6, future.version());
 
         String unknown = """
                 {"version":{"major":2,"minor":1},"requestId":"unknown",

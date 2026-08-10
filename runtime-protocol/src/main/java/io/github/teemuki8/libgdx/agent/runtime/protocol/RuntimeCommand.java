@@ -51,7 +51,8 @@ import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue;
     @JsonSubTypes.Type(value = RuntimeCommand.SimulationAdvance.class, name = "simulationAdvance"),
     @JsonSubTypes.Type(value = RuntimeCommand.ReplayRecordingStart.class,
             name = "replayRecordingStart"),
-    @JsonSubTypes.Type(value = RuntimeCommand.Replay.class, name = "replay")
+    @JsonSubTypes.Type(value = RuntimeCommand.Replay.class, name = "replay"),
+    @JsonSubTypes.Type(value = RuntimeCommand.InputTimeline.class, name = "inputTimeline")
 })
 public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeCommand.Capabilities,
         RuntimeCommand.Frames, RuntimeCommand.Snapshot, RuntimeCommand.Entity,
@@ -70,7 +71,7 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
         RuntimeCommand.SimulationAssert, RuntimeCommand.SimulationDeterminismCheck,
         RuntimeCommand.FixedStep, RuntimeCommand.FixedStepUpdates,
         RuntimeCommand.SimulationAdvance, RuntimeCommand.ReplayRecordingStart,
-        RuntimeCommand.Replay {
+        RuntimeCommand.Replay, RuntimeCommand.InputTimeline {
     /** Lists published sessions. */
     record Sessions() implements RuntimeCommand {}
 
@@ -642,6 +643,22 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
         public Replay {
             ProtocolJson.requireIdentifier(recordingId, "recordingId");
             ProtocolJson.requireIdentifier(replayRequestId, "replayRequestId");
+            requirePositive(timeoutNanos, "timeoutNanos");
+        }
+    }
+
+    /** Submits or polls one exact-tick registered-input timeline. */
+    record InputTimeline(String timelineRequestId, int totalTicks,
+            java.util.List<io.github.teemuki8.libgdx.agent.runtime.core.InputTimelineTransition>
+                    transitions,
+            long timeoutNanos) implements RuntimeCommand {
+        public InputTimeline {
+            ProtocolJson.requireIdentifier(timelineRequestId, "timelineRequestId");
+            requirePositive(totalTicks, "totalTicks");
+            transitions = java.util.List.copyOf(java.util.Objects.requireNonNull(
+                    transitions, "transitions"));
+            new io.github.teemuki8.libgdx.agent.runtime.core.InputTimelineSpec(
+                    totalTicks, transitions);
             requirePositive(timeoutNanos, "timeoutNanos");
         }
     }

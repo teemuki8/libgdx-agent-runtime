@@ -1,7 +1,10 @@
 package io.github.teemuki8.libgdx.agent.runtime.core;
 
 import java.time.Duration;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -12,6 +15,9 @@ public final class ReplayRegistry {
     private final ObservableEvidenceComparator comparator;
     private final LinkedHashMap<String, CaptureEvidence> captureOperations =
             new LinkedHashMap<>();
+    private final LinkedHashMap<String, RetainedReplay> retainedReplays =
+            new LinkedHashMap<>();
+    private final ArrayDeque<String> evictedRecordingIds = new ArrayDeque<>();
     private MutableCapture activeCapture;
 
     ReplayRegistry(AgentRuntime runtime, ReplayLimits limits) {
@@ -79,6 +85,78 @@ public final class ReplayRegistry {
         return limits;
     }
 
+    synchronized Optional<RetainedReplay> retainedReplay(String recordingId) {
+        return Optional.ofNullable(retainedReplays.get(recordingId));
+    }
+
+    synchronized boolean replayEvicted(String recordingId) {
+        return evictedRecordingIds.contains(recordingId);
+    }
+
+    synchronized void recordAction(
+            ActionInvocation invocation, RuntimeValue.ObjectValue parameters) {
+        if (!runtime.onCaptureThread() || activeCapture == null) {
+            return;
+        }
+        activeCapture.markIncomplete("semantic action is not replayable");
+    }
+
+    synchronized void recordInput(InputInjection injection) {
+        if (!runtime.onCaptureThread() || activeCapture == null) {
+            return;
+        }
+        if (!activeCapture.inputs.containsKey(injection.requestId())) {
+            if (activeCapture.inputs.size() >= limits.maximumInputs()) {
+                activeCapture.observedInputs = Math.min(
+                        activeCapture.observedInputs + 1L, limits.maximumInputs() + 1L);
+                activeCapture.markIncomplete("replay input limit exceeded");
+                return;
+            }
+            activeCapture.observedInputs++;
+        }
+        activeCapture.inputs.put(injection.requestId(), injection);
+    }
+
+    synchronized void recordTick(SimulationTick tick) {
+        if (!runtime.onCaptureThread() || activeCapture == null) {
+            return;
+        }
+        try {
+            captureTick(activeCapture, tick);
+        } catch (RuntimeException failure) {
+            activeCapture.markIncomplete("replay tick evidence capture failed");
+        }
+    }
+
+    synchronized void freeze(String recordingId) {
+        if (activeCapture == null) {
+            return;
+        }
+        MutableCapture capture = activeCapture;
+        if (!capture.spec.recording().id().equals(recordingId)) {
+            capture.markIncomplete("replay recording lifecycle is inconsistent");
+            return;
+        }
+        try {
+            freezeInputs(capture);
+        } catch (RuntimeException failure) {
+            capture.markIncomplete("replay input evidence freeze failed");
+        }
+        RetainedReplay retained = capture.freeze();
+        retainedReplays.put(recordingId, retained);
+        activeCapture = null;
+    }
+
+    synchronized void recordingEvicted(String recordingId) {
+        if (retainedReplays.remove(recordingId) != null) {
+            evictedRecordingIds.addLast(recordingId);
+            int limit = runtime.recordings().limits().retainedRecordings();
+            while (evictedRecordingIds.size() > limit) {
+                evictedRecordingIds.removeFirst();
+            }
+        }
+    }
+
     private void startNow(CaptureEvidence operation) {
         ReplayCaptureSpec spec = operation.spec;
         validateEnvironment(spec);
@@ -131,6 +209,116 @@ public final class ReplayRegistry {
         }
         return runtime.checkpoints().restoreForReplay(
                 recording.checkpointId().orElseThrow());
+    }
+
+    private void captureTick(MutableCapture capture, SimulationTick tick) {
+        capture.observedTicks = Math.min(
+                capture.observedTicks + 1L, limits.maximumTicks() + 1L);
+        if (!tick.executionEpochId().equals(capture.baselineEpoch)) {
+            capture.markIncomplete("simulation execution epoch changed during replay capture");
+            return;
+        }
+        long expectedTick = capture.ticks.size() + 1L;
+        if (tick.epochTick() != expectedTick) {
+            capture.markIncomplete("simulation epoch ticks are not contiguous");
+            return;
+        }
+        if (tick.source() != SimulationTickSource.PAUSED) {
+            capture.markIncomplete("simulation tick occurred while running");
+            return;
+        }
+        if (tick.outcome() != SimulationTickOutcome.COMPLETED
+                || tick.mutationOutcome() != SimulationMutationOutcome.KNOWN_COMPLETED
+                || tick.configuredFixedStepNanos().orElse(-1) != capture.fixedStepNanos
+                || tick.runtimeSuppliedDeltaNanos() != capture.fixedStepNanos
+                || tick.executedDeltaNanos().orElse(-1) != capture.fixedStepNanos
+                || tick.resultingFrameId().isEmpty()) {
+            capture.markIncomplete("simulation tick is not an acknowledged fixed-step completion");
+            return;
+        }
+        if (capture.observedTicks > limits.maximumTicks()) {
+            capture.markIncomplete("replay tick limit exceeded");
+            return;
+        }
+        FrameSnapshot frame = runtime.frame(tick.resultingFrameId().orElseThrow()).orElse(null);
+        if (frame == null || !frame.executionEpochId().equals(capture.baselineEpoch)) {
+            capture.markIncomplete("simulation tick frame evidence is unavailable");
+            return;
+        }
+        Optional<String> problem = comparator.evidenceProblem(
+                frame, capture.spec.evidenceRequirements());
+        if (problem.isEmpty()) {
+            problem = comparator.selectionProblem(
+                    frame, capture.spec.profile().comparisonScope());
+        }
+        if (problem.isPresent()) {
+            capture.markIncomplete(problem.orElseThrow());
+            return;
+        }
+        long tickBytes = ReplayCanonicalSize.tick(tick);
+        long remaining = limits.maximumEncodedEvidenceBytes() - capture.encodedBytes - tickBytes;
+        if (remaining <= 0) {
+            capture.markIncomplete("encoded replay evidence limit exceeded");
+            return;
+        }
+        ObservableEvidenceComparator.Counters counters =
+                new ObservableEvidenceComparator.Counters();
+        Optional<ObservableEvidenceComparator.FrameEvidence> evidence = comparator.capture(
+                frame, capture.spec.profile(), capture.spec.eventTypes(),
+                new ObservableEvidenceComparator.Limits(
+                        limits.maximumEntitiesPerFrame(), limits.maximumFactsPerFrame(),
+                        Math.toIntExact(remaining)), counters);
+        if (counters.incompleteReason().isPresent() || evidence.isEmpty()) {
+            capture.markIncomplete(counters.incompleteReason()
+                    .orElse("replay tick evidence is incomplete"));
+            return;
+        }
+        capture.observedEntities = ReplayCanonicalSize.add(
+                capture.observedEntities, counters.observedEntities());
+        capture.observedFacts = ReplayCanonicalSize.add(
+                capture.observedFacts, counters.observedFacts());
+        capture.encodedBytes = ReplayCanonicalSize.add(capture.encodedBytes,
+                ReplayCanonicalSize.add(tickBytes, counters.encodedEvidenceBytes()));
+        CapturedTick captured = new CapturedTick(tick, evidence.orElseThrow());
+        capture.ticks.add(captured);
+        capture.tickByFrame.put(tick.resultingFrameId().orElseThrow(), captured);
+    }
+
+    private void freezeInputs(MutableCapture capture) {
+        for (InputInjection injection : capture.inputs.values()) {
+            if (injection.state() != InputInjectionState.EXECUTED
+                    || injection.parametersRedacted()
+                    || injection.recordedParameters().isEmpty()
+                    || injection.resultingFrameId().isEmpty()
+                    || injection.diagnostic().isPresent()
+                    || injection.applicationFailure().isPresent()
+                    || injection.command().status().map(CommandStatus::state)
+                            .orElse(CommandState.FAILED) != CommandState.SUCCEEDED) {
+                capture.markIncomplete("input did not complete with replayable parameters");
+                continue;
+            }
+            if (!injection.executionEpochId().equals(capture.baselineEpoch)) {
+                capture.markIncomplete("input execution epoch changed during replay capture");
+                continue;
+            }
+            CapturedTick tick = capture.tickByFrame.get(
+                    injection.resultingFrameId().orElseThrow());
+            if (tick == null) {
+                capture.markIncomplete("input resulting simulation tick is unavailable");
+                continue;
+            }
+            SimulationDeterminismInput replayInput = new SimulationDeterminismInput(
+                    tick.tick().epochTick(), injection.inputId(),
+                    injection.recordedParameters().orElseThrow());
+            long inputBytes = ReplayCanonicalSize.input(replayInput);
+            if (ReplayCanonicalSize.add(capture.encodedBytes, inputBytes)
+                    > limits.maximumEncodedEvidenceBytes()) {
+                capture.markIncomplete("encoded replay evidence limit exceeded");
+                continue;
+            }
+            capture.encodedBytes = ReplayCanonicalSize.add(capture.encodedBytes, inputBytes);
+            capture.replayInputs.add(replayInput);
+        }
     }
 
     private Optional<String> baselineProblem(ReplayCaptureSpec spec, FrameSnapshot baseline,
@@ -229,6 +417,8 @@ public final class ReplayRegistry {
     synchronized void close() {
         activeCapture = null;
         captureOperations.clear();
+        retainedReplays.clear();
+        evictedRecordingIds.clear();
     }
 
     private static boolean terminal(CommandState state) {
@@ -261,16 +451,47 @@ public final class ReplayRegistry {
         }
     }
 
+    static record CapturedTick(SimulationTick tick,
+            ObservableEvidenceComparator.FrameEvidence evidence) {
+        CapturedTick {
+            Objects.requireNonNull(tick, "tick");
+            Objects.requireNonNull(evidence, "evidence");
+        }
+    }
+
+    static record RetainedReplay(ReplayCaptureSpec spec, long fixedStepNanos,
+            ExecutionEpochId baselineEpoch, FrameId baselineFrame,
+            Optional<ObservableEvidenceComparator.FrameEvidence> baselineEvidence,
+            List<SimulationDeterminismInput> inputs, List<CapturedTick> ticks,
+            Optional<String> incompleteReason, long observedInputs, long observedTicks,
+            long observedEntities, long observedFacts, long encodedBytes) {
+        RetainedReplay {
+            Objects.requireNonNull(spec, "spec");
+            Objects.requireNonNull(baselineEpoch, "baselineEpoch");
+            Objects.requireNonNull(baselineFrame, "baselineFrame");
+            baselineEvidence = Objects.requireNonNull(baselineEvidence, "baselineEvidence");
+            inputs = List.copyOf(inputs);
+            ticks = List.copyOf(ticks);
+            incompleteReason = Objects.requireNonNull(incompleteReason, "incompleteReason");
+        }
+    }
+
     private static final class MutableCapture {
         private final ReplayCaptureSpec spec;
         private final long fixedStepNanos;
         private final ExecutionEpochId baselineEpoch;
         private final FrameId baselineFrame;
         private final Optional<ObservableEvidenceComparator.FrameEvidence> baselineEvidence;
-        private final Optional<String> incompleteReason;
-        private final long observedEntities;
-        private final long observedFacts;
-        private final long encodedBytes;
+        private final LinkedHashMap<String, InputInjection> inputs = new LinkedHashMap<>();
+        private final ArrayList<CapturedTick> ticks = new ArrayList<>();
+        private final LinkedHashMap<FrameId, CapturedTick> tickByFrame = new LinkedHashMap<>();
+        private final ArrayList<SimulationDeterminismInput> replayInputs = new ArrayList<>();
+        private Optional<String> incompleteReason;
+        private long observedInputs;
+        private long observedTicks;
+        private long observedEntities;
+        private long observedFacts;
+        private long encodedBytes;
 
         private MutableCapture(ReplayCaptureSpec spec, long fixedStepNanos,
                 ExecutionEpochId baselineEpoch, FrameId baselineFrame,
@@ -286,6 +507,18 @@ public final class ReplayRegistry {
             this.observedEntities = observedEntities;
             this.observedFacts = observedFacts;
             this.encodedBytes = encodedBytes;
+        }
+
+        private void markIncomplete(String reason) {
+            if (incompleteReason.isEmpty()) {
+                incompleteReason = Optional.of(reason);
+            }
+        }
+
+        private RetainedReplay freeze() {
+            return new RetainedReplay(spec, fixedStepNanos, baselineEpoch, baselineFrame,
+                    baselineEvidence, replayInputs, ticks, incompleteReason, observedInputs,
+                    observedTicks, observedEntities, observedFacts, encodedBytes);
         }
     }
 }

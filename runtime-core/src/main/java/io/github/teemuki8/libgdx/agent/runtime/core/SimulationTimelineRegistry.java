@@ -239,6 +239,7 @@ public final class SimulationTimelineRegistry {
 
         Completion completion = completeAttempt(attempt, suppliedDeltaNanos, source,
                 acknowledged, reported[0], resultingFrame, applicationFailure[0], failure);
+        runtime.replays().recordTick(completion.tick);
         Throwable retainedFailure = failure != null ? failure : completion.postFailure;
         return new TickExecution(Optional.of(completion.tick),
                 Optional.ofNullable(retainedFailure));

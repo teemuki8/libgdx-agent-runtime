@@ -329,6 +329,7 @@ public final class InputRegistry {
                 evidence.recordedParameters, evidence.parametersRedacted, evidence.diagnostic,
                 evidence.applicationFailure);
         runtime.recordings().recordInput(injection);
+        runtime.replays().recordInput(injection);
         return injection;
     }
 

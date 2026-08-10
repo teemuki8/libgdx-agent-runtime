@@ -144,6 +144,7 @@ public final class ActionRegistry {
     private ActionInvocation record(ActionInvocation invocation,
             RuntimeValue.ObjectValue parameters) {
         runtime.recordings().recordAction(invocation, parameters);
+        runtime.replays().recordAction(invocation, parameters);
         return invocation;
     }
 

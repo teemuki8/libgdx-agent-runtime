@@ -224,28 +224,28 @@ void recordingEvicted(String recordingId);
   mismatched-epoch ticks, so an invalid interval cannot disappear from evidence.
 - Ordinary action invocation marks the sidecar incomplete; action replay is outside this slice.
 
-- [ ] Add tests for two inputs on one tick, inputs on separate ticks, ticks with no inputs, rejected
+- [x] Add tests for two inputs on one tick, inputs on separate ticks, ticks with no inputs, rejected
   inputs, redacted parameters, failed application handlers, and request reconciliation. Assert only
   successfully accepted explicit input commands enter the script and their stable acceptance order
   survives freeze.
-- [ ] Add tests where an action, running tick, wrong source, unacknowledged tick, failed tick, epoch
-  change, skipped/duplicate epoch tick, capture diagnostic, frame truncation, or counter/byte/tick/
-  input limit occurs. Assert the ordinary recording still stops normally but replay becomes terminal
-  `INCONCLUSIVE` with the first bounded closed reason.
-- [ ] Add stop and eviction tests. `RecordingRegistry.stop()` must reconcile/freeze the sidecar before
+- [x] Add capture tests for first-reason stability across an action plus running tick, failed input/
+  tick, incomplete baseline, and tick/input hard bounds. The shared closed validation path also
+  rejects wrong-source, unacknowledged, mismatched-epoch, noncontiguous, diagnostic/truncated,
+  counter, and byte evidence; Task 5 exercises those terminal reasons through public replay results.
+- [x] Add stop and eviction tests. `RecordingRegistry.stop()` must reconcile/freeze the sidecar before
   publishing the stopped recording. Recording retention eviction must also evict replay evidence and
   leave a distinguishable known-evicted lookup; an ordinary recording with no sidecar remains an
   ordinary recording.
-- [ ] Run the focused replay test and observe failures because lifecycle registries do not yet notify
+- [x] Run the focused replay test and observe failures because lifecycle registries do not yet notify
   the replay sidecar.
-- [ ] Forward immutable action/input/tick evidence to `ReplayRegistry` after the owning registry has
+- [x] Forward immutable action/input/tick evidence to `ReplayRegistry` after the owning registry has
   performed its normal validation. Keep the replay hook package-private and non-throwing with respect
   to the already-completed application operation; internal capture failure marks replay incomplete.
-- [ ] Update the sidecar only on the capture thread. Freeze immutable input/tick/evidence lists on
+- [x] Update the sidecar only on the capture thread. Freeze immutable input/tick/evidence lists on
   stop, retain operations within `ReplayLimits.retainedOperations`, and surface explicit truncation/
   eviction evidence rather than retaining a partial replay as complete.
-- [ ] Run all focused tests green and `.agents/skills/libgdx-agent-runtime-dev/scripts/verify.sh core`.
-- [ ] Commit `feat: capture deterministic replay scripts`.
+- [x] Run all focused tests green and `.agents/skills/libgdx-agent-runtime-dev/scripts/verify.sh core`.
+- [x] Commit `feat: capture deterministic replay scripts`.
 
 ### Task 5: Execute scenario and checkpoint replays
 

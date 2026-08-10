@@ -55,6 +55,28 @@ final class ReplayCanonicalSize {
         for (EventType eventType : spec.eventTypes()) {
             size = add(size, DeterminismCanonicalSize.simulationEventType(eventType));
         }
+        size = add(size, DeterminismCanonicalSize.listPrefix());
+        size = add(size, DeterminismCanonicalSize.listPrefix());
+        return size;
+    }
+
+    static long input(SimulationDeterminismInput input) {
+        long size = Long.BYTES;
+        size = add(size, DeterminismCanonicalSize.string(input.inputId()));
+        return add(size, DeterminismCanonicalSize.value(input.parameters()));
+    }
+
+    static long tick(SimulationTick tick) {
+        long size = Long.BYTES * 5L;
+        size = add(size, optionalLong(tick.configuredFixedStepNanos()));
+        size = add(size, optionalLong(tick.executedDeltaNanos()));
+        size = add(size, optionalLong(tick.resultingFrameId()
+                .map(frame -> OptionalLong.of(frame.value())).orElseGet(OptionalLong::empty)));
+        size = add(size, Integer.BYTES * 3L);
+        size = add(size, 1);
+        if (tick.diagnostic().isPresent()) {
+            size = add(size, DeterminismCanonicalSize.string(tick.diagnostic().orElseThrow()));
+        }
         return size;
     }
 

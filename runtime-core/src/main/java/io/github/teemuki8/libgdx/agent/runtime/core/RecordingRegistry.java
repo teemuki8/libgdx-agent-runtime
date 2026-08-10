@@ -257,6 +257,7 @@ public final class RecordingRegistry {
         stopping.reconciling = true;
         reconcileRequests(stopping);
         stopping.reconciling = false;
+        runtime.replays().freeze(recordingId);
         RecordingStopReason effectiveReason = stopping.forcedStopReason.orElse(reason);
         List<RecordingEntry> entries = List.copyOf(stopping.entries.values());
         RecordingMetadata preliminary = metadata(
@@ -269,6 +270,7 @@ public final class RecordingRegistry {
         while (recordings.size() > limits.retainedRecordings()) {
             String evicted = recordings.keySet().iterator().next();
             recordings.remove(evicted);
+            runtime.replays().recordingEvicted(evicted);
             evictedIds.addLast(evicted);
             while (evictedIds.size() > limits.retainedRecordings()) {
                 evictedIds.removeFirst();
@@ -283,13 +285,16 @@ public final class RecordingRegistry {
                         (RecordingActionEntry) recording.entries.get("action:" + requestId);
                 replace(recording, "action:" + requestId,
                         new RecordingActionEntry(prior.order(), invocation, prior.parameters()));
+                runtime.replays().recordAction(invocation, prior.parameters());
             });
         }
         for (String requestId : recording.inputRequestIds) {
-            runtime.inputs().recording(requestId).ifPresent(injection ->
+            runtime.inputs().recording(requestId).ifPresent(injection -> {
                     replace(recording, "input:" + requestId,
                             new RecordingInputEntry(
-                                    recording.entries.get("input:" + requestId).order(), injection)));
+                                    recording.entries.get("input:" + requestId).order(), injection));
+                    runtime.replays().recordInput(injection);
+                });
         }
     }
 

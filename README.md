@@ -38,7 +38,7 @@ determinism with scheduled registered inputs and explicit configuration/complete
 deterministic LWJGL3 fixture
 qualifies the full workflow. Its actual-native Box2D conformance scenario covers ball drop,
 dynamic collision, scheduled player movement, exact assertions, deterministic reruns, protocol,
-MCP, and render-independent evidence under Xvfb. The development line also provides an optional
+MCP, and render-independent evidence under Xvfb. The runtime also provides an optional
 explicit Box2D inspection and contact-evidence adapter; it never traverses an application world,
 installs a contact listener, or steps physics automatically. Applications retain ownership of the
 listener, fixed-step call, rendering, and native disposal.
@@ -167,7 +167,7 @@ game running elsewhere. Remote process attachment is explicitly outside V1.
 | `runtime-fixtures` | deterministic LWJGL3 qualification | not published |
 | `runtime-examples` | compiled consumer examples and tested MCP transcript | not published |
 
-Group: `io.github.teemuki8`. Current release: `2.0.0`. Development version: `2.0.1-SNAPSHOT`.
+Group: `io.github.teemuki8`. Current release: `2.1.0`. Development version: `2.1.1-SNAPSHOT`.
 
 ## Build
 

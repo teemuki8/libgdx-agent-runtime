@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted for the development line.
+Accepted.
 
 ## Context
 

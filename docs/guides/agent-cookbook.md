@@ -6,9 +6,7 @@ change must update its affected recipe in the same pull request. Examples are ex
 repository fixture tests.
 
 The simulation timeline, fixed-step, assertion, and determinism APIs and protocols 2.1-2.4
-described below are
-development-version APIs until a release containing them is published. The current published
-2.0.0 artifacts do not contain them.
+described below are available in release 2.1.0. Earlier 2.0.0 artifacts do not contain them.
 
 ## Task index
 
@@ -34,10 +32,9 @@ non-published `runtime-examples` module as ordinary consumers of the public arti
 | Interpret missing, bounded, or failed evidence | [Diagnose incomplete and failed evidence](#diagnose-incomplete-and-failed-evidence) | `AgentCookbookContractTest` and runtime fixture regressions |
 | Build a deterministic Box2D game | [Use the deterministic Box2D example](#use-the-deterministic-box2d-example) | [`DeterministicBox2dExample.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/DeterministicBox2dExample.java) |
 
-For released inspection-only APIs use `2.0.0`. Recipes using fixed-step simulation, simulation
-assertions, simulation determinism, or `agent-runtime-box2d` currently require the repository
-development version `2.0.1-SNAPSHOT` until the next release. The examples module itself is test
-scaffolding and is never a dependency or published artifact.
+Use release `2.1.0` for every recipe in this cookbook. The examples module itself is test
+scaffolding and is never a dependency or published artifact. Repository contributors use the
+next development version, `2.1.1-SNAPSHOT`.
 
 ## Instrument and inspect state
 
@@ -46,8 +43,8 @@ the libGDX render thread, and register only explicit safe properties. For releas
 inspection:
 
 ```kotlin
-implementation("io.github.teemuki8:agent-runtime-core:2.0.0")
-implementation("io.github.teemuki8:agent-runtime-libgdx:2.0.0")
+implementation("io.github.teemuki8:agent-runtime-core:2.1.0")
+implementation("io.github.teemuki8:agent-runtime-libgdx:2.1.0")
 ```
 
 The canonical order is register, start, capture, query, close. `start()` captures baseline frame
@@ -124,7 +121,7 @@ filters and unknown fields produce typed `INVALID_QUERY` transport failures.
 
 ## Run controlled scenarios and input
 
-This development workflow requires `2.0.1-SNAPSHOT`. Register the application dispatcher,
+This workflow requires `2.1.0` or later. Register the application dispatcher,
 scenario, closed input schema, optional checkpoint provider, and acknowledged fixed-step helper
 before `start()`. Then use idempotent request IDs and poll the exact same request after the
 application thread drains it:
@@ -362,8 +359,8 @@ opening `RuntimeMcpServer`; the next client read is not a JSON-RPC object. Put t
 
 ## Use the deterministic Box2D example
 
-Use development dependencies `agent-runtime-core`, `agent-runtime-libgdx`, and
-`agent-runtime-box2d` at `2.0.1-SNAPSHOT`. The consumer example explicitly owns a native `World`,
+Use dependencies `agent-runtime-core`, `agent-runtime-libgdx`, and
+`agent-runtime-box2d` at `2.1.0`. The consumer example explicitly owns a native `World`,
 registers stable world/body/fixture/joint IDs, installs an evidence-first/application-second
 listener from `Box2dContacts.compose(applicationListener)`, and steps only inside the acknowledged
 fixed-step callback:
@@ -562,7 +559,7 @@ close; no new tick is accepted.
 
 ## Inspect registered Box2D state
 
-Use this development-version API when an agent needs authoritative physics evidence without
+Use this 2.1 API when an agent needs authoritative physics evidence without
 reflection or native-pointer identities. Add `agent-runtime-box2d`, create the adapter on the
 runtime capture thread, and explicitly register the useful subset before `runtime.start()`:
 
@@ -699,7 +696,7 @@ public guard preserves capture-thread ownership and rejects open-frame or closed
 
 ## Capture and inspect Box2D contacts
 
-Use this development-version API when collision callbacks must be correlated with an authoritative
+Use this 2.1 API when collision callbacks must be correlated with an authoritative
 fixed simulation tick. Register both bodies and fixtures before registering contacts. There may be
 one live contact registration per registered world:
 

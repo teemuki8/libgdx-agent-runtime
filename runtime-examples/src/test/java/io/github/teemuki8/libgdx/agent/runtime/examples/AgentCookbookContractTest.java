@@ -1,5 +1,6 @@
 package io.github.teemuki8.libgdx.agent.runtime.examples;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -13,6 +14,7 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -20,6 +22,14 @@ import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 
 class AgentCookbookContractTest {
+    private static final String CURRENT_RELEASE = "2.1.0";
+    private static final String NEXT_DEVELOPMENT = "2.1.1-SNAPSHOT";
+    private static final Map<String, String> PUBLISHED_ARTIFACTS = Map.of(
+            "runtime-core", "agent-runtime-core",
+            "runtime-libgdx", "agent-runtime-libgdx",
+            "runtime-box2d", "agent-runtime-box2d",
+            "runtime-protocol", "agent-runtime-protocol",
+            "runtime-mcp", "agent-runtime-mcp");
     private static final List<String> HEADINGS = List.of(
             "## Task index",
             "## Instrument and inspect state",
@@ -42,8 +52,8 @@ class AgentCookbookContractTest {
             assertTrue(cookbook.contains(name), name);
             assertTrue(Files.exists(source(name)), source(name).toString());
         });
-        assertTrue(cookbook.contains("2.0.0"));
-        assertTrue(cookbook.contains("2.0.1-SNAPSHOT"));
+        assertTrue(cookbook.contains(CURRENT_RELEASE));
+        assertTrue(cookbook.contains(NEXT_DEVELOPMENT));
         assertTrue(cookbook.contains("absence is not proof"));
         assertTrue(cookbook.contains("INCONCLUSIVE"));
         assertTrue(cookbook.contains("UNSUPPORTED_VERSION"));
@@ -78,6 +88,36 @@ class AgentCookbookContractTest {
         assertTrue(exampleBuild.contains("example.mcp.launcher"));
         assertTrue(Files.isExecutable(repositoryFile(
                 "runtime-examples/run-mcp-example-xvfb.sh")));
+    }
+
+    @Test
+    void releaseMetadataDescribesTheCurrentPublishedLine() throws Exception {
+        assertTrue(read("CHANGELOG.md").contains("## [2.1.0] - 2026-08-10"));
+        String release = read("docs/releases/2.1.0.md");
+        String releaseArtifacts = release.substring(
+                release.indexOf("## Published artifacts"), release.indexOf("## Highlights"));
+        assertTrue(tokens(releaseArtifacts, "agent-runtime-[a-z0-9-]+").equals(
+                Set.copyOf(PUBLISHED_ARTIFACTS.values())));
+        assertTrue(release.contains("Protocol 2.4"));
+        assertTrue(release.contains("Maven Central publication requires separate authorization"));
+
+        String rootBuild = read("build.gradle.kts");
+        String modules = rootBuild.substring(rootBuild.indexOf("val publishedModules"),
+                rootBuild.indexOf("val artifactNames"));
+        assertTrue(tokens(modules, "runtime-[a-z0-9]+")
+                .equals(PUBLISHED_ARTIFACTS.keySet()));
+        String artifactMap = rootBuild.substring(rootBuild.indexOf("val artifactNames"),
+                rootBuild.indexOf("val releaseVersion"));
+        PUBLISHED_ARTIFACTS.forEach((module, artifact) ->
+                assertTrue(artifactMap.contains("\"" + module + "\" to \"" + artifact + "\""),
+                        module + " -> " + artifact));
+        assertTrue(tokens(artifactMap, "agent-runtime-[a-z0-9-]+")
+                .equals(Set.copyOf(PUBLISHED_ARTIFACTS.values())));
+
+        Set<String> workflowArtifacts = captures(
+                read(".github/workflows/manage-maven-central.yml"),
+                "pkg:maven/io\\.github\\.teemuki8/(agent-runtime-[a-z0-9-]+)@\\$version");
+        assertTrue(workflowArtifacts.equals(Set.copyOf(PUBLISHED_ARTIFACTS.values())));
     }
 
     @Test
@@ -137,7 +177,8 @@ class AgentCookbookContractTest {
         String rootBuild = read("build.gradle.kts");
         String development = capture(rootBuild, "orElse\\(\"([^\"]+)\"\\)");
         String release = capture(read("README.md"), "Current release: `([^`]+)`");
-        Set<String> allowed = Set.of(release, development);
+        assertEquals(NEXT_DEVELOPMENT, development);
+        assertEquals(CURRENT_RELEASE, release);
         Pattern coordinate = Pattern.compile(
                 "io\\.github\\.teemuki8:agent-runtime-[a-z0-9-]+:([0-9A-Za-z.-]+)");
         try (var paths = Files.walk(repositoryFile("docs/guides"))) {
@@ -146,7 +187,7 @@ class AgentCookbookContractTest {
             for (Path guide : guides) {
                 Matcher matcher = coordinate.matcher(Files.readString(guide));
                 while (matcher.find()) {
-                    assertTrue(allowed.contains(matcher.group(1)),
+                    assertEquals(release, matcher.group(1),
                             () -> "stale consumer version in " + guide + ": " + matcher.group());
                     checked++;
                 }
@@ -160,6 +201,15 @@ class AgentCookbookContractTest {
         java.util.LinkedHashSet<String> values = new java.util.LinkedHashSet<>();
         while (matcher.find()) {
             values.add(matcher.group());
+        }
+        return Set.copyOf(values);
+    }
+
+    private static Set<String> captures(String content, String expression) {
+        Matcher matcher = Pattern.compile(expression).matcher(content);
+        java.util.LinkedHashSet<String> values = new java.util.LinkedHashSet<>();
+        while (matcher.find()) {
+            values.add(matcher.group(1));
         }
         return Set.copyOf(values);
     }

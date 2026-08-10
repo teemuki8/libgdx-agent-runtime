@@ -268,6 +268,7 @@ final class InputTimelineExecutor {
                 firstFrameId, finalFrameId,
                 completedTicks, transitions, executedTransitions, failedTransitions,
                 deadlineNanos);
+        runtime.replays().recordInputTimelineStop(stopReason);
         synchronized (this) {
             evidence.result = result;
             activeParent = null;

@@ -225,6 +225,18 @@ public final class ReplayRegistry {
         activeCapture.inputs.put(injection.requestId(), injection);
     }
 
+    /**
+     * Marks an active replay-ready capture incomplete when an input timeline did not fully
+     * complete, so timeout, lifecycle, evidence, or cleanup stops can never leave reproduction
+     * evidence conclusive.
+     */
+    synchronized void recordInputTimelineStop(InputTimelineStopReason reason) {
+        if (activeCapture != null && reason != InputTimelineStopReason.COMPLETED) {
+            activeCapture.markIncomplete("input timeline did not complete: "
+                    + reason.name().toLowerCase(java.util.Locale.ROOT).replace('_', '-'));
+        }
+    }
+
     synchronized void recordTick(SimulationTick tick) {
         if (!runtime.onCaptureThread() || activeCapture == null) {
             return;

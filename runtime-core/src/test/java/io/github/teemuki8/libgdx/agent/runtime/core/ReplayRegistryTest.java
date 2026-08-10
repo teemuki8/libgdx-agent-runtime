@@ -10,6 +10,7 @@ import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.Test;
 
 final class ReplayRegistryTest {
@@ -1106,6 +1107,249 @@ final class ReplayRegistryTest {
         assertEquals(DeterminismStatus.INCONCLUSIVE, result.status());
         assertTrue(result.message().contains("deadline"));
         assertEquals(0, result.bounds().completedTicks());
+    }
+
+    @Test
+    void recordsAndReplaysACompletedInputTimelineAsNormalInputAndTickEvidence() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        long[] position = {0};
+        AgentRuntime runtime = runtime(queue, position);
+        runtime.inputs().register(InputSpec.builder("move")
+                .requiredInteger("amount")
+                .handler(parameters -> position[0] += parameters.requiredInteger("amount"))
+                .build());
+        runtime.scenarios().register("ball-drop", context -> position[0] = 0);
+        runtime.start();
+        pause(runtime, queue);
+        runtime.replays().start(scenarioSpec("timeline-recording", "ball-drop"),
+                "start-timeline-recording", TIMEOUT);
+        queue.removeFirst().run();
+
+        InputTimelineSpec timeline = new InputTimelineSpec(3, List.of(
+                new InputTimelineTransition("timeline-move", 1, "move",
+                        RuntimeValues.object(RuntimeValues.field(
+                                "amount", RuntimeValues.integer(2)))),
+                new InputTimelineTransition("timeline-stop", 3, "move",
+                        RuntimeValues.object(RuntimeValues.field(
+                                "amount", RuntimeValues.integer(0))))));
+        runtime.inputs().executeTimeline(timeline, "execute-timeline", TIMEOUT);
+        queue.removeFirst().run();
+        InputTimelineResult timelineResult = runtime.inputs().executeTimeline(
+                timeline, "execute-timeline", TIMEOUT).result().orElseThrow();
+        assertEquals(InputTimelineStopReason.COMPLETED, timelineResult.stopReason());
+
+        runtime.recordings().stop("timeline-recording", "stop-timeline-recording", TIMEOUT);
+        queue.removeFirst().run();
+
+        RecordingChunk recording = runtime.recordings().get("timeline-recording", 0, 64);
+        List<RecordingInputEntry> inputs = recording.entries().stream()
+                .filter(RecordingInputEntry.class::isInstance)
+                .map(RecordingInputEntry.class::cast)
+                .toList();
+        List<RecordingTickEntry> ticks = recording.entries().stream()
+                .filter(RecordingTickEntry.class::isInstance)
+                .map(RecordingTickEntry.class::cast)
+                .toList();
+        assertEquals(2, inputs.size());
+        assertEquals(3, ticks.size());
+        assertEquals(List.of("timeline-move", "timeline-stop"), inputs.stream()
+                .map(value -> value.injection().requestId()).toList());
+        assertTrue(inputs.stream().allMatch(value ->
+                value.injection().state() == InputInjectionState.EXECUTED
+                        && value.injection().resultingFrameId().isPresent()));
+
+        runtime.replays().execute("timeline-recording", "replay-timeline", TIMEOUT);
+        queue.removeFirst().run();
+        ReplayResult replay = runtime.replays().execute(
+                "timeline-recording", "replay-timeline", TIMEOUT).result().orElseThrow();
+        assertEquals(DeterminismStatus.EQUAL, replay.status());
+        assertEquals(3, replay.bounds().completedTicks());
+        assertEquals(2, replay.bounds().recordedInputs());
+        assertEquals(5, position[0]);
+    }
+
+    @Test
+    void timedOutInputTimelineMarksReplayCaptureInconclusive() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        long[] position = {0};
+        AtomicLong clock = new AtomicLong(1);
+        AgentRuntime runtime = runtimeBuilder(queue, position).clock(clock::get).build();
+        runtime.simulation().register(SimulationTimelineSpec.fixedStep(STEP));
+        runtime.entities().register(EntityId.of("world"), EntityType.of("state"),
+                () -> "World", inspector -> inspector
+                        .property("fixedStepNanos", () -> STEP)
+                        .property("position", () -> position[0]));
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {})
+                .resume(() -> {})
+                .acknowledgedTick(delta -> {
+                    position[0]++;
+                    clock.set(101);
+                    return delta;
+                })
+                .build());
+        runtime.inputs().register(InputSpec.builder("move")
+                .requiredInteger("amount")
+                .handler(parameters -> position[0] += parameters.requiredInteger("amount"))
+                .build());
+        runtime.scenarios().register("ball-drop", context -> position[0] = 0);
+        runtime.start();
+        pause(runtime, queue);
+        runtime.replays().start(scenarioSpec("timeline-timeout-recording", "ball-drop"),
+                "start-timeline-timeout-recording", TIMEOUT);
+        queue.removeFirst().run();
+
+        InputTimelineSpec timeline = new InputTimelineSpec(1, List.of(
+                new InputTimelineTransition("timeline-timeout-move", 1, "move",
+                        RuntimeValues.object(RuntimeValues.field(
+                                "amount", RuntimeValues.integer(2))))));
+        runtime.inputs().executeTimeline(timeline, "execute-timeline", Duration.ofNanos(50));
+        queue.removeFirst().run();
+        InputTimelineResult result = runtime.inputs().executeTimeline(
+                timeline, "execute-timeline", Duration.ofNanos(50)).result().orElseThrow();
+        assertEquals(InputTimelineStopReason.TIMED_OUT, result.stopReason());
+        assertEquals(1, result.bounds().completedTicks());
+
+        runtime.recordings().stop("timeline-timeout-recording",
+                "stop-timeline-timeout-recording", TIMEOUT);
+        queue.removeFirst().run();
+
+        runtime.replays().execute("timeline-timeout-recording",
+                "execute-timeline-timeout-recording", TIMEOUT);
+        queue.removeFirst().run();
+        ReplayResult replay = runtime.replays().execute("timeline-timeout-recording",
+                "execute-timeline-timeout-recording", TIMEOUT).result().orElseThrow();
+        assertEquals(DeterminismStatus.INCONCLUSIVE, replay.status());
+        assertTrue(replay.message().contains("timeline"));
+    }
+
+    @Test
+    void failedInputTimelineMarksReplayCaptureInconclusive() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        long[] position = {0};
+        AgentRuntime runtime = runtime(queue, position);
+        runtime.inputs().register(InputSpec.builder("move")
+                .requiredInteger("amount")
+                .handler(parameters -> position[0] += parameters.requiredInteger("amount"))
+                .build());
+        runtime.inputs().register(InputSpec.builder("boom")
+                .requiredBoolean("active")
+                .handler(parameters -> {
+                    throw new IllegalStateException("timeline handler failed");
+                })
+                .build());
+        runtime.scenarios().register("ball-drop", context -> position[0] = 0);
+        runtime.start();
+        pause(runtime, queue);
+        runtime.replays().start(scenarioSpec("timeline-failed-recording", "ball-drop"),
+                "start-timeline-failed-recording", TIMEOUT);
+        queue.removeFirst().run();
+
+        InputTimelineSpec timeline = new InputTimelineSpec(2, List.of(
+                new InputTimelineTransition("timeline-move", 1, "move",
+                        RuntimeValues.object(RuntimeValues.field(
+                                "amount", RuntimeValues.integer(2)))),
+                new InputTimelineTransition("timeline-boom", 2, "boom",
+                        RuntimeValues.object(RuntimeValues.field(
+                                "active", RuntimeValues.bool(true))))));
+        runtime.inputs().executeTimeline(timeline, "execute-timeline", TIMEOUT);
+        queue.removeFirst().run();
+        InputTimelineResult result = runtime.inputs().executeTimeline(
+                timeline, "execute-timeline", TIMEOUT).result().orElseThrow();
+        assertEquals(InputTimelineStopReason.INPUT_FAILED, result.stopReason());
+
+        runtime.recordings().stop("timeline-failed-recording",
+                "stop-timeline-failed-recording", TIMEOUT);
+        queue.removeFirst().run();
+
+        runtime.replays().execute("timeline-failed-recording",
+                "execute-timeline-failed-recording", TIMEOUT);
+        queue.removeFirst().run();
+        ReplayResult replay = runtime.replays().execute("timeline-failed-recording",
+                "execute-timeline-failed-recording", TIMEOUT).result().orElseThrow();
+        assertEquals(DeterminismStatus.INCONCLUSIVE, replay.status());
+    }
+
+    @Test
+    void lifecycleInvalidatedInputTimelineMarksReplayCaptureInconclusive() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        long[] position = {0};
+        AgentRuntime runtime = runtime(queue, position);
+        runtime.inputs().register(InputSpec.builder("move")
+                .requiredInteger("amount")
+                .handler(parameters -> position[0] += parameters.requiredInteger("amount"))
+                .build());
+        runtime.scenarios().register("ball-drop", context -> position[0] = 0);
+        runtime.start();
+        pause(runtime, queue);
+        runtime.replays().start(scenarioSpec("timeline-invalid-recording", "ball-drop"),
+                "start-timeline-invalid-recording", TIMEOUT);
+        queue.removeFirst().run();
+
+        InputTimelineSpec timeline = new InputTimelineSpec(1, List.of(
+                new InputTimelineTransition("timeline-invalid-move", 1, "move",
+                        RuntimeValues.object(RuntimeValues.field(
+                                "amount", RuntimeValues.integer(2))))));
+        runtime.controls().control(false, "resume-before-timeline", TIMEOUT);
+        runtime.inputs().executeTimeline(timeline, "execute-timeline", TIMEOUT);
+        queue.removeFirst().run();
+        queue.removeFirst().run();
+        InputTimelineResult result = runtime.inputs().executeTimeline(
+                timeline, "execute-timeline", TIMEOUT).result().orElseThrow();
+        assertEquals(InputTimelineStopReason.LIFECYCLE_CHANGED, result.stopReason());
+
+        runtime.recordings().stop("timeline-invalid-recording",
+                "stop-timeline-invalid-recording", TIMEOUT);
+        queue.removeFirst().run();
+        runtime.controls().control(true, "repause", TIMEOUT);
+        queue.removeFirst().run();
+
+        runtime.replays().execute("timeline-invalid-recording",
+                "execute-timeline-invalid-recording", TIMEOUT);
+        queue.removeFirst().run();
+        ReplayResult replay = runtime.replays().execute("timeline-invalid-recording",
+                "execute-timeline-invalid-recording", TIMEOUT).result().orElseThrow();
+        assertEquals(DeterminismStatus.INCONCLUSIVE, replay.status());
+        assertTrue(replay.message().contains("timeline"));
+    }
+
+    @Test
+    void redactedInputTimelineMarksReplayCaptureInconclusive() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        long[] position = {0};
+        AgentRuntime runtime = runtime(queue, position);
+        runtime.inputs().register(InputSpec.builder("secret")
+                .requiredString("value")
+                .redaction(InputRedactionPolicy.OMIT_PARAMETERS)
+                .handler(parameters -> position[0]++)
+                .build());
+        runtime.scenarios().register("ball-drop", context -> position[0] = 0);
+        runtime.start();
+        pause(runtime, queue);
+        runtime.replays().start(scenarioSpec("timeline-redacted-recording", "ball-drop"),
+                "start-timeline-redacted-recording", TIMEOUT);
+        queue.removeFirst().run();
+
+        InputTimelineSpec timeline = new InputTimelineSpec(1, List.of(
+                new InputTimelineTransition("timeline-secret", 1, "secret",
+                        RuntimeValues.object(RuntimeValues.field(
+                                "value", RuntimeValues.string("hidden"))))));
+        runtime.inputs().executeTimeline(timeline, "execute-timeline", TIMEOUT);
+        queue.removeFirst().run();
+        InputTimelineResult result = runtime.inputs().executeTimeline(
+                timeline, "execute-timeline", TIMEOUT).result().orElseThrow();
+        assertEquals(InputTimelineStopReason.COMPLETED, result.stopReason());
+
+        runtime.recordings().stop("timeline-redacted-recording",
+                "stop-timeline-redacted-recording", TIMEOUT);
+        queue.removeFirst().run();
+
+        runtime.replays().execute("timeline-redacted-recording",
+                "execute-timeline-redacted-recording", TIMEOUT);
+        queue.removeFirst().run();
+        ReplayResult replay = runtime.replays().execute("timeline-redacted-recording",
+                "execute-timeline-redacted-recording", TIMEOUT).result().orElseThrow();
+        assertEquals(DeterminismStatus.INCONCLUSIVE, replay.status());
     }
 
     private static AgentRuntime runtime(ArrayDeque<Runnable> queue, long[] position) {

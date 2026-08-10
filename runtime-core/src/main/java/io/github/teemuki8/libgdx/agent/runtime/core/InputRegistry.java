@@ -31,6 +31,7 @@ public final class InputRegistry {
     private int outstanding;
     private boolean determinismExecuting;
     private boolean timelineExecuting;
+    private long timelineDeadlineNanos = Long.MAX_VALUE;
 
     InputRegistry(AgentRuntime runtime, InputLimits limits, InputTimelineLimits timelineLimits) {
         this.runtime = runtime;
@@ -232,27 +233,63 @@ public final class InputRegistry {
                 evidence.state = InputInjectionState.FAILED;
                 evidence.diagnostic = Optional.of("execution epoch changed before target tick");
                 completeLogicalExecution(evidence, CommandState.FAILED);
+                if (timelineExecuting) {
+                    stopRemainingTimelineChildren(due,
+                            InputTimelineCanonicalSize.LIFECYCLE_CHANGED_MESSAGE);
+                    executedByTick.put(tick, List.copyOf(executed));
+                    throw new AgentRuntimeException(RuntimeErrorCode.INVALID_LIFECYCLE,
+                            "input timeline lifecycle changed before target tick");
+                }
                 continue;
             }
             evidence.recordedParameters = evidence.parametersRedacted
                     ? Optional.empty() : Optional.of(evidence.parameters);
             try {
                 evidence.handler.accept(new InputParameters(evidence.parameters));
-                evidence.state = InputInjectionState.EXECUTED;
-                completeLogicalExecution(evidence, CommandState.SUCCEEDED);
             } catch (RuntimeException failure) {
                 evidence.state = InputInjectionState.FAILED;
                 recordFailure(evidence, "input.execution", failure);
                 completeLogicalExecution(evidence, CommandState.FAILED);
+                if (timelineExecuting) {
+                    stopRemainingTimelineChildren(due,
+                            InputTimelineCanonicalSize.INPUT_FAILED_MESSAGE);
+                    executedByTick.put(tick, List.copyOf(executed));
+                    throw failure;
+                }
                 if (firstRuntimeFailure == null) {
                     firstRuntimeFailure = failure;
                 }
+                continue;
             } catch (Error failure) {
                 evidence.state = InputInjectionState.FAILED;
                 recordFailure(evidence, "input.execution", failure);
                 completeLogicalExecution(evidence, CommandState.FAILED);
+                if (timelineExecuting) {
+                    stopRemainingTimelineChildren(due,
+                            InputTimelineCanonicalSize.INPUT_FAILED_MESSAGE);
+                    executedByTick.put(tick, List.copyOf(executed));
+                    throw failure;
+                }
                 if (firstError == null) {
                     firstError = failure;
+                }
+                continue;
+            }
+            evidence.state = InputInjectionState.EXECUTED;
+            completeLogicalExecution(evidence, CommandState.SUCCEEDED);
+            if (timelineExecuting) {
+                if (runtime.monotonicTimeNanos() >= timelineDeadlineNanos) {
+                    stopRemainingTimelineChildren(due,
+                            InputTimelineCanonicalSize.TIMED_OUT_MESSAGE);
+                    executedByTick.put(tick, List.copyOf(executed));
+                    throw new InputTimelineExecutor.InputTimelineDeadlineExceeded();
+                }
+                if (!runtime.currentEpoch().equals(evidence.executionEpochId)) {
+                    stopRemainingTimelineChildren(due,
+                            InputTimelineCanonicalSize.LIFECYCLE_CHANGED_MESSAGE);
+                    executedByTick.put(tick, List.copyOf(executed));
+                    throw new AgentRuntimeException(RuntimeErrorCode.INVALID_LIFECYCLE,
+                            "input timeline lifecycle changed before the next transition");
                 }
             }
         }
@@ -262,6 +299,16 @@ public final class InputRegistry {
         }
         if (firstRuntimeFailure != null) {
             throw firstRuntimeFailure;
+        }
+    }
+
+    private void stopRemainingTimelineChildren(ArrayDeque<Evidence> due, String diagnostic) {
+        while (!due.isEmpty()) {
+            Evidence remaining = due.removeFirst();
+            outstanding--;
+            remaining.state = InputInjectionState.FAILED;
+            remaining.timelineNotExecuted = true;
+            remaining.diagnostic = Optional.of(boundedDiagnostic(diagnostic));
         }
     }
 
@@ -525,6 +572,7 @@ public final class InputRegistry {
         if (!timelineExecuting) {
             throw new IllegalStateException("input timeline execution is not reserved");
         }
+        timelineDeadlineNanos = parentStatus.deadlineNanos();
         for (InputTimelineTransition transition : spec.transitions()) {
             Evidence evidence = requireTimelineEvidence(
                     transition.transitionId(), parentRequestId);
@@ -542,24 +590,11 @@ public final class InputRegistry {
         }
     }
 
-    synchronized InputInjection timelineInjection(
-            String transitionId, String parentRequestId) {
-        Evidence evidence = requireTimelineEvidence(transitionId, parentRequestId);
-        return snapshot(evidence, logicalLookup(evidence));
-    }
-
-    synchronized void endTimeline(String parentRequestId) {
-        if (requests.values().stream().anyMatch(evidence ->
-                parentRequestId.equals(evidence.timelineParentId)
-                        && evidence.state != InputInjectionState.EXECUTED
-                        && evidence.state != InputInjectionState.FAILED)) {
-            return;
-        }
-        timelineExecuting = false;
-    }
-
-    synchronized void stopTimelineBeforeExecution(
-            String parentRequestId, String diagnostic) {
+    /**
+     * Releases exclusive timeline staging, marking any unattempted child as terminal without
+     * running its handler, and always clears the exclusive execution flag.
+     */
+    synchronized void releaseTimeline(String parentRequestId, String diagnostic) {
         for (Evidence evidence : requests.values()) {
             if (!parentRequestId.equals(evidence.timelineParentId)) {
                 continue;
@@ -568,10 +603,39 @@ public final class InputRegistry {
                     || evidence.state == InputInjectionState.SCHEDULED) {
                 outstanding--;
                 evidence.state = InputInjectionState.FAILED;
+                evidence.timelineNotExecuted = true;
                 evidence.diagnostic = Optional.of(boundedDiagnostic(diagnostic));
             }
         }
         timelineExecuting = false;
+    }
+
+    /** Returns the first bounded structured failure of an attempted timeline child, if any. */
+    synchronized Optional<ApplicationFailureEvidence> timelineChildFailure(
+            String parentRequestId) {
+        for (Evidence evidence : requests.values()) {
+            if (parentRequestId.equals(evidence.timelineParentId)
+                    && evidence.state == InputInjectionState.FAILED
+                    && !evidence.timelineNotExecuted) {
+                return evidence.applicationFailure;
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Returns terminal injection evidence for an attempted timeline transition, or empty when the
+     * transition was never attempted and must be reported as {@code NOT_EXECUTED}.
+     */
+    synchronized Optional<InputInjection> attemptedTimelineInjection(
+            String transitionId, String parentRequestId) {
+        Evidence evidence = requireTimelineEvidence(transitionId, parentRequestId);
+        if (evidence.state != InputInjectionState.EXECUTED
+                && (evidence.state != InputInjectionState.FAILED
+                        || evidence.timelineNotExecuted)) {
+            return Optional.empty();
+        }
+        return Optional.of(snapshot(evidence, logicalLookup(evidence)));
     }
 
     private Evidence requireTimelineEvidence(String transitionId, String parentRequestId) {
@@ -760,6 +824,7 @@ public final class InputRegistry {
         private Optional<ApplicationFailureEvidence> applicationFailure = Optional.empty();
         private String timelineParentId;
         private CommandStatus logicalStatus;
+        private boolean timelineNotExecuted;
 
         Evidence(String inputId, String requestId, RuntimeValue.ObjectValue parameters,
                 OptionalLong requestedTargetTick, long targetTick,

@@ -430,7 +430,7 @@ final class InputTimelineContractTest {
         assertEquals(277, InputTimelineCanonicalSize.result(succeededResult));
         assertEquals(InputTimelineCanonicalSize.result(succeededResult),
                 InputTimelineCanonicalSize.successfulResultReservation(spec));
-        assertEquals(5_219,
+        assertEquals(19_202,
                 InputTimelineCanonicalSize.terminalResultReservation(spec));
         assertTrue(InputTimelineCanonicalSize.terminalResultReservation(spec)
                 > InputTimelineCanonicalSize.successfulResultReservation(spec));

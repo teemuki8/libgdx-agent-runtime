@@ -1,6 +1,7 @@
 package io.github.teemuki8.libgdx.agent.runtime.core;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -130,7 +131,7 @@ final class InputTimelineRegistryTest {
         ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
         AgentRuntime runtime = runtime(dispatch,
                 new InputLimits(1, 1, 3, 3, 10, 642),
-                new InputTimelineLimits(2, 3, 10, 16_384,
+                new InputTimelineLimits(2, 3, 10, 65_536,
                         Duration.ofSeconds(2).toNanos()));
 
         InputTimelineSpec firstSpec = oneTransition("first-child");
@@ -172,7 +173,7 @@ final class InputTimelineRegistryTest {
         ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
         AgentRuntime runtime = runtime(dispatch,
                 new InputLimits(1, 1, 2, 2, 10, 642),
-                new InputTimelineLimits(2, 1, 10, 16_384,
+                new InputTimelineLimits(2, 1, 10, 65_536,
                         Duration.ofSeconds(2).toNanos()));
         InputTimelineSpec firstSpec = oneTransition("first-child");
         InputTimelineSpec secondSpec = oneTransition("second-child");
@@ -258,7 +259,7 @@ final class InputTimelineRegistryTest {
                 new CommandDispatchLimits(1, 1, 1,
                         Duration.ofSeconds(2).toNanos(), 642),
                 new InputLimits(1, 1, 2, 2, 10, 642),
-                new InputTimelineLimits(1, 2, 10, 16_384,
+                new InputTimelineLimits(1, 2, 10, 65_536,
                         Duration.ofSeconds(2).toNanos()));
         RuntimeValue.ObjectValue parameters = booleanParameters(true);
         runtime.inputs().inject("button", "ordinary", parameters, OptionalLong.empty(),
@@ -439,6 +440,410 @@ final class InputTimelineRegistryTest {
         assertTrue(dispatch.isEmpty());
     }
 
+    @Test
+    void preflightRejectsLateInvalidTransitionWithoutRunningAnyHandler() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        AtomicInteger handlerCalls = new AtomicInteger();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("timeline-preflight"))
+                .clock(() -> 1)
+                .commandDispatcher(dispatch::addLast)
+                .build();
+        runtime.simulation().register(SimulationTimelineSpec.fixedStep(10));
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {})
+                .resume(() -> {})
+                .acknowledgedTick(deltaNanos -> deltaNanos)
+                .build());
+        runtime.inputs().register(InputSpec.builder("button")
+                .requiredBoolean("active")
+                .handler(parameters -> handlerCalls.incrementAndGet())
+                .build());
+        runtime.start();
+        runtime.controls().control(true, "pause", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+
+        assertThrows(IllegalArgumentException.class, () -> runtime.inputs().executeTimeline(
+                new InputTimelineSpec(2, List.of(
+                        transition("valid", 1, "button", "active", RuntimeValues.bool(true)),
+                        transition("invalid", 2, "missing", "active",
+                                RuntimeValues.bool(false)))),
+                "invalid-late", Duration.ofSeconds(1)));
+        assertEquals(0, handlerCalls.get());
+        assertTrue(dispatch.isEmpty());
+    }
+
+    @Test
+    void reservedTimelineExcludesOrdinaryInjectionAndChangedRetry() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        AgentRuntime runtime = runtime(dispatch, InputLimits.developmentDefaults(),
+                InputTimelineLimits.developmentDefaults());
+        InputTimelineSpec valid = oneTransition("reserved-child");
+        InputTimelineSpec changed = new InputTimelineSpec(2, List.of(transition(
+                "reserved-child", 1, "button", "active", RuntimeValues.bool(true))));
+
+        InputTimelineOperation queued = runtime.inputs().executeTimeline(
+                valid, "reserved", Duration.ofSeconds(1));
+        assertThrows(AgentRuntimeException.class, () -> runtime.inputs().inject(
+                "button", "ordinary", booleanParameters(true), OptionalLong.empty(),
+                Duration.ofSeconds(1)));
+        assertThrows(IllegalArgumentException.class, () -> runtime.inputs().executeTimeline(
+                changed, "reserved", Duration.ofSeconds(1)));
+        assertEquals(CommandState.QUEUED, queued.command().status().orElseThrow().state());
+
+        dispatch.removeFirst().run();
+        InputTimelineResult completed = runtime.inputs().executeTimeline(
+                valid, "reserved", Duration.ofSeconds(1)).result().orElseThrow();
+        assertEquals(InputTimelineStopReason.COMPLETED, completed.stopReason());
+        runtime.inputs().inject("button", "ordinary", booleanParameters(true),
+                OptionalLong.empty(), Duration.ofSeconds(1));
+        assertEquals(1, runtime.inputs().retainedPendingInjections());
+    }
+
+    @Test
+    void parentAndTransitionIdsMustDiffer() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        AgentRuntime runtime = runtime(dispatch, InputLimits.developmentDefaults(),
+                InputTimelineLimits.developmentDefaults());
+
+        assertThrows(IllegalArgumentException.class, () -> runtime.inputs().executeTimeline(
+                new InputTimelineSpec(1, List.of(transition(
+                        "shared", 1, "button", "active", RuntimeValues.bool(true)))),
+                "shared", Duration.ofSeconds(1)));
+        assertTrue(dispatch.isEmpty());
+    }
+
+    @Test
+    void timelineTransitionIdCollidesWithRetainedOrdinaryEvidence() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        AgentRuntime runtime = runtime(dispatch, InputLimits.developmentDefaults(),
+                InputTimelineLimits.developmentDefaults());
+        runtime.inputs().inject("button", "ordinary-child", booleanParameters(true),
+                OptionalLong.empty(), Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        runtime.controls().advanceFixed("ordinary-tick", 1, Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+
+        assertThrows(IllegalArgumentException.class, () -> runtime.inputs().executeTimeline(
+                new InputTimelineSpec(1, List.of(transition(
+                        "ordinary-child", 1, "button", "active",
+                        RuntimeValues.bool(false)))),
+                "collision-parent", Duration.ofSeconds(1)));
+        assertTrue(dispatch.isEmpty());
+    }
+
+    @Test
+    void timelineTransitionIdCollidesWithRetainedCommandCorrelation() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        AgentRuntime runtime = runtime(dispatch, InputLimits.developmentDefaults(),
+                InputTimelineLimits.developmentDefaults());
+        runtime.commands().orElseThrow().submit(
+                "command-child", Duration.ofSeconds(1), () -> {});
+
+        assertThrows(IllegalArgumentException.class, () -> runtime.inputs().executeTimeline(
+                new InputTimelineSpec(1, List.of(transition(
+                        "command-child", 1, "button", "active",
+                        RuntimeValues.bool(true)))),
+                "correlation-parent", Duration.ofSeconds(1)));
+        assertEquals(CommandState.QUEUED,
+                runtime.commands().orElseThrow().status("command-child")
+                        .status().orElseThrow().state());
+    }
+
+    @Test
+    void queuedResumeBeforeTimelineCallbackStopsWithLifecycleChanged() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        AgentRuntime runtime = runtime(dispatch, InputLimits.developmentDefaults(),
+                InputTimelineLimits.developmentDefaults());
+        InputTimelineSpec spec = oneTransition("resumed-child");
+
+        runtime.controls().control(false, "resume", Duration.ofSeconds(1));
+        runtime.inputs().executeTimeline(spec, "resumed-parent", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+        dispatch.removeFirst().run();
+
+        InputTimelineResult result = runtime.inputs().executeTimeline(
+                spec, "resumed-parent", Duration.ofSeconds(1)).result().orElseThrow();
+        assertEquals(InputTimelineStopReason.LIFECYCLE_CHANGED, result.stopReason());
+        assertEquals(0, result.bounds().completedTicks());
+        assertEquals(InputTimelineTransitionState.NOT_EXECUTED,
+                result.transitions().getFirst().state());
+        assertEquals(0, runtime.inputs().retainedPendingInjections());
+    }
+
+    @Test
+    void timelineAndDeterminismExclusiveModesConflict() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        AgentRuntime runtime = runtime(dispatch, InputLimits.developmentDefaults(),
+                InputTimelineLimits.developmentDefaults());
+
+        runtime.inputs().beginDeterminism(List.of());
+        assertThrows(AgentRuntimeException.class, () -> runtime.inputs().executeTimeline(
+                oneTransition("det-child"), "det-parent", Duration.ofSeconds(1)));
+        runtime.inputs().endDeterminism();
+
+        runtime.inputs().executeTimeline(
+                oneTransition("reserved-det-child"), "reserved-det-parent",
+                Duration.ofSeconds(1));
+        assertThrows(IllegalStateException.class,
+                () -> runtime.inputs().beginDeterminism(List.of()));
+        dispatch.removeFirst().run();
+        runtime.inputs().beginDeterminism(List.of());
+        runtime.inputs().endDeterminism();
+    }
+
+    @Test
+    void retentionEvictionNeverReexecutesTimelineHandlers() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        AtomicInteger handlerCalls = new AtomicInteger();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("timeline-eviction"))
+                .clock(() -> 1)
+                .commandDispatcher(dispatch::addLast)
+                .inputLimits(new InputLimits(1, 1, 1, 1, 10, 642))
+                .inputTimelineLimits(new InputTimelineLimits(1, 1, 10, 65_536,
+                        Duration.ofSeconds(2).toNanos()))
+                .build();
+        runtime.simulation().register(SimulationTimelineSpec.fixedStep(10));
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {})
+                .resume(() -> {})
+                .acknowledgedTick(deltaNanos -> deltaNanos)
+                .build());
+        runtime.inputs().register(InputSpec.builder("button")
+                .requiredBoolean("active")
+                .handler(parameters -> handlerCalls.incrementAndGet())
+                .build());
+        runtime.start();
+        runtime.controls().control(true, "pause", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+
+        execute(dispatch, runtime, oneTransition("first-evicted-child"), "first-evicted-parent");
+        InputTimelineResult second = execute(dispatch, runtime,
+                oneTransition("second-kept-child"), "second-kept-parent");
+
+        assertEquals(InputTimelineStopReason.COMPLETED, second.stopReason());
+        assertEquals(2, handlerCalls.get());
+        assertThrows(IllegalArgumentException.class, () -> runtime.inputs().executeTimeline(
+                oneTransition("first-evicted-child"), "first-evicted-parent",
+                Duration.ofSeconds(1)));
+    }
+
+    @Test
+    void inputHandlerClockAdvanceTimesOutBeforeSimulationAndKeepsAttemptedEvidence() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        AtomicLong clock = new AtomicLong(1);
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("timeline-timeout"))
+                .clock(clock::get)
+                .commandDispatcher(dispatch::addLast)
+                .build();
+        runtime.simulation().register(SimulationTimelineSpec.fixedStep(10));
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {})
+                .resume(() -> {})
+                .acknowledgedTick(deltaNanos -> deltaNanos)
+                .build());
+        runtime.inputs().register(InputSpec.builder("expires")
+                .requiredBoolean("active")
+                .handler(parameters -> clock.set(101))
+                .build());
+        runtime.start();
+        runtime.controls().control(true, "pause", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+
+        InputTimelineSpec expires = new InputTimelineSpec(1, List.of(transition(
+                "expires-1", 1, "expires", "active", RuntimeValues.bool(true))));
+        runtime.inputs().executeTimeline(expires, "timeline-timeout", Duration.ofNanos(50));
+        dispatch.removeFirst().run();
+
+        InputTimelineResult result = runtime.inputs().executeTimeline(
+                expires, "timeline-timeout", Duration.ofNanos(50)).result().orElseThrow();
+        assertEquals(InputTimelineStopReason.TIMED_OUT, result.stopReason());
+        assertEquals(0, result.bounds().completedTicks());
+        assertEquals(InputTimelineTransitionState.EXECUTED,
+                result.transitions().getFirst().state());
+        assertEquals(1, result.bounds().executedTransitions());
+        assertEquals(0, runtime.inputs().retainedPendingInjections());
+        assertEquals(result, runtime.inputs().executeTimeline(
+                expires, "timeline-timeout", Duration.ofNanos(50)).result().orElseThrow());
+    }
+
+    @Test
+    void finalTickCallbackClockAdvanceTimesOutAfterCompletingTheTick() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        AtomicLong clock = new AtomicLong(1);
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("timeline-final-timeout"))
+                .clock(clock::get)
+                .commandDispatcher(dispatch::addLast)
+                .build();
+        runtime.simulation().register(SimulationTimelineSpec.fixedStep(10));
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {})
+                .resume(() -> {})
+                .acknowledgedTick(deltaNanos -> {
+                    clock.set(101);
+                    return deltaNanos;
+                })
+                .build());
+        runtime.inputs().register(InputSpec.builder("button")
+                .requiredBoolean("active")
+                .handler(parameters -> {})
+                .build());
+        runtime.start();
+        runtime.controls().control(true, "pause", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+
+        InputTimelineSpec spec = oneTransition("final-child");
+        runtime.inputs().executeTimeline(spec, "final-timeout", Duration.ofNanos(50));
+        dispatch.removeFirst().run();
+
+        InputTimelineResult result = runtime.inputs().executeTimeline(
+                spec, "final-timeout", Duration.ofNanos(50)).result().orElseThrow();
+        assertEquals(InputTimelineStopReason.TIMED_OUT, result.stopReason());
+        assertEquals(1, result.bounds().completedTicks());
+        assertEquals(InputTimelineTransitionState.EXECUTED,
+                result.transitions().getFirst().state());
+        assertTrue(result.finalFrameId().isPresent());
+    }
+
+    @Test
+    void firstTimelineHandlerFailureStopsSameTickAndLaterTransitions() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        ArrayList<String> observed = new ArrayList<>();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("timeline-fail-stop"))
+                .clock(() -> 1)
+                .commandDispatcher(dispatch::addLast)
+                .build();
+        runtime.simulation().register(SimulationTimelineSpec.fixedStep(10));
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {})
+                .resume(() -> {})
+                .acknowledgedTick(deltaNanos -> deltaNanos)
+                .build());
+        runtime.inputs().register(InputSpec.builder("button")
+                .requiredBoolean("active")
+                .handler(parameters -> observed.add(
+                        "button:" + parameters.requiredBoolean("active")))
+                .build());
+        runtime.inputs().register(InputSpec.builder("boom")
+                .requiredBoolean("active")
+                .handler(parameters -> {
+                    throw new IllegalStateException("token=secret /home/private/save.dat");
+                })
+                .build());
+        runtime.start();
+        runtime.controls().control(true, "pause", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+
+        InputTimelineSpec spec = new InputTimelineSpec(3, List.of(
+                transition("first-ok", 1, "button", "active", RuntimeValues.bool(true)),
+                transition("boom", 1, "boom", "active", RuntimeValues.bool(true)),
+                transition("after-boom", 1, "button", "active", RuntimeValues.bool(false)),
+                transition("later-tick", 2, "button", "active", RuntimeValues.bool(true))));
+        runtime.inputs().executeTimeline(spec, "boom-parent", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+
+        InputTimelineResult result = runtime.inputs().executeTimeline(
+                spec, "boom-parent", Duration.ofSeconds(1)).result().orElseThrow();
+
+        assertEquals(InputTimelineStopReason.INPUT_FAILED, result.stopReason());
+        assertEquals(List.of("button:true"), observed);
+        assertEquals(0, result.bounds().completedTicks());
+        List<InputTimelineTransitionEvidence> transitions = result.transitions();
+        assertEquals(InputTimelineTransitionState.EXECUTED, transitions.get(0).state());
+        assertEquals(InputTimelineTransitionState.FAILED, transitions.get(1).state());
+        assertEquals(InputTimelineTransitionState.NOT_EXECUTED, transitions.get(2).state());
+        assertEquals(InputTimelineTransitionState.NOT_EXECUTED, transitions.get(3).state());
+        assertEquals(1, result.bounds().executedTransitions());
+        assertEquals(1, result.bounds().failedTransitions());
+        assertEquals(2, result.bounds().notExecutedTransitions());
+        assertTrue(result.applicationFailure().isPresent());
+        assertTrue(transitions.get(1).injection().orElseThrow()
+                .applicationFailure().isPresent());
+        assertFalse(transitions.get(1).diagnostic().orElseThrow().contains("token=secret"));
+        assertFalse(transitions.get(1).diagnostic().orElseThrow()
+                .contains("/home/private/save.dat"));
+        assertEquals(0, runtime.inputs().retainedPendingInjections());
+    }
+
+    @Test
+    void simulationCallbackFailureRetainsAttemptedTransitionAsTickFailed() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("timeline-tick-failed"))
+                .clock(() -> 1)
+                .commandDispatcher(dispatch::addLast)
+                .build();
+        runtime.simulation().register(SimulationTimelineSpec.fixedStep(10));
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {})
+                .resume(() -> {})
+                .acknowledgedTick(deltaNanos -> {
+                    throw new IllegalStateException("simulation exploded");
+                })
+                .build());
+        runtime.inputs().register(InputSpec.builder("button")
+                .requiredBoolean("active")
+                .handler(parameters -> {})
+                .build());
+        runtime.start();
+        runtime.controls().control(true, "pause", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+
+        InputTimelineSpec spec = new InputTimelineSpec(2, List.of(
+                transition("attempted", 1, "button", "active", RuntimeValues.bool(true)),
+                transition("never", 2, "button", "active", RuntimeValues.bool(false))));
+        runtime.inputs().executeTimeline(spec, "tick-failed-parent", Duration.ofSeconds(1));
+        dispatch.removeFirst().run();
+
+        InputTimelineResult result = runtime.inputs().executeTimeline(
+                spec, "tick-failed-parent", Duration.ofSeconds(1)).result().orElseThrow();
+        assertEquals(InputTimelineStopReason.TICK_FAILED, result.stopReason());
+        assertEquals(0, result.bounds().completedTicks());
+        assertEquals(InputTimelineTransitionState.EXECUTED,
+                result.transitions().get(0).state());
+        assertEquals(InputTimelineTransitionState.NOT_EXECUTED,
+                result.transitions().get(1).state());
+        assertEquals(1, result.bounds().executedTransitions());
+        assertEquals(1, result.bounds().notExecutedTransitions());
+        assertTrue(result.applicationFailure().isPresent());
+    }
+
+    @Test
+    void evidenceByteLimitRejectsBeforeReservationAndMutation() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        InputTimelineSpec spec = twoTransitions("bytes");
+        long reservation = InputTimelineCanonicalSize.resultReservation(spec);
+        AgentRuntime runtime = runtime(dispatch,
+                new InputLimits(1, 1, 4, 4, 10, 642),
+                new InputTimelineLimits(1, 2, 10, Math.toIntExact(reservation - 1),
+                        Duration.ofSeconds(1).toNanos()));
+
+        AgentRuntimeException failure = assertThrows(AgentRuntimeException.class,
+                () -> runtime.inputs().executeTimeline(
+                        spec, "bytes-parent", Duration.ofSeconds(1)));
+        assertEquals(RuntimeErrorCode.LIMIT_EXCEEDED, failure.code());
+        assertTrue(dispatch.isEmpty());
+    }
+
+    @Test
+    void tickCountBeyondEffectiveLimitRejectsBeforeReservation() {
+        ArrayDeque<Runnable> dispatch = new ArrayDeque<>();
+        AgentRuntime runtime = runtime(dispatch, InputLimits.developmentDefaults(),
+                InputTimelineLimits.developmentDefaults());
+        InputTimelineSpec spec = new InputTimelineSpec(601, List.of(transition(
+                "tick-child", 1, "button", "active", RuntimeValues.bool(true))));
+
+        AgentRuntimeException failure = assertThrows(AgentRuntimeException.class,
+                () -> runtime.inputs().executeTimeline(
+                        spec, "tick-parent", Duration.ofSeconds(1)));
+        assertEquals(RuntimeErrorCode.LIMIT_EXCEEDED, failure.code());
+        assertTrue(dispatch.isEmpty());
+    }
+
     private static AgentRuntime runtime(ArrayDeque<Runnable> dispatch,
             InputLimits inputLimits, InputTimelineLimits timelineLimits) {
         return runtime(dispatch, CommandDispatchLimits.developmentDefaults(),
@@ -486,7 +891,7 @@ final class InputTimelineRegistryTest {
                 new CommandDispatchLimits(4, 16, 16,
                         Duration.ofSeconds(2).toNanos(), 642),
                 new InputLimits(1, 1, 2, 2, 10, 642),
-                new InputTimelineLimits(1, 2, 10, 16_384,
+                new InputTimelineLimits(1, 2, 10, 65_536,
                         Duration.ofSeconds(2).toNanos()),
                 deltaNanos -> deltaNanos);
         InputTimelineSpec parentSpec = oneTransition("retained-child");
@@ -510,7 +915,7 @@ final class InputTimelineRegistryTest {
                 new CommandDispatchLimits(1, 1, 1,
                         Duration.ofSeconds(2).toNanos(), 642),
                 new InputLimits(1, 1, 2, 2, 10, 642),
-                new InputTimelineLimits(2, 1, 10, 16_384,
+                new InputTimelineLimits(2, 1, 10, 65_536,
                         Duration.ofSeconds(2).toNanos()));
         InputTimelineSpec spec = oneTransition("retained-child");
         execute(dispatch, runtime, spec, "retained-parent");

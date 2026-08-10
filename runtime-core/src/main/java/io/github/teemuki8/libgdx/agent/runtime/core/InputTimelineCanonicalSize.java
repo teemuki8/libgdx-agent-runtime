@@ -1,14 +1,47 @@
 package io.github.teemuki8.libgdx.agent.runtime.core;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
 
 /** Exact saturating canonical byte accounting for input timeline requests and evidence. */
 final class InputTimelineCanonicalSize {
+    /** Bounded deterministic message for a parent that ended before execution began. */
     static final String PRE_EXECUTION_MESSAGE =
             "parent command ended before timeline execution";
+    /** Bounded deterministic message for a fully completed timeline. */
+    static final String COMPLETED_MESSAGE = "completed";
+    /** Bounded deterministic message for an expired execution deadline. */
+    static final String TIMED_OUT_MESSAGE = "input timeline exceeded its execution deadline";
+    /** Bounded deterministic message for a frozen lifecycle fact that changed. */
+    static final String LIFECYCLE_CHANGED_MESSAGE =
+            "input timeline lifecycle changed during execution";
+    /** Bounded deterministic message for a failed transition handler. */
+    static final String INPUT_FAILED_MESSAGE =
+            "input timeline stopped after a transition failure";
+    /** Bounded deterministic message for a failed tick or capture. */
+    static final String TICK_FAILED_MESSAGE = "input timeline stopped after a tick failure";
+    /** Bounded deterministic message for evidence that exceeded its reservation. */
+    static final String EVIDENCE_LIMIT_MESSAGE =
+            "input timeline evidence exceeded its reservation";
+    /** Bounded deterministic message for a failed exclusive-mode release. */
+    static final String CLEANUP_FAILED_MESSAGE = "input timeline cleanup failed";
+
+    private static final String MAXIMUM_TERMINAL_MESSAGE = longestTerminalMessage();
 
     private InputTimelineCanonicalSize() {}
+
+    private static String longestTerminalMessage() {
+        String longest = PRE_EXECUTION_MESSAGE;
+        for (String message : List.of(COMPLETED_MESSAGE, TIMED_OUT_MESSAGE,
+                LIFECYCLE_CHANGED_MESSAGE, INPUT_FAILED_MESSAGE, TICK_FAILED_MESSAGE,
+                EVIDENCE_LIMIT_MESSAGE, CLEANUP_FAILED_MESSAGE)) {
+            if (message.length() > longest.length()) {
+                longest = message;
+            }
+        }
+        return longest;
+    }
 
     static long request(InputTimelineSpec spec) {
         long size = Integer.BYTES;
@@ -30,19 +63,26 @@ final class InputTimelineCanonicalSize {
         return add(size, boundsAndFailure());
     }
 
+    /**
+     * Worst-case terminal reservation: frames may be present after partial completion, the first
+     * transition may carry a full failed injection with bounded diagnostic and structured failure,
+     * remaining transitions are unattempted with a bounded diagnostic, and the parent retains a
+     * structured failure. Fail-stop execution never produces more than one failed transition.
+     */
     static long terminalResultReservation(InputTimelineSpec spec) {
-        long size = 1;
-        size = add(size, DeterminismCanonicalSize.string(PRE_EXECUTION_MESSAGE));
-        size = add(size, Long.BYTES * 3L);
-        size = add(size, optionalLong(false));
-        size = add(size, optionalLong(false));
-        size = add(size, DeterminismCanonicalSize.listPrefix());
-        for (InputTimelineTransition transition : spec.transitions()) {
+        long size = resultPrefix(MAXIMUM_TERMINAL_MESSAGE);
+        List<InputTimelineTransition> transitions = spec.transitions();
+        for (int index = 0; index < transitions.size(); index++) {
+            InputTimelineTransition transition = transitions.get(index);
             size = add(size, transitionPrefix(
                     transition.transitionId(), transition.timelineTick(), transition.inputId()));
             size = add(size, 1);
-            size = add(size, 1);
-            size = add(size, optionalString(Optional.of(PRE_EXECUTION_MESSAGE)));
+            if (index == 0) {
+                size = add(size, failedInjection(transition));
+            } else {
+                size = add(size, 1);
+                size = add(size, optionalString(Optional.of(MAXIMUM_TERMINAL_MESSAGE)));
+            }
         }
         size = add(size, bounds());
         return add(size, maximumOptionalFailure());
@@ -114,6 +154,39 @@ final class InputTimelineCanonicalSize {
         size = add(size, 1);
         size = add(size, 1);
         return add(size, 1);
+    }
+
+    /**
+     * Worst-case failed child injection: a failed logical command status with bounded diagnostic
+     * and structured failure, a present actual tick and frames, and recorded parameters.
+     */
+    private static long failedInjection(InputTimelineTransition transition) {
+        long size = DeterminismCanonicalSize.string(transition.inputId());
+        size = add(size, DeterminismCanonicalSize.string(transition.transitionId()));
+        size = add(size, failedCommand(transition.transitionId()));
+        size = add(size, 1 + Long.BYTES);
+        size = add(size, optionalLong(true));
+        size = add(size, Long.BYTES);
+        size = add(size, optionalLong(true));
+        size = add(size, optionalLong(true));
+        size = add(size, 1);
+        size = add(size, DeterminismCanonicalSize.value(transition.parameters()));
+        size = add(size, 1);
+        size = add(size, maximumOptionalString(
+                ApplicationFailureEvidence.LEGACY_ENVELOPE_CAPACITY));
+        return add(size, maximumOptionalFailure());
+    }
+
+    private static long failedCommand(String requestId) {
+        long size = 2;
+        size = add(size, DeterminismCanonicalSize.string(requestId));
+        size = add(size, 1 + Long.BYTES * 2L);
+        size = add(size, optionalLong(true));
+        size = add(size, optionalLong(true));
+        size = add(size, 1);
+        size = add(size, maximumOptionalString(
+                ApplicationFailureEvidence.LEGACY_ENVELOPE_CAPACITY));
+        return add(size, maximumOptionalFailure());
     }
 
     private static long transition(InputTimelineTransitionEvidence transition) {
@@ -219,5 +292,9 @@ final class InputTimelineCanonicalSize {
 
     private static long maximumString(int maximumUtf16Length) {
         return add(Integer.BYTES, 3L * maximumUtf16Length);
+    }
+
+    private static long maximumOptionalString(int maximumUtf16Length) {
+        return add(1, maximumString(maximumUtf16Length));
     }
 }

@@ -8,11 +8,12 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
-/** Package-private aggregate executor for successful exact-tick input timelines. */
+/** Package-private aggregate executor for fail-stop exact-tick input timelines. */
 final class InputTimelineExecutor {
-    private static final String COMPLETED_MESSAGE = "completed";
     private static final String NOT_EXECUTED_MESSAGE =
             InputTimelineCanonicalSize.PRE_EXECUTION_MESSAGE;
+    private static final String EPOCH_CHANGED_MESSAGE =
+            "input timeline lifecycle changed before target tick";
 
     private final AgentRuntime runtime;
     private final InputRegistry inputs;
@@ -151,23 +152,31 @@ final class InputTimelineExecutor {
         }
         ExecutionEpochId startingEpoch = runtime.currentEpoch();
         long startingControlledTick = runtime.controls().currentTick();
-        long fixedStepNanos = requireExecutionState(startingEpoch,
-                evidence.preflight.fixedStepNanos);
-        long startingEpochTick = runtime.simulation().state().attemptedEpochTicks();
-        inputs.stageTimeline(evidence.signature.spec, evidence.requestId,
-                startingControlledTick, startingEpoch, parentStatus);
-
-        ArrayList<InputTimelineTransitionEvidence> transitions = new ArrayList<>();
+        long deadlineNanos = parentStatus.deadlineNanos();
+        InputTimelineStopReason stopReason = InputTimelineStopReason.COMPLETED;
+        String message = InputTimelineCanonicalSize.COMPLETED_MESSAGE;
+        Optional<ApplicationFailureEvidence> applicationFailure = Optional.empty();
+        Throwable rethrow = null;
+        int completedTicks = 0;
         Optional<FrameId> firstFrameId = Optional.empty();
         Optional<FrameId> finalFrameId = Optional.empty();
-        int completedTicks = 0;
         try {
+            requireExecutionState(startingEpoch, evidence.preflight.fixedStepNanos);
+            requireDeadline(deadlineNanos);
+            inputs.stageTimeline(evidence.signature.spec, evidence.requestId,
+                    startingControlledTick, startingEpoch, parentStatus);
+            long startingEpochTick = runtime.simulation().state().attemptedEpochTicks();
             for (int localTick = 1;
                     localTick <= evidence.signature.spec.totalTicks(); localTick++) {
+                requireDeadline(deadlineNanos);
                 SimulationControlRegistry.ExactTickEvidence completed =
-                        runtime.controls().tickExact(fixedStepNanos,
-                                () -> requireExecutionState(startingEpoch, fixedStepNanos));
-                completed.requireCompleted(fixedStepNanos);
+                        runtime.controls().tickExact(evidence.preflight.fixedStepNanos,
+                                () -> {
+                                    requireDeadline(deadlineNanos);
+                                    requireExecutionState(
+                                            startingEpoch, evidence.preflight.fixedStepNanos);
+                                });
+                completed.requireCompleted(evidence.preflight.fixedStepNanos);
                 if (!completed.tick().executionEpochId().equals(startingEpoch)
                         || completed.tick().epochTick()
                                 != Math.addExact(startingEpochTick, (long) localTick)
@@ -181,52 +190,164 @@ final class InputTimelineExecutor {
                     firstFrameId = Optional.of(completed.frame().frameId());
                 }
                 finalFrameId = Optional.of(completed.frame().frameId());
+                requireDeadline(deadlineNanos);
             }
-            for (InputTimelineTransition transition : evidence.signature.spec.transitions()) {
-                InputInjection injection = inputs.timelineInjection(
-                        transition.transitionId(), evidence.requestId);
-                if (injection.state() != InputInjectionState.EXECUTED) {
-                    throw new IllegalStateException(
-                            "successful input timeline retained a non-executed transition");
-                }
+        } catch (Throwable thrown) {
+            rethrow = thrown;
+            Optional<ApplicationFailureEvidence> childFailure =
+                    inputs.timelineChildFailure(evidence.requestId);
+            if (childFailure.isPresent()) {
+                stopReason = InputTimelineStopReason.INPUT_FAILED;
+                message = InputTimelineCanonicalSize.INPUT_FAILED_MESSAGE;
+                applicationFailure = childFailure;
+            } else if (thrown instanceof InputTimelineDeadlineExceeded) {
+                stopReason = InputTimelineStopReason.TIMED_OUT;
+                message = InputTimelineCanonicalSize.TIMED_OUT_MESSAGE;
+            } else if (thrown instanceof AgentRuntimeException agentFailure
+                    && agentFailure.code() == RuntimeErrorCode.INVALID_LIFECYCLE) {
+                stopReason = InputTimelineStopReason.LIFECYCLE_CHANGED;
+                message = InputTimelineCanonicalSize.LIFECYCLE_CHANGED_MESSAGE;
+            } else {
+                stopReason = InputTimelineStopReason.TICK_FAILED;
+                message = InputTimelineCanonicalSize.TICK_FAILED_MESSAGE;
+                applicationFailure = describeFailure(thrown, evidence.requestId);
+            }
+        }
+        boolean cleanupFailed = false;
+        Optional<ApplicationFailureEvidence> cleanupFailure = Optional.empty();
+        try {
+            inputs.releaseTimeline(evidence.requestId, message);
+        } catch (Throwable thrown) {
+            cleanupFailed = true;
+            cleanupFailure = describeFailure(thrown, evidence.requestId);
+        }
+        if (stopReason == InputTimelineStopReason.COMPLETED) {
+            if (runtime.monotonicTimeNanos() >= deadlineNanos) {
+                stopReason = InputTimelineStopReason.TIMED_OUT;
+                message = InputTimelineCanonicalSize.TIMED_OUT_MESSAGE;
+            } else if (cleanupFailed) {
+                stopReason = InputTimelineStopReason.CLEANUP_FAILED;
+                message = InputTimelineCanonicalSize.CLEANUP_FAILED_MESSAGE;
+                applicationFailure = cleanupFailure;
+            }
+        } else if (cleanupFailed) {
+            stopReason = InputTimelineStopReason.CLEANUP_FAILED;
+            message = InputTimelineCanonicalSize.CLEANUP_FAILED_MESSAGE;
+            if (applicationFailure.isEmpty()) {
+                applicationFailure = cleanupFailure;
+            }
+        }
+        ArrayList<InputTimelineTransitionEvidence> transitions = new ArrayList<>();
+        int executedTransitions = 0;
+        int failedTransitions = 0;
+        for (InputTimelineTransition transition : evidence.signature.spec.transitions()) {
+            Optional<InputInjection> injection = inputs.attemptedTimelineInjection(
+                    transition.transitionId(), evidence.requestId);
+            if (injection.isEmpty()) {
                 transitions.add(new InputTimelineTransitionEvidence(
-                        transition.transitionId(), transition.timelineTick(), transition.inputId(),
-                        InputTimelineTransitionState.EXECUTED, Optional.of(injection),
-                        Optional.empty()));
+                        transition.transitionId(), transition.timelineTick(),
+                        transition.inputId(), InputTimelineTransitionState.NOT_EXECUTED,
+                        Optional.empty(), Optional.of(message)));
+                continue;
             }
-        } finally {
-            inputs.endTimeline(evidence.requestId);
+            InputTimelineTransitionState state =
+                    injection.orElseThrow().state() == InputInjectionState.EXECUTED
+                            ? InputTimelineTransitionState.EXECUTED
+                            : InputTimelineTransitionState.FAILED;
+            if (state == InputTimelineTransitionState.EXECUTED) {
+                executedTransitions++;
+            } else {
+                failedTransitions++;
+            }
+            transitions.add(new InputTimelineTransitionEvidence(
+                    transition.transitionId(), transition.timelineTick(), transition.inputId(),
+                    state, injection, injection.orElseThrow().diagnostic()));
         }
-
-        InputTimelineBounds provisionalBounds = new InputTimelineBounds(
-                evidence.signature.spec.totalTicks(), completedTicks,
-                evidence.signature.spec.transitions().size(), transitions.size(), 0, 0,
-                0, evidence.preflight.maximumTicks, evidence.preflight.maximumTransitions,
-                limits.maximumEncodedEvidenceBytes(), parentStatus.deadlineNanos());
-        InputTimelineResult provisional = new InputTimelineResult(
-                InputTimelineStopReason.COMPLETED, COMPLETED_MESSAGE, startingEpoch,
-                startingControlledTick, fixedStepNanos, firstFrameId, finalFrameId,
-                transitions, provisionalBounds, Optional.empty());
-        long encodedBytes = InputTimelineCanonicalSize.result(provisional);
-        if (encodedBytes > evidence.preflight.resultReservation
-                || encodedBytes > limits.maximumEncodedEvidenceBytes()) {
-            throw new IllegalStateException(
-                    "input timeline result exceeded its preflight reservation");
-        }
-        InputTimelineBounds bounds = new InputTimelineBounds(
-                evidence.signature.spec.totalTicks(), completedTicks,
-                evidence.signature.spec.transitions().size(), transitions.size(), 0, 0,
-                encodedBytes, evidence.preflight.maximumTicks,
-                evidence.preflight.maximumTransitions, limits.maximumEncodedEvidenceBytes(),
-                parentStatus.deadlineNanos());
-        InputTimelineResult result = new InputTimelineResult(
-                InputTimelineStopReason.COMPLETED, COMPLETED_MESSAGE, startingEpoch,
-                startingControlledTick, fixedStepNanos, firstFrameId, finalFrameId,
-                transitions, bounds, Optional.empty());
+        InputTimelineResult result = publish(evidence, stopReason, message, applicationFailure,
+                startingEpoch, startingControlledTick, evidence.preflight.fixedStepNanos,
+                firstFrameId, finalFrameId,
+                completedTicks, transitions, executedTransitions, failedTransitions,
+                deadlineNanos);
         synchronized (this) {
             evidence.result = result;
             activeParent = null;
         }
+        if (stopReason != InputTimelineStopReason.COMPLETED && rethrow != null) {
+            rethrow(rethrow);
+        }
+    }
+
+    private InputTimelineResult publish(Evidence evidence, InputTimelineStopReason stopReason,
+            String message, Optional<ApplicationFailureEvidence> applicationFailure,
+            ExecutionEpochId startingEpoch, long startingControlledTick, long fixedStepNanos,
+            Optional<FrameId> firstFrameId, Optional<FrameId> finalFrameId, int completedTicks,
+            List<InputTimelineTransitionEvidence> transitions, int executedTransitions,
+            int failedTransitions, long deadlineNanos) {
+        int requestedTransitions = evidence.signature.spec.transitions().size();
+        int notExecutedTransitions = requestedTransitions
+                - executedTransitions - failedTransitions;
+        InputTimelineBounds provisionalBounds = new InputTimelineBounds(
+                evidence.signature.spec.totalTicks(), completedTicks, requestedTransitions,
+                executedTransitions, failedTransitions, notExecutedTransitions,
+                0, evidence.preflight.maximumTicks, evidence.preflight.maximumTransitions,
+                limits.maximumEncodedEvidenceBytes(), deadlineNanos);
+        InputTimelineResult provisional = new InputTimelineResult(stopReason, message,
+                startingEpoch, startingControlledTick, fixedStepNanos, firstFrameId, finalFrameId,
+                transitions, provisionalBounds, applicationFailure);
+        long encodedBytes = InputTimelineCanonicalSize.result(provisional);
+        if (stopReason != InputTimelineStopReason.EVIDENCE_LIMIT
+                && (encodedBytes > evidence.preflight.resultReservation
+                        || encodedBytes > limits.maximumEncodedEvidenceBytes())) {
+            List<InputTimelineTransitionEvidence> boundedTransitions = transitions.stream()
+                    .map(value -> value.state() == InputTimelineTransitionState.NOT_EXECUTED
+                            ? new InputTimelineTransitionEvidence(
+                                    value.transitionId(), value.timelineTick(), value.inputId(),
+                                    InputTimelineTransitionState.NOT_EXECUTED,
+                                    Optional.empty(), Optional.of(
+                                            InputTimelineCanonicalSize.EVIDENCE_LIMIT_MESSAGE))
+                            : value)
+                    .toList();
+            return publish(evidence, InputTimelineStopReason.EVIDENCE_LIMIT,
+                    InputTimelineCanonicalSize.EVIDENCE_LIMIT_MESSAGE, Optional.empty(),
+                    startingEpoch, startingControlledTick, fixedStepNanos, firstFrameId,
+                    finalFrameId, completedTicks, boundedTransitions, executedTransitions,
+                    failedTransitions, deadlineNanos);
+        }
+        InputTimelineBounds bounds = new InputTimelineBounds(
+                evidence.signature.spec.totalTicks(), completedTicks, requestedTransitions,
+                executedTransitions, failedTransitions, notExecutedTransitions,
+                encodedBytes, evidence.preflight.maximumTicks,
+                evidence.preflight.maximumTransitions, limits.maximumEncodedEvidenceBytes(),
+                deadlineNanos);
+        return new InputTimelineResult(stopReason, message, startingEpoch,
+                startingControlledTick, fixedStepNanos, firstFrameId, finalFrameId,
+                transitions, bounds, applicationFailure);
+    }
+
+    private void requireDeadline(long deadlineNanos) {
+        if (runtime.monotonicTimeNanos() >= deadlineNanos) {
+            throw new InputTimelineDeadlineExceeded();
+        }
+    }
+
+    private Optional<ApplicationFailureEvidence> describeFailure(
+            Throwable failure, String requestId) {
+        Optional<String> correlationId = runtime.commands().orElseThrow()
+                .correlationId(requestId);
+        return correlationId.isPresent()
+                ? Optional.of(runtime.diagnostics().describe(
+                        "input-timeline.tick", failure, correlationId.orElseThrow()))
+                : Optional.of(runtime.diagnostics().describe("input-timeline.tick", failure));
+    }
+
+    private static void rethrow(Throwable failure) {
+        if (failure instanceof RuntimeException runtimeFailure) {
+            throw runtimeFailure;
+        }
+        if (failure instanceof Error error) {
+            throw error;
+        }
+        throw new IllegalStateException(failure);
     }
 
     private long requireExecutionState(
@@ -317,7 +438,7 @@ final class InputTimelineExecutor {
             stopped = true;
         }
         if (stopped) {
-            inputs.stopTimelineBeforeExecution(evidence.requestId, NOT_EXECUTED_MESSAGE);
+            inputs.releaseTimeline(evidence.requestId, NOT_EXECUTED_MESSAGE);
         }
     }
 
@@ -382,6 +503,15 @@ final class InputTimelineExecutor {
     }
 
     private record Signature(InputTimelineSpec spec, long timeoutNanos) {}
+
+    /** Internal fail-closed marker for a monotonic deadline that expired mid-execution. */
+    static final class InputTimelineDeadlineExceeded extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        InputTimelineDeadlineExceeded() {
+            super("input timeline exceeded its execution deadline");
+        }
+    }
 
     private record Preflight(ExecutionEpochId startingExecutionEpochId,
             long startingControlledTick, long fixedStepNanos, int maximumTicks,

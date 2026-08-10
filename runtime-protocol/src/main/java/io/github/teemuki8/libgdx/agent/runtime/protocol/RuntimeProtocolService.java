@@ -65,6 +65,8 @@ public final class RuntimeProtocolService {
     private static final List<String> V2_3_TOOLS = List.of("runtime_simulation_assert");
     private static final List<String> V2_4_TOOLS =
             List.of("runtime_simulation_determinism_check");
+    private static final List<String> V2_5_TOOLS =
+            List.of("runtime_replay_recording_start", "runtime_replay");
     private static final List<String> FEATURES = List.of(
             "entities", "frames", "changes", "events", "decisions");
     private static final List<ProtocolVersion> SUPPORTED_VERSIONS =
@@ -74,7 +76,7 @@ public final class RuntimeProtocolService {
                     ProtocolVersion.V1_9, ProtocolVersion.V1_10, ProtocolVersion.V1_11,
                     ProtocolVersion.V1_12, ProtocolVersion.V1_13, ProtocolVersion.V2,
                     ProtocolVersion.V2_1, ProtocolVersion.V2_2, ProtocolVersion.V2_3,
-                    ProtocolVersion.V2_4);
+                    ProtocolVersion.V2_4, ProtocolVersion.V2_5);
     private final RuntimeRegistry registry;
 
     /** Creates a service over an isolated or global registry. */
@@ -142,8 +144,13 @@ public final class RuntimeProtocolService {
         }
         boolean simulationDeterminism = registry.sessions().stream()
                 .anyMatch(runtime -> runtime.determinism().simulationAvailable());
-        return (simulationDeterminism
-                ? Stream.concat(tools, V2_4_TOOLS.stream()) : tools).toList();
+        if (simulationDeterminism) {
+            tools = Stream.concat(tools, V2_4_TOOLS.stream());
+        }
+        if (registry.sessions().stream().anyMatch(RuntimeProtocolService::replayAvailable)) {
+            tools = Stream.concat(tools, V2_5_TOOLS.stream());
+        }
+        return tools.toList();
     }
 
     /** Returns registered action schemas in deterministic session and action order. */
@@ -180,7 +187,7 @@ public final class RuntimeProtocolService {
             return failure(request, ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED,
                     "protocol version is unsupported", Map.of(
                             "supported",
-                            "1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10,1.11,1.12,1.13,2.0,2.1,2.2,2.3,2.4",
+                            "1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,1.10,1.11,1.12,1.13,2.0,2.1,2.2,2.3,2.4,2.5",
                             "requested", request.version().major() + "." + request.version().minor()));
         }
         try {
@@ -293,6 +300,9 @@ public final class RuntimeProtocolService {
                                             command.limit())));
             case RuntimeCommand.SimulationAdvance command ->
                     advanceFixed(runtime, command, request.version());
+            case RuntimeCommand.ReplayRecordingStart command ->
+                    replayRecordingStart(runtime, command, request.version());
+            case RuntimeCommand.Replay command -> replay(runtime, command, request.version());
             case RuntimeCommand.Sessions ignored ->
                     throw new AssertionError("sessions handled before runtime lookup");
         };
@@ -745,6 +755,32 @@ public final class RuntimeProtocolService {
                     List.of("command-dispatch", "deterministic-scenarios",
                             "simulation-timeline", "acknowledged-simulation-control")));
         }
+        if (version.isV2() && version.minor() >= 5) {
+            boolean available = replayAvailable(runtime);
+            var replayLimits = runtime.replays().limits();
+            details.add(new RuntimeCapability(
+                    "replay-execution", ProtocolVersion.V2_5,
+                    available ? RuntimeCapability.Availability.AVAILABLE
+                            : RuntimeCapability.Availability.UNAVAILABLE,
+                    available ? Optional.empty()
+                            : Optional.of("replay-origin-or-exact-control-unavailable"),
+                    RuntimeCapability.Access.MUTATING,
+                    List.of("ReplayRegistry#start", "ReplayRegistry#execute"),
+                    List.of("replayRecordingStart", "replay"), V2_5_TOOLS, Map.of(
+                            "retainedOperations", (long) replayLimits.retainedOperations(),
+                            "maximumInputs", (long) replayLimits.maximumInputs(),
+                            "maximumTicks", (long) replayLimits.maximumTicks(),
+                            "maximumEntitiesPerFrame",
+                            (long) replayLimits.maximumEntitiesPerFrame(),
+                            "maximumFactsPerFrame", (long) replayLimits.maximumFactsPerFrame(),
+                            "maximumEncodedEvidenceBytes",
+                            (long) replayLimits.maximumEncodedEvidenceBytes(),
+                            "maximumExecutionNanos", replayLimits.maximumExecutionNanos()),
+                    List.of("bounded", "checkpoint-restore", "first-divergence",
+                            "inconclusive-safe", "scenario-reset"),
+                    List.of("command-dispatch", "recording", "simulation-timeline",
+                            "acknowledged-simulation-control")));
+        }
         return List.copyOf(details);
     }
 
@@ -807,6 +843,9 @@ public final class RuntimeProtocolService {
         if (version.isV2() && version.minor() >= 4
                 && runtime.determinism().simulationAvailable()) {
             tools = Stream.concat(tools, V2_4_TOOLS.stream());
+        }
+        if (version.isV2() && version.minor() >= 5 && replayAvailable(runtime)) {
+            tools = Stream.concat(tools, V2_5_TOOLS.stream());
         }
         return tools.toList();
     }
@@ -1027,6 +1066,56 @@ public final class RuntimeProtocolService {
                 evidence(version, operation.result().flatMap(
                         io.github.teemuki8.libgdx.agent.runtime.core
                                 .SimulationDeterminismResult::applicationFailure)));
+    }
+
+    private static RuntimeResponse.Result replayRecordingStart(AgentRuntime runtime,
+            RuntimeCommand.ReplayRecordingStart command, ProtocolVersion version) {
+        requireControl(runtime, command.timeoutNanos());
+        if (!replayAvailable(runtime)) {
+            throw new ProtocolFailure(ProtocolErrorCode.CAPABILITY_UNAVAILABLE,
+                    "replay execution is unavailable", Map.of(
+                            "sessionId", runtime.sessionId().value(),
+                            "capability", "replay-execution"));
+        }
+        var recording = new io.github.teemuki8.libgdx.agent.runtime.core.RecordingSpec(
+                command.recordingId(), "2.5", recordingCapabilityVersions(runtime, version),
+                Optional.ofNullable(command.scenarioId()),
+                Optional.ofNullable(command.checkpointId()),
+                command.randomSeed() == null ? java.util.OptionalLong.empty()
+                        : java.util.OptionalLong.of(command.randomSeed()),
+                command.configuration(), true);
+        var spec = new io.github.teemuki8.libgdx.agent.runtime.core.ReplayCaptureSpec(
+                recording, command.profile(), command.configurationRequirements(),
+                command.evidenceRequirements(), command.eventTypes());
+        var operation = runtime.replays().start(spec, command.replayRequestId(),
+                Duration.ofNanos(command.timeoutNanos()));
+        return new RuntimeResponse.Result.ReplayCapture(
+                operation, commandEvidence(version, operation.command()));
+    }
+
+    private static RuntimeResponse.Result replay(AgentRuntime runtime,
+            RuntimeCommand.Replay command, ProtocolVersion version) {
+        requireControl(runtime, command.timeoutNanos());
+        var operation = runtime.replays().execute(command.recordingId(),
+                command.replayRequestId(), Duration.ofNanos(command.timeoutNanos()));
+        return new RuntimeResponse.Result.Replay(operation,
+                evidence(version, operation.result().flatMap(
+                        io.github.teemuki8.libgdx.agent.runtime.core.ReplayResult
+                                ::applicationFailure)));
+    }
+
+    private static List<io.github.teemuki8.libgdx.agent.runtime.core.RecordingCapabilityVersion>
+            recordingCapabilityVersions(AgentRuntime runtime, ProtocolVersion version) {
+        return capabilityDetails(runtime, version).stream()
+                .map(capability -> new io.github.teemuki8.libgdx.agent.runtime.core
+                        .RecordingCapabilityVersion(capability.id(),
+                                capability.capabilityVersion().major() + "."
+                                        + capability.capabilityVersion().minor()))
+                .toList();
+    }
+
+    private static boolean replayAvailable(AgentRuntime runtime) {
+        return runtime.replays().available();
     }
 
     private static RuntimeResponse.Result recordingStart(

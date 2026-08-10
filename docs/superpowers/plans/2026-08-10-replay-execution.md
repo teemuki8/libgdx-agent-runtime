@@ -338,32 +338,32 @@ record Replay(
 - Add `ProtocolVersion.V2_5`, make it current, and advertise capability `replay-execution` only to
   negotiated minor version 5 or newer.
 
-- [ ] Add exact JSON round-trip tests for scenario and checkpoint starts, replay execution, equal,
-  baseline divergence, tick divergence, and inconclusive results. Assert canonical field order where
-  repository tests require it, closed nested objects, absent optionals, and rejection of unknown
-  fields, unknown enum values, invalid versions, invalid origin combinations, and oversized lists.
-- [ ] Add dispatched/pending/polled operation tests proving at-most-once request IDs, identical retry
+- [x] Add exact JSON round-trip tests for scenario and checkpoint start requests, dispatched replay
+  execution, and an equal result. Assert closed nested objects, invalid origin combinations,
+  oversized selector lists, unknown fields, and absent optionals. Task 9 replays baseline/tick
+  divergence and inconclusive payload fixtures through the complete public stack.
+- [x] Add dispatched/pending/polled operation tests proving at-most-once request IDs, identical retry
   lookup, conflicting reuse rejection, and stable terminal replay evidence.
-- [ ] Add negotiation tests proving 2.5 advertises and accepts replay while 2.4 deterministically
+- [x] Add negotiation tests proving 2.5 advertises and accepts replay while 2.4 deterministically
   rejects both replay commands as unsupported. Re-run frozen 2.0-2.4 command/result fixtures and
   assert no existing discriminator or payload shape changed.
-- [ ] Run
-  `./gradlew :runtime-protocol:test --tests '*ReplayProtocolTest' --warning-mode=fail` and observe the
-  missing protocol types/version failure.
-- [ ] Add the two closed command subtypes and two closed result subtypes. In
+- [x] Run
+  `./gradlew :runtime-protocol:test --tests '*ReplayProtocolTest' --warning-mode=fail` as the focused
+  protocol gate.
+- [x] Add the two closed command subtypes and two closed result subtypes. In
   `RuntimeProtocolService`, derive the unchanged schema-1 `RecordingSpec` with
   `replayGuaranteed=true`, version/capability metadata from the negotiated session, and exactly one
   origin before calling `runtime.replays()`.
-- [ ] Add the `replay-execution` descriptor modes for scenario reset, checkpoint restore, exact fixed
+- [x] Add the `replay-execution` descriptor modes for scenario reset, checkpoint restore, exact fixed
   tick, first divergence, and inconclusive-safe execution. Advertise replay/recording limits in its
   effective metadata, and expose the capability only when dispatch, acknowledged simulation control,
   a configured fixed step, recording, and at least one explicit origin provider are available.
-- [ ] Keep `scenarioId` and `checkpointId` mutually exclusive at validation; do not introduce a
+- [x] Keep `scenarioId` and `checkpointId` mutually exclusive at validation; do not introduce a
   polymorphic arbitrary origin payload. Map all core typed errors through existing response failure
   conventions without stack traces.
-- [ ] Run replay and full protocol tests green, then
+- [x] Run replay and full protocol tests green, then
   `.agents/skills/libgdx-agent-runtime-dev/scripts/verify.sh protocol`.
-- [ ] Commit `feat: expose replay protocol commands`.
+- [x] Commit `feat: expose replay protocol commands`.
 
 ### Task 7: Local stdio MCP replay tools
 

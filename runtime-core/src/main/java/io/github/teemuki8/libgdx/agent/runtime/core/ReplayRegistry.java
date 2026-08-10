@@ -108,6 +108,14 @@ public final class ReplayRegistry {
         return limits;
     }
 
+    /** Reports whether mandatory replay execution capabilities and an origin are registered. */
+    public boolean available() {
+        return runtime.commands().isPresent() && runtime.controls().acknowledgedTicksAvailable()
+                && runtime.simulation().state().configured()
+                && (runtime.scenarios().determinismAvailable()
+                        || runtime.checkpoints().available());
+    }
+
     /** Executes or polls one stopped replay-ready recording at most once. */
     public ReplayOperation execute(
             String recordingId, String requestId, Duration timeout) {

@@ -3,6 +3,7 @@ package io.github.teemuki8.libgdx.agent.runtime.examples;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -24,6 +25,11 @@ final class ExampleModuleContractTest {
         String versions = Files.readString(repositoryFile("gradle/libs.versions.toml"));
         assertEquals("1.14.2", capture(versions, "gdx = \"([^\"]+)\""));
         assertNotNull(System.getProperty("example.classpath"));
+        assertTrue(Files.exists(repositoryFile("runtime-examples/gradle.lockfile")));
+        String verification = Files.readString(repositoryFile(
+                ".agents/skills/libgdx-agent-runtime-dev/scripts/verify.sh"));
+        assertTrue(verification.contains("-x :runtime-examples:test"));
+        assertTrue(verification.contains(":runtime-examples:testClasses"));
     }
 
     private static Path repositoryFile(String relativePath) {

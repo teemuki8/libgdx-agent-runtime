@@ -1,3 +1,7 @@
+plugins {
+    application
+}
+
 // Consumer examples are compiled and tested but never published.
 dependencies {
     implementation(project(":runtime-core"))
@@ -13,20 +17,20 @@ dependencies {
     runtimeOnly("org.slf4j:slf4j-nop:2.0.17")
 }
 
-tasks.withType<Test>().configureEach {
-    jvmArgs("--enable-native-access=ALL-UNNAMED")
-    systemProperty("example.classpath", sourceSets.main.get().runtimeClasspath.asPath)
+application {
+    applicationName = "runtime-mcp-example"
+    mainClass = "io.github.teemuki8.libgdx.agent.runtime.examples.SameJvmMcpApplication"
+    applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED")
 }
 
-tasks.register<JavaExec>("runSameJvmMcpExample") {
-    group = "application"
-    description = "Runs the hidden same-JVM libGDX stdio MCP consumer example"
-    classpath = sourceSets.main.get().runtimeClasspath
-    mainClass.set(
-        "io.github.teemuki8.libgdx.agent.runtime.examples.SameJvmMcpApplication",
-    )
+tasks.withType<Test>().configureEach {
+    dependsOn(tasks.named("installDist"))
     jvmArgs("--enable-native-access=ALL-UNNAMED")
-    standardInput = System.`in`
-    standardOutput = System.out
-    errorOutput = System.err
+    systemProperty("example.classpath", sourceSets.main.get().runtimeClasspath.asPath)
+    systemProperty(
+        "example.mcp.launcher",
+        layout.buildDirectory.file(
+            "install/runtime-mcp-example/bin/runtime-mcp-example",
+        ).get().asFile.absolutePath,
+    )
 }

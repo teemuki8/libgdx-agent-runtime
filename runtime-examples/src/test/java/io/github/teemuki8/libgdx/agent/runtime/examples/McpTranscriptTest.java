@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import io.github.teemuki8.libgdx.agent.runtime.mcp.RuntimeToolHandler;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.ProtocolJson;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.ProtocolVersion;
@@ -66,12 +67,21 @@ class McpTranscriptTest {
                         assertNotNull(result, step.name());
                         assertFalse(result.isError(), step.name() + ": " + result.content());
                     }
-                    String encoded = MAPPER.writeValueAsString(result.structuredContent());
-                    for (String expected : step.expectedContains()) {
-                        assertTrue(encoded.contains(expected),
-                                () -> step.name() + " expected " + expected + " in " + encoded);
+                    JsonNode actual = MAPPER.valueToTree(result.structuredContent());
+                    for (Map.Entry<String, JsonNode> expectation : step.expected().entrySet()) {
+                        JsonNode observed = actual.at(expectation.getKey());
+                        assertFalse(observed.isMissingNode(),
+                                step.name() + " missing result pointer " + expectation.getKey());
+                        assertJsonValueEquals(expectation.getValue(), observed,
+                                step.name() + " result pointer " + expectation.getKey());
                     }
                 }
+                McpSchema.CallToolResult unknown = handler.handle(
+                        McpSchema.CallToolRequest.builder("runtime_sessions")
+                                .arguments(Map.of("script", "inspect()"))
+                                .build()).block(Duration.ofSeconds(5));
+                assertNotNull(unknown);
+                assertTrue(unknown.isError(), "unknown MCP argument must fail closed");
             }
         }
     }
@@ -104,11 +114,7 @@ class McpTranscriptTest {
     void sameJvmLwjgl3LauncherReservesStdoutForMcp() throws Exception {
         Path errors = Files.createTempFile("agent-runtime-example-mcp-", ".txt");
         List<String> command = new ArrayList<>();
-        command.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
-        command.add("--enable-native-access=ALL-UNNAMED");
-        command.add("-cp");
-        command.add(System.getProperty("example.classpath"));
-        command.add(SameJvmMcpApplication.class.getName());
+        command.add(System.getProperty("example.mcp.launcher"));
         Process process = new ProcessBuilder(command).redirectError(errors.toFile()).start();
         try {
             try (BufferedWriter requests = new BufferedWriter(new OutputStreamWriter(
@@ -173,6 +179,15 @@ class McpTranscriptTest {
         }
     }
 
+    private static void assertJsonValueEquals(
+            JsonNode expected, JsonNode observed, String message) {
+        if (expected.isNumber() && observed.isNumber()) {
+            assertEquals(0, expected.decimalValue().compareTo(observed.decimalValue()), message);
+        } else {
+            assertEquals(expected, observed, message);
+        }
+    }
+
     private record Transcript(List<Step> steps) {
         private Transcript {
             steps = List.copyOf(steps);
@@ -180,10 +195,10 @@ class McpTranscriptTest {
     }
 
     private record Step(String name, String tool, Map<String, Object> arguments,
-            boolean dispatch, List<String> expectedContains) {
+            boolean dispatch, Map<String, JsonNode> expected) {
         private Step {
             arguments = Map.copyOf(new LinkedHashMap<>(arguments));
-            expectedContains = List.copyOf(expectedContains);
+            expected = Map.copyOf(new LinkedHashMap<>(expected));
         }
     }
 }

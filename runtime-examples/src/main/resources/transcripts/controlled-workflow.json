@@ -5,7 +5,11 @@
       "tool": "runtime_sessions",
       "arguments": {},
       "dispatch": false,
-      "expectedContains": ["controlled-workflow-example"]
+      "expected": {
+        "/type": "sessions",
+        "/sessions/0/sessionId": "controlled-workflow-example",
+        "/sessions/0/status": "RUNNING"
+      }
     },
     {
       "name": "capabilities",
@@ -15,14 +19,22 @@
         "protocolMinor": 13
       },
       "dispatch": false,
-      "expectedContains": ["simulation-control", "registered-inputs"]
+      "expected": {
+        "/type": "capabilities",
+        "/protocolVersion/major": 1,
+        "/protocolVersion/minor": 13,
+        "/runtimeStatus": "RUNNING"
+      }
     },
     {
       "name": "scenarios",
       "tool": "runtime_scenarios",
       "arguments": {"sessionId": "controlled-workflow-example"},
       "dispatch": false,
-      "expectedContains": ["walk"]
+      "expected": {
+        "/type": "scenarios",
+        "/scenarios/0/id": "walk"
+      }
     },
     {
       "name": "reset",
@@ -34,7 +46,12 @@
         "timeoutNanos": 5000000000
       },
       "dispatch": true,
-      "expectedContains": ["SUCCEEDED", "executionEpochId"]
+      "expected": {
+        "/type": "reset",
+        "/reset/scenarioId": "walk",
+        "/reset/command/status/state": "SUCCEEDED",
+        "/reset/executionEpochId/value": 1
+      }
     },
     {
       "name": "pause",
@@ -46,7 +63,12 @@
         "timeoutNanos": 5000000000
       },
       "dispatch": true,
-      "expectedContains": ["SUCCEEDED", "PAUSE", "paused"]
+      "expected": {
+        "/type": "control",
+        "/operation/kind": "PAUSE",
+        "/operation/command/status/state": "SUCCEEDED",
+        "/operation/paused": true
+      }
     },
     {
       "name": "input",
@@ -60,7 +82,12 @@
         "timeoutNanos": 5000000000
       },
       "dispatch": true,
-      "expectedContains": ["SCHEDULED", "actualTick"]
+      "expected": {
+        "/type": "input",
+        "/injection/inputId": "set-velocity",
+        "/injection/state": "SCHEDULED",
+        "/injection/actualTick": null
+      }
     },
     {
       "name": "advance",
@@ -72,7 +99,12 @@
         "timeoutNanos": 5000000000
       },
       "dispatch": true,
-      "expectedContains": ["SUCCEEDED", "completedTicks", "2"]
+      "expected": {
+        "/type": "control",
+        "/operation/kind": "ADVANCE",
+        "/operation/command/status/state": "SUCCEEDED",
+        "/operation/completedTicks": 2
+      }
     },
     {
       "name": "entity",
@@ -82,7 +114,11 @@
         "entityId": "player"
       },
       "dispatch": false,
-      "expectedContains": ["position", "velocity"]
+      "expected": {
+        "/type": "entity",
+        "/latest/id/value": "player",
+        "/latest/type/value": "player"
+      }
     },
     {
       "name": "events",
@@ -96,7 +132,11 @@
         "limit": 10
       },
       "dispatch": false,
-      "expectedContains": ["player.moved", "position"]
+      "expected": {
+        "/type": "events",
+        "/page/items/0/type/value": "player.moved",
+        "/page/items/0/subject/value": "player"
+      }
     },
     {
       "name": "frame assertion",
@@ -113,7 +153,11 @@
         }
       },
       "dispatch": false,
-      "expectedContains": ["PASS", "eventOccurs", "player.moved"]
+      "expected": {
+        "/type": "assertion",
+        "/result/status": "PASS",
+        "/result/assertionType": "eventOccurs"
+      }
     },
     {
       "name": "assertion",
@@ -135,7 +179,12 @@
         }
       },
       "dispatch": false,
-      "expectedContains": ["PASS", "vectorApproximatelyEquals", "observed"]
+      "expected": {
+        "/type": "simulationAssertion",
+        "/result/status": "PASS",
+        "/result/assertionType": "vectorApproximatelyEquals",
+        "/result/observed/valueType": "vector2"
+      }
     },
     {
       "name": "determinism",
@@ -172,7 +221,12 @@
         "timeoutNanos": 5000000000
       },
       "dispatch": true,
-      "expectedContains": ["EQUAL", "divergence", "whole-program determinism is not proven"]
+      "expected": {
+        "/type": "simulationDeterminism",
+        "/operation/result/status": "EQUAL",
+        "/operation/result/divergence": null,
+        "/operation/result/bounds/completedRepeats": 2
+      }
     }
   ]
 }

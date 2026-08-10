@@ -92,6 +92,12 @@ QueryPage<RuntimeEvent> events = runtime.events(
                 Optional.of(EntityId.of("player")), Optional.empty(), 32));
 ```
 
+Trace only decisions the application explicitly recorded:
+
+```json
+{"name":"runtime_decisions","arguments":{"sessionId":"game","fromFrame":0,"toFrame":60,"decisionType":"target.selected","actor":"player","limit":32}}
+```
+
 The MCP equivalents are closed calls such as:
 
 ```json
@@ -129,6 +135,28 @@ runtime.inputs().inject("set-velocity", "input-1",
         OptionalLong.of(tick), timeout);
 runtime.controls().advanceFixed("advance-1", 60, timeout);
 ```
+
+Checkpoint and recording use the same dispatch/poll contract; these are the exact calls from the
+compiled workflow:
+
+```java
+runtime.checkpoints().create(
+        "start", "Before scheduled movement", "checkpoint-create-1", timeout);
+runtime.recordings().start(new RecordingSpec(
+        "walk-recording", "2.4",
+        List.of(new RecordingCapabilityVersion("fixed-step-simulation", "2.2")),
+        Optional.of("walk"), Optional.of("start"), OptionalLong.of(7),
+        RuntimeValues.object(), false), "recording-start-1", timeout);
+// inject and advance exact ticks
+runtime.recordings().stop("walk-recording", "recording-stop-1", timeout);
+RecordingChunk recording = runtime.recordings().get("walk-recording", 0, 64);
+runtime.checkpoints().restore("start", "checkpoint-restore-1", timeout);
+```
+
+After application dispatch, create/stop/restore report command `SUCCEEDED`; the chunk contains a
+bounded `RecordingInputEntry` and the exact retained `RecordingTickEntry` values. Restore produces
+a new epoch baseline and the example verifies position `(0,0)`. A recording chunk explicitly
+reports truncation/eviction rather than fabricating missing entries.
 
 The scheduled input executes immediately before its selected tick. An acknowledged tick records
 the configured, supplied, and application-reported executed delta plus its resulting runtime
@@ -175,15 +203,22 @@ Do not run a catalog-only MCP JVM beside the game and expect it to inspect proce
 open both runtime and UI-harness stdio servers on the same streams. See the runnable hidden launcher
 in [`SameJvmMcpApplication.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/SameJvmMcpApplication.java).
 
-From the repository, a client configuration can launch the tested same-JVM example under the
-required isolated Linux display:
+Prepare the tested application distribution once (and after dependency/source changes):
+
+```bash
+./gradlew :runtime-examples:installDist
+```
+
+The installed script invokes Java directly, so Gradle cannot prefix stdout with build or JVM
+diagnostics. From the repository, a client configuration can then launch the same-JVM example under
+the required isolated Linux display:
 
 ```json
 {
   "mcpServers": {
     "libgdx-runtime-example": {
       "command": "xvfb-run",
-      "args": ["-a", "./gradlew", "-q", ":runtime-examples:runSameJvmMcpExample"]
+      "args": ["-a", "./runtime-examples/build/install/runtime-mcp-example/bin/runtime-mcp-example"]
     }
   }
 }
@@ -235,6 +270,89 @@ These are failure boundaries, not strings to pattern-match. Inspect the typed re
 | write game logs to stdout while MCP is active | JSON-RPC framing is contaminated and the client receives a parse/transport failure | reserve stdout for MCP and move logs to stderr/file |
 | start MCP in a separate JVM from the live game | only that process's registry/catalog is visible; the game session is absent | embed the server in the game development launcher |
 | report a different executed delta, omit a colliding fixture, use a suspicious unit expectation, or overrun catch-up | `DELTA_MISMATCH`, incomplete contact evidence, assertion `FAIL`, or clamp/drop diagnostics | correct the application testimony/registration/scale or bounded update policy |
+
+### Exact failure calls
+
+Unsupported version and absent-capability calls fail before application dispatch:
+
+```java
+RuntimeResponse.Failure unsupported = (RuntimeResponse.Failure) service.execute(
+        new RuntimeRequest(new ProtocolVersion(2, 5), "bad-version", null,
+                new RuntimeCommand.Sessions()));
+assert unsupported.error().code() == ProtocolErrorCode.UNSUPPORTED_VERSION;
+```
+
+```json
+{"name":"runtime_reset","arguments":{"sessionId":"basic-inspection-example","scenarioId":"walk","resetRequestId":"missing-capability","timeoutNanos":1000000000}}
+```
+
+The second call is `INVALID_QUERY` because that basic runtime registered neither a scenario nor an
+application dispatcher, so the server catalog does not advertise `runtime_reset`.
+
+Queued polling and conflicting correlation are reproduced without a clock or worker:
+
+```java
+ScenarioReset queued = runtime.scenarios().reset("walk", "same-id", timeout);
+assert queued.command().status().orElseThrow().state() == CommandState.QUEUED;
+ScenarioReset same = runtime.scenarios().reset("walk", "same-id", timeout); // same operation
+assertThrows(IllegalArgumentException.class,
+        () -> runtime.controls().control(true, "same-id", timeout));
+applicationQueue.removeFirst().run();
+ScenarioReset completed = runtime.scenarios().reset("walk", "same-id", timeout);
+assert completed.command().status().orElseThrow().state() == CommandState.SUCCEEDED;
+```
+
+Wrong-thread and open-frame lifecycle errors retain their exact local categories:
+
+```java
+Thread.ofPlatform().start(() -> {
+    AgentRuntimeException failure = assertThrows(
+            AgentRuntimeException.class, () -> simulation.updateNanos(0));
+    assert failure.code() == RuntimeErrorCode.WRONG_THREAD;
+}).join();
+runtime.frame(1, () -> {
+    AgentRuntimeException failure = assertThrows(
+            AgentRuntimeException.class, () -> simulation.updateNanos(0));
+    assert failure.code() == RuntimeErrorCode.INVALID_LIFECYCLE;
+});
+```
+
+For a queued command, cancel by its command request ID before dispatch and inspect
+`CommandCancellation`; after dispatch begins, cancellation cannot prove rollback. If status becomes
+`TIMED_OUT` or `FAILED` with `mutationOutcome=UNKNOWN`, reset or restore instead of resubmitting.
+
+```java
+CommandCancellation cancelled = runtime.commands().orElseThrow().cancel("queued-request");
+SimulationTickPage ticks = runtime.simulation().ticks(
+        new SimulationTickQuery(epoch, 1, 60, 60));
+if (!ticks.complete()) {
+    assert assertion.status() == AssertionStatus.INCONCLUSIVE;
+    assert determinism.status() == DeterminismStatus.INCONCLUSIVE;
+}
+```
+
+Use deliberately small application limits to reproduce truncation; inspect the typed loss rather
+than an empty list:
+
+```java
+Box2dContactLimits limits = new Box2dContactLimits(1, 1, 1, 1, 1, 8, 16, 16);
+// A tick with two callbacks retains one record, emits RECORD_LIMIT_REACHED, and complete=false.
+```
+
+Sanitize application exceptions at construction. The callback's raw message and stack trace never
+enter protocol evidence:
+
+```java
+AgentRuntime runtime = AgentRuntime.builder()
+        .applicationFailureSanitizer(context -> Optional.of("reset callback failed"))
+        .build();
+// ApplicationFailureEvidence = category + exceptionClass + correlationId + bounded detail.
+```
+
+For stdio contamination, the minimal incorrect call is `System.out.println("game started")` after
+opening `RuntimeMcpServer`; the next client read is not a JSON-RPC object. Put that message on
+`System.err`. For a separate-JVM failure, start a new `RuntimeRegistry` process and call
+`runtime_sessions`: the live game session is absent because registries are process-local.
 
 ## Use the deterministic Box2D example
 

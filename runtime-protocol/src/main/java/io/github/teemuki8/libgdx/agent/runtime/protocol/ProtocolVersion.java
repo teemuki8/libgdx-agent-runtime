@@ -104,6 +104,7 @@ public record ProtocolVersion(int major, int minor) {
             return false;
         }
         return switch (command) {
+            case RuntimeCommand.InputTimeline _ -> false;
             case RuntimeCommand.ReplayRecordingStart _, RuntimeCommand.Replay _ -> false;
             case RuntimeCommand.SimulationDeterminismCheck _ -> false;
             case RuntimeCommand.SimulationAssert _ -> false;

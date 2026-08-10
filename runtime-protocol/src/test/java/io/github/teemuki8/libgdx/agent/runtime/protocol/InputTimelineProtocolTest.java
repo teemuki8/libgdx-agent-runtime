@@ -138,6 +138,13 @@ final class InputTimelineProtocolTest {
         assertEquals("command requires protocol version 2.6", rejected.error().message());
         assertEquals(0, handlerCalls[0]);
         assertTrue(queue.isEmpty());
+
+        RuntimeResponse.Failure v1Rejected = assertInstanceOf(RuntimeResponse.Failure.class,
+                service.execute(new RuntimeRequest(
+                        ProtocolVersion.V1_13, "legacy-v1", "input-timeline-legacy", command)));
+        assertEquals(ProtocolErrorCode.PROTOCOL_VERSION_UNSUPPORTED, v1Rejected.error().code());
+        assertEquals("command requires protocol version 2.6", v1Rejected.error().message());
+        assertEquals(0, handlerCalls[0]);
     }
 
     @Test

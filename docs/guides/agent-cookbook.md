@@ -21,7 +21,7 @@ non-published `runtime-examples` module as ordinary consumers of the public arti
 | Inspect current registered state | [Instrument and inspect state](#instrument-and-inspect-state) | `runtime_entity` in the tested transcript |
 | Find what changed | [Query changes, events, and decisions](#query-changes-events-and-decisions) | `runtime_changes` closed query |
 | Emit and query a semantic event | [Query changes, events, and decisions](#query-changes-events-and-decisions) | `player.damaged` in `BasicInspectionApplicationTest` |
-| Trace an application decision | [Query changes, events, and decisions](#query-changes-events-and-decisions) | `runtime_decisions` closed query |
+| Trace an application decision | [Decision tracing](decision-tracing.md) | application `beginDecision`/candidate/choose plus `runtime_decisions` |
 | Reset a scenario | [Run controlled scenarios and input](#run-controlled-scenarios-and-input) | `runtime_reset` in the tested transcript |
 | Pause and advance exact ticks | [Run controlled scenarios and input](#run-controlled-scenarios-and-input) | `runtime_control` then `runtime_simulation_advance` |
 | Schedule registered input | [Run controlled scenarios and input](#run-controlled-scenarios-and-input) | `runtime_input` at epoch tick 1 |
@@ -97,6 +97,10 @@ Trace only decisions the application explicitly recorded:
 ```json
 {"name":"runtime_decisions","arguments":{"sessionId":"game","fromFrame":0,"toFrame":60,"decisionType":"target.selected","actor":"player","limit":32}}
 ```
+
+The application-side `beginDecision`, candidate, chosen/rejected, and close sequence plus the exact
+result schema are in [Decision tracing](decision-tracing.md). The runtime never reconstructs a
+decision from the final entity state.
 
 The MCP equivalents are closed calls such as:
 

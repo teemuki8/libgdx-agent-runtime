@@ -27,6 +27,8 @@ import io.github.teemuki8.libgdx.agent.runtime.core.FixedStepUpdateDiagnostic;
 import io.github.teemuki8.libgdx.agent.runtime.core.RecordingInputEntry;
 import io.github.teemuki8.libgdx.agent.runtime.core.RecordingSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.RecordingTickEntry;
+import io.github.teemuki8.libgdx.agent.runtime.core.ReplayCaptureSpec;
+import io.github.teemuki8.libgdx.agent.runtime.core.ReplayPhase;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeErrorCode;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeEvent;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue;
@@ -219,6 +221,119 @@ final class Box2dConformanceFixtureTest {
             var recording = runtime.recordings().get("player-recording", 0, 64);
             assertTrue(recording.entries().stream().anyMatch(RecordingInputEntry.class::isInstance));
             assertTrue(recording.entries().stream().anyMatch(RecordingTickEntry.class::isInstance));
+        }
+    }
+
+    @Test
+    void scenarioReplayExecutesOneHundredTwentyNativeTicksWithExactEvidence() {
+        try (Box2dConformanceSimulation fixture =
+                new Box2dConformanceSimulation(Runnable::run)) {
+            AgentRuntime runtime = fixture.runtime();
+            runtime.controls().control(true, "replay-scenario-pause", Duration.ofSeconds(2));
+            ReplayCaptureSpec spec = replaySpec(
+                    "native-scenario-replay", Optional.of("player-movement"), Optional.empty());
+
+            var started = runtime.replays().start(
+                    spec, "start-native-scenario-replay", Duration.ofSeconds(5));
+            assertEquals(CommandState.SUCCEEDED,
+                    started.command().status().orElseThrow().state());
+            ExecutionEpochId referenceEpoch = started.baselineExecutionEpochId().orElseThrow();
+            schedulePlayerInputAndAdvance(runtime, "scenario", 120);
+            runtime.recordings().stop("native-scenario-replay",
+                    "stop-native-scenario-replay", Duration.ofSeconds(5));
+            var referenceTick = runtime.simulation().ticks(new SimulationTickQuery(
+                    referenceEpoch, 120, 120, 1)).ticks().getFirst();
+            var referenceFrame = runtime.frame(
+                    referenceTick.resultingFrameId().orElseThrow()).orElseThrow();
+            EntitySnapshot referencePlayer = referenceFrame.entity(
+                    EntityId.of("box2d.body.player")).orElseThrow();
+            EntitySnapshot referenceContacts = referenceFrame.entity(
+                    EntityId.of("box2d.contacts.main")).orElseThrow();
+
+            var result = runtime.replays().execute(
+                    "native-scenario-replay", "execute-native-scenario-replay",
+                    Duration.ofSeconds(20)).result().orElseThrow();
+
+            assertEquals(DeterminismStatus.EQUAL, result.status(), result::toString);
+            assertEquals(120, result.bounds().requestedTicks());
+            assertEquals(120, result.bounds().completedTicks());
+            assertEquals(1, result.bounds().recordedInputs());
+            assertTrue(result.divergence().isEmpty());
+            assertReplayFramesMatch(runtime, referencePlayer, referenceContacts);
+        }
+    }
+
+    @Test
+    void checkpointReplayExecutesTheSameActualNativePath() {
+        try (Box2dConformanceSimulation fixture =
+                new Box2dConformanceSimulation(Runnable::run)) {
+            AgentRuntime runtime = fixture.runtime();
+            runtime.scenarios().reset("player-movement",
+                    "checkpoint-replay-reset", Duration.ofSeconds(2));
+            runtime.controls().control(true, "checkpoint-replay-pause", Duration.ofSeconds(2));
+            runtime.checkpoints().create("native-player-origin", "native replay origin",
+                    "create-native-player-origin", Duration.ofSeconds(2));
+            ReplayCaptureSpec spec = replaySpec(
+                    "native-checkpoint-replay", Optional.empty(),
+                    Optional.of("native-player-origin"));
+
+            var started = runtime.replays().start(
+                    spec, "start-native-checkpoint-replay", Duration.ofSeconds(5));
+            assertEquals(CommandState.SUCCEEDED,
+                    started.command().status().orElseThrow().state());
+            schedulePlayerInputAndAdvance(runtime, "checkpoint", 120);
+            runtime.recordings().stop("native-checkpoint-replay",
+                    "stop-native-checkpoint-replay", Duration.ofSeconds(5));
+
+            var result = runtime.replays().execute(
+                    "native-checkpoint-replay", "execute-native-checkpoint-replay",
+                    Duration.ofSeconds(20)).result().orElseThrow();
+
+            assertEquals(DeterminismStatus.EQUAL, result.status(), result::toString);
+            assertEquals(120, result.bounds().completedTicks());
+            assertEquals(RuntimeValues.integer(120), runtime.entity(
+                    EntityId.of("fixture.post-physics")).orElseThrow()
+                    .property("completedTicks").orElseThrow());
+        }
+    }
+
+    @Test
+    void alteredReplayInputStopsAtTheFirstActualNativeDifference() {
+        try (Box2dConformanceSimulation fixture = new Box2dConformanceSimulation(
+                Runnable::run, Box2dConformanceSimulation.FIXED_STEP_NANOS,
+                null, Box2dAdapterLimits.developmentDefaults(),
+                Box2dContactLimits.developmentDefaults(), true)) {
+            AgentRuntime runtime = fixture.runtime();
+            runtime.controls().control(true, "divergent-replay-pause", Duration.ofSeconds(2));
+            runtime.replays().start(replaySpec(
+                            "native-divergent-replay", Optional.of("player-movement"),
+                            Optional.empty()),
+                    "start-native-divergent-replay", Duration.ofSeconds(5));
+            schedulePlayerInputAndAdvance(runtime, "divergent", 120);
+            runtime.recordings().stop("native-divergent-replay",
+                    "stop-native-divergent-replay", Duration.ofSeconds(5));
+
+            var result = runtime.replays().execute(
+                    "native-divergent-replay", "execute-native-divergent-replay",
+                    Duration.ofSeconds(20)).result().orElseThrow();
+
+            assertEquals(DeterminismStatus.DIVERGED, result.status());
+            var divergence = result.divergence().orElseThrow();
+            assertEquals(ReplayPhase.SIMULATION_TICK, divergence.phase());
+            assertEquals(1, divergence.epochTick().orElseThrow());
+            assertTrue(divergence.referenceSimulationTickId().isPresent());
+            assertTrue(divergence.replaySimulationTickId().isPresent());
+            assertFalse(divergence.referenceExecutionEpochId()
+                    .equals(divergence.replayExecutionEpochId()));
+            assertFalse(divergence.referenceFrameId().equals(divergence.replayFrameId()));
+            assertTrue(divergence.difference().fact().orElseThrow()
+                    .contains("linearVelocity"));
+            assertEquals(120, result.bounds().requestedTicks());
+            assertEquals(0, result.bounds().completedTicks());
+            assertEquals(1, runtime.simulation().state().completedEpochTicks());
+            assertTrue(runtime.simulation().ticks(new SimulationTickQuery(
+                    runtime.currentEpoch(), 2, 2, 1)).ticks().isEmpty());
+            assertFalse(result.message().contains("caused"));
         }
     }
 
@@ -525,5 +640,59 @@ final class Box2dConformanceFixtureTest {
         return assertInstanceOf(RuntimeValue.Vector2Value.class, runtime.entity(
                 EntityId.of("box2d.body." + bodyId)).orElseThrow()
                 .property("position").orElseThrow());
+    }
+
+    private static ReplayCaptureSpec replaySpec(String recordingId,
+            Optional<String> scenarioId, Optional<String> checkpointId) {
+        var settings = new Box2dDeterminism.WorldSettings(
+                Box2dConformanceSimulation.FIXED_STEP_NANOS,
+                new Box2dVector(0, 0), 8, 3, true, true, true);
+        var template = Box2dDeterminism.builder(
+                        "main", settings, "player-movement", 7,
+                        RuntimeValues.object(), 2, 120)
+                .body("player", "position", "linearVelocity")
+                .activeContacts()
+                .build();
+        RecordingSpec recording = new RecordingSpec(recordingId, "2.5", List.of(),
+                scenarioId, checkpointId, OptionalLong.of(7), RuntimeValues.object(), true);
+        return new ReplayCaptureSpec(recording, template.execution().profile(),
+                template.configurationRequirements(), template.evidenceRequirements(),
+                template.eventTypes());
+    }
+
+    private static void schedulePlayerInputAndAdvance(
+            AgentRuntime runtime, String requestPrefix, int ticks) {
+        long targetTick = runtime.controls().currentTick() + 1;
+        runtime.inputs().inject("move-player", requestPrefix + "-replay-input",
+                RuntimeValues.object(RuntimeValues.field(
+                        "velocityX", RuntimeValues.decimal("4"))),
+                OptionalLong.of(targetTick), Duration.ofSeconds(2));
+        runtime.controls().advanceFixed(
+                requestPrefix + "-replay-advance", ticks, Duration.ofSeconds(10));
+    }
+
+    private static void assertReplayFramesMatch(AgentRuntime runtime,
+            EntitySnapshot referencePlayer, EntitySnapshot referenceContacts) {
+        ExecutionEpochId replayEpoch = runtime.currentEpoch();
+        var replayTicks = runtime.simulation().ticks(new SimulationTickQuery(
+                replayEpoch, 1, 120, 120)).ticks();
+        assertEquals(120, replayTicks.size());
+        for (int index = 0; index < replayTicks.size(); index++) {
+            assertEquals(index + 1, replayTicks.get(index).epochTick());
+            assertTrue(replayTicks.get(index).resultingFrameId().isPresent());
+        }
+        var replayFrame = runtime.frame(replayTicks.getLast()
+                .resultingFrameId().orElseThrow()).orElseThrow();
+        EntitySnapshot replayPlayer = replayFrame.entity(
+                EntityId.of("box2d.body.player")).orElseThrow();
+        EntitySnapshot replayContacts = replayFrame.entity(
+                EntityId.of("box2d.contacts.main")).orElseThrow();
+        assertEquals(referencePlayer.property("position"), replayPlayer.property("position"));
+        assertEquals(referencePlayer.property("linearVelocity"),
+                replayPlayer.property("linearVelocity"));
+        assertEquals(referenceContacts.property("activeContacts"),
+                replayContacts.property("activeContacts"));
+        assertFalse(list(referenceContacts.property("activeContacts").orElseThrow())
+                .values().isEmpty());
     }
 }

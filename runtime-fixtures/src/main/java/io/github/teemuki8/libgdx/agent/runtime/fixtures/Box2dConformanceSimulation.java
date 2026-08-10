@@ -194,7 +194,11 @@ public final class Box2dConformanceSimulation implements AutoCloseable {
     }
 
     private void reset(Scenario scenario) {
-        NativeScene replacement = createScene(scenario);
+        replaceScene(createScene(scenario));
+        postPhysicsTicks = 0;
+    }
+
+    private void replaceScene(NativeScene replacement) {
         World previous = scene.world();
         jointRegistrations.values().forEach(Box2dRegistration::close);
         jointRegistrations.clear();
@@ -207,7 +211,6 @@ public final class Box2dConformanceSimulation implements AutoCloseable {
         replacement.world().setContactListener(contacts.listener());
         scene = replacement;
         sceneGeneration++;
-        postPhysicsTicks = 0;
         runtime.fixedStepSimulation().clearAccumulator();
         previous.dispose();
     }
@@ -282,7 +285,7 @@ public final class Box2dConformanceSimulation implements AutoCloseable {
         LinkedHashMap<String, Joint> joints = new LinkedHashMap<>();
         joints.put("static-link", world.createJoint(jointDefinition));
 
-        return new NativeScene(world, Map.copyOf(bodies), Map.copyOf(fixtures),
+        return new NativeScene(scenario, world, Map.copyOf(bodies), Map.copyOf(fixtures),
                 Map.copyOf(joints));
     }
 
@@ -337,10 +340,11 @@ public final class Box2dConformanceSimulation implements AutoCloseable {
                 body.isActive(), body.getPosition().x, body.getPosition().y,
                 body.getAngle(), body.getLinearVelocity().x, body.getLinearVelocity().y,
                 body.getAngularVelocity(), body.isAwake())));
-        return new SceneCheckpoint(Map.copyOf(bodies), postPhysicsTicks);
+        return new SceneCheckpoint(scene.scenario(), Map.copyOf(bodies), postPhysicsTicks);
     }
 
     private void restoreCheckpoint(SceneCheckpoint checkpoint) {
+        replaceScene(createScene(checkpoint.scenario()));
         checkpoint.bodies().forEach((id, state) -> {
             Body body = scene.bodies().get(id);
             body.setActive(state.active());
@@ -350,7 +354,6 @@ public final class Box2dConformanceSimulation implements AutoCloseable {
             body.setAwake(state.awake());
         });
         postPhysicsTicks = checkpoint.postPhysicsTicks();
-        runtime.fixedStepSimulation().clearAccumulator();
     }
 
     private enum Scenario {
@@ -358,11 +361,12 @@ public final class Box2dConformanceSimulation implements AutoCloseable {
     }
 
     private record NativeScene(
-            World world, Map<String, Body> bodies, Map<String, Fixture> fixtures,
+            Scenario scenario, World world, Map<String, Body> bodies, Map<String, Fixture> fixtures,
             Map<String, Joint> joints) {}
 
     private record SceneCheckpoint(
-            Map<String, BodyState> bodies, long postPhysicsTicks) implements CheckpointHandle {}
+            Scenario scenario, Map<String, BodyState> bodies,
+            long postPhysicsTicks) implements CheckpointHandle {}
 
     private record BodyState(boolean active, float x, float y, float angle,
             float velocityX, float velocityY, float angularVelocity, boolean awake) {}

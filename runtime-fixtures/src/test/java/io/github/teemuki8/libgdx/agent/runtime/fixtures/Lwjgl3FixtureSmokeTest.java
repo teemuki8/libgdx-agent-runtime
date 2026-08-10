@@ -49,6 +49,8 @@ final class Lwjgl3FixtureSmokeTest {
         assertTrue(facts.contains("position=PASS"));
         assertTrue(facts.contains("contact=PASS"));
         assertTrue(facts.contains("determinism=EQUAL"));
+        assertTrue(facts.contains("replay=EQUAL"));
+        assertTrue(facts.contains("replayTicks=60"));
         assertTrue(facts.contains("frameCorrelated=true"));
         assertTrue(facts.contains("dispatchThreadCorrect=true"));
         assertFalse(facts.contains("Exception"));
@@ -179,6 +181,59 @@ final class Lwjgl3FixtureSmokeTest {
                                 + "\"parameters\":{\"state\":\"ALERT\"},"
                                 + "\"timeoutNanos\":1000000000}}}",
                         200);
+                awaitSucceeded(requests, responses,
+                        "{\"jsonrpc\":\"2.0\",\"id\":%d,\"method\":\"tools/call\","
+                                + "\"params\":{\"name\":\"runtime_replay_recording_start\","
+                                + "\"arguments\":{\"sessionId\":\"deterministic-fixture\","
+                                + "\"recordingId\":\"native-stdio-replay\","
+                                + "\"replayRequestId\":\"native-stdio-replay-start\","
+                                + "\"originKind\":\"scenario\","
+                                + "\"originId\":\"deterministic-fixture\","
+                                + "\"randomSeed\":7,\"configuration\":[],"
+                                + "\"profile\":{\"comparisonScope\":{"
+                                + "\"entityIds\":[\"player-1\"],"
+                                + "\"properties\":[\"state\"],"
+                                + "\"excludedProperties\":[],"
+                                + "\"includeEvents\":false,\"includeDecisions\":false},"
+                                + "\"includeUiCorrelations\":false},"
+                                + "\"configurationRequirements\":[],"
+                                + "\"evidenceRequirements\":[],\"eventTypes\":[],"
+                                + "\"timeoutNanos\":10000000000}}}",
+                        300);
+                awaitSucceeded(requests, responses,
+                        "{\"jsonrpc\":\"2.0\",\"id\":%d,\"method\":\"tools/call\","
+                                + "\"params\":{\"name\":\"runtime_input\",\"arguments\":{"
+                                + "\"sessionId\":\"deterministic-fixture\","
+                                + "\"input\":\"set-player-state\","
+                                + "\"inputRequestId\":\"native-stdio-replay-input\","
+                                + "\"parameters\":{\"state\":\"ALERT\"},"
+                                + "\"timeoutNanos\":1000000000}}}",
+                        400);
+                awaitSucceeded(requests, responses,
+                        "{\"jsonrpc\":\"2.0\",\"id\":%d,\"method\":\"tools/call\","
+                                + "\"params\":{\"name\":\"runtime_advance\","
+                                + "\"arguments\":{\"sessionId\":\"deterministic-fixture\","
+                                + "\"controlRequestId\":\"native-stdio-replay-advance\","
+                                + "\"ticks\":2,\"deltaNanos\":16000000,"
+                                + "\"timeoutNanos\":10000000000}}}",
+                        500);
+                awaitSucceeded(requests, responses,
+                        "{\"jsonrpc\":\"2.0\",\"id\":%d,\"method\":\"tools/call\","
+                                + "\"params\":{\"name\":\"runtime_recording_stop\","
+                                + "\"arguments\":{\"sessionId\":\"deterministic-fixture\","
+                                + "\"recordingId\":\"native-stdio-replay\","
+                                + "\"recordingRequestId\":\"native-stdio-replay-stop\","
+                                + "\"timeoutNanos\":10000000000}}}",
+                        600);
+                String replayed = awaitSucceeded(requests, responses,
+                        "{\"jsonrpc\":\"2.0\",\"id\":%d,\"method\":\"tools/call\","
+                                + "\"params\":{\"name\":\"runtime_replay\",\"arguments\":{"
+                                + "\"sessionId\":\"deterministic-fixture\","
+                                + "\"recordingId\":\"native-stdio-replay\","
+                                + "\"replayRequestId\":\"native-stdio-replay-execute\","
+                                + "\"timeoutNanos\":10000000000}}}",
+                        700);
+                assertTrue(replayed.contains("EQUAL"), replayed);
             }
             boolean exited =
                     process.waitFor(Duration.ofSeconds(60).toMillis(), TimeUnit.MILLISECONDS);
@@ -194,7 +249,7 @@ final class Lwjgl3FixtureSmokeTest {
         }
     }
 
-    private static void awaitSucceeded(
+    private static String awaitSucceeded(
             BufferedWriter requests,
             BufferedReader responses,
             String requestTemplate,
@@ -203,7 +258,7 @@ final class Lwjgl3FixtureSmokeTest {
         for (int id = firstId; System.nanoTime() < deadline; id++) {
             String response = exchange(requests, responses, requestTemplate.formatted(id));
             if (response.contains("SUCCEEDED")) {
-                return;
+                return response;
             }
             assertTrue(response.contains("QUEUED") || response.contains("EXECUTING"), response);
         }

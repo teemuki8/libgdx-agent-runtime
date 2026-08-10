@@ -409,7 +409,7 @@ record Replay(
 **Files:**
 - Modify: `runtime-fixtures/src/main/java/io/github/teemuki8/libgdx/agent/runtime/fixtures/Box2dConformanceSimulation.java`
 - Modify: `runtime-fixtures/src/main/java/io/github/teemuki8/libgdx/agent/runtime/fixtures/Box2dConformanceApplication.java`
-- Modify: `runtime-fixtures/src/main/java/io/github/teemuki8/libgdx/agent/runtime/fixtures/McpFixtureApplication.java`
+- Inspect: `runtime-fixtures/src/main/java/io/github/teemuki8/libgdx/agent/runtime/fixtures/McpFixtureApplication.java`
 - Modify: `runtime-fixtures/src/test/java/io/github/teemuki8/libgdx/agent/runtime/fixtures/Box2dConformanceFixtureTest.java`
 - Modify: `runtime-fixtures/src/test/java/io/github/teemuki8/libgdx/agent/runtime/fixtures/FixtureProtocolAndMcpTest.java`
 - Modify: `runtime-fixtures/src/test/java/io/github/teemuki8/libgdx/agent/runtime/fixtures/Lwjgl3FixtureSmokeTest.java`
@@ -420,25 +420,25 @@ record Replay(
 - Add one fixture-owned test seam that changes how an already registered semantic input is applied;
   it may be enabled only by the test/application and must not enter runtime production code.
 
-- [ ] Add Java fixture tests that capture and replay a scenario-origin trajectory through at least
+- [x] Add Java fixture tests that capture and replay a scenario-origin trajectory through at least
   120 actual Box2D ticks with an input at a known tick. Assert `EQUAL`, exact tick/frame/epoch correlation,
   and identical structured body/contact evidence.
-- [ ] Add a checkpoint-origin Java fixture test with the same real native path and exact equality.
-- [ ] Enable the fixture's input-effect seam only for replay and assert first divergence at the known
+- [x] Add a checkpoint-origin Java fixture test with the same real native path and exact equality.
+- [x] Enable the fixture's input-effect seam only for replay and assert first divergence at the known
   input tick, all prior ticks completed equal, later ticks unexecuted, and the difference points to
   observable evidence rather than a claimed cause.
-- [ ] Add protocol and MCP fixture tests for replay-ready start, stopped recording, replay, and exact
+- [x] Add protocol and MCP fixture tests for replay-ready start, stopped recording, replay, and exact
   structured terminal result through the real simulation.
-- [ ] Extend the hidden LWJGL3 smoke application to execute the equal replay path on the render thread
+- [x] Extend the hidden LWJGL3 smoke application to execute the equal replay path on the render thread
   and fail its existing completion signal on any non-equal result or native/application exception.
-- [ ] Run the focused fixture tests under Xvfb and initially observe missing fixture wiring:
+- [x] Run the focused fixture tests under Xvfb and initially observe missing fixture wiring:
   `xvfb-run -a ./gradlew :runtime-fixtures:test --tests '*Box2dConformanceFixtureTest' --tests
   '*FixtureProtocolAndMcpTest' --tests '*Lwjgl3FixtureSmokeTest' --warning-mode=fail`.
-- [ ] Wire the minimum fixture-owned reset/checkpoint/input behavior. Preserve application ownership
+- [x] Wire the minimum fixture-owned reset/checkpoint/input behavior. Preserve application ownership
   of `World.step`, listener installation, render loop, assets, and disposal; runtime code must not
   access native objects directly.
-- [ ] Run `.agents/skills/libgdx-agent-runtime-dev/scripts/verify.sh fixture` green under Xvfb.
-- [ ] Commit `test: qualify replay with real Box2D`.
+- [x] Run `.agents/skills/libgdx-agent-runtime-dev/scripts/verify.sh fixture` green under Xvfb.
+- [x] Commit `test: qualify replay with real Box2D`.
 
 ### Task 9: Tested example, cookbook, ADR, and compatibility documentation
 

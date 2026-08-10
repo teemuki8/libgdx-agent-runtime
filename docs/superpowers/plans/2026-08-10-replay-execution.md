@@ -368,8 +368,10 @@ record Replay(
 ### Task 7: Local stdio MCP replay tools
 
 **Files:**
-- Modify: `runtime-mcp/src/main/java/io/github/teemuki8/libgdx/agent/runtime/mcp/RuntimeMcpServer.java`
-- Modify: `runtime-mcp/src/main/java/io/github/teemuki8/libgdx/agent/runtime/mcp/ConstrainedMcpJsonMapper.java`
+- Modify: `runtime-mcp/src/main/java/io/github/teemuki8/libgdx/agent/runtime/mcp/RuntimeToolCatalog.java`
+- Modify: `runtime-mcp/src/main/java/io/github/teemuki8/libgdx/agent/runtime/mcp/RuntimeToolHandler.java`
+- Inspect: `runtime-mcp/src/main/java/io/github/teemuki8/libgdx/agent/runtime/mcp/RuntimeMcpServer.java`
+- Inspect: `runtime-mcp/src/main/java/io/github/teemuki8/libgdx/agent/runtime/mcp/ConstrainedMcpJsonMapper.java`
 - Create: `runtime-mcp/src/test/java/io/github/teemuki8/libgdx/agent/runtime/mcp/ReplayMcpTest.java`
 - Test: `runtime-mcp/src/test/java/io/github/teemuki8/libgdx/agent/runtime/mcp/RuntimeMcpTest.java`
 
@@ -379,26 +381,28 @@ record Replay(
   `configuration`, `profile`, configuration/evidence requirements, event types, and timeout.
 - `runtime_replay`: closed input fields `sessionId`, `recordingId`, `replayRequestId`, and timeout.
 
-- [ ] Add tool-list tests proving the two tools appear only with capability `replay-execution` in a
-  2.5 session and do not appear in 2.4.
-- [ ] Add exact invocation/result tests for both origin kinds and all three terminal statuses. Assert
+- [x] Add tool-list tests proving the two tools enter the static stdio catalog only when a published
+  implementation can provide `replay-execution`. Keep the tools mapped to protocol 2.5; protocol
+  tests retain explicit 2.4 rejection coverage.
+- [x] Add exact invocation/result tests for both origin kinds and all three terminal statuses. Assert
   the MCP schema has `additionalProperties:false` at every object layer, required fields are exact,
   bounds are enforced before dispatch, and unknown fields/origin kinds/IDs/profiles are rejected.
-- [ ] Add application-failure and pending-command tests. Assert results use structured content and
+- [x] Add application-failure and pending-command tests. Assert results use structured content and
   bounded diagnostics without serialized Java exception/stack content. Poll the existing command
   lookup path and assert it reaches the same retained terminal operation without re-execution.
-- [ ] Add unavailable-session tests for missing replay prerequisites and for a 2.5 server whose
+- [x] Add unavailable-session tests for missing replay prerequisites and for a 2.5 server whose
   selected session omitted `replay-execution`; assert `CAPABILITY_UNAVAILABLE` and no core dispatch.
-- [ ] Run `./gradlew :runtime-mcp:test --tests '*ReplayMcpTest' --warning-mode=fail` and observe the
+- [x] Run `./gradlew :runtime-mcp:test --tests '*ReplayMcpTest' --warning-mode=fail` and observe the
   missing-tool failure.
-- [ ] Register the two tools through the existing local same-JVM stdio server. Map `originKind` plus
+- [x] Register the two tools through the existing local same-JVM stdio server. Map `originKind` plus
   `originId` to the protocol command's exclusive scenario/checkpoint fields. Do not add a listener,
   transport, background thread, or promise of cross-JVM live inspection.
-- [ ] Extend constrained JSON mapping only for the new closed replay records and preserve current
-  numeric/string/depth/collection bounds.
-- [ ] Run replay and full MCP tests green, then
+- [x] Verify the existing constrained structured-content mapping already covers the new closed replay
+  records, so no special-case mapper extension is needed; preserve current numeric, string, depth,
+  collection, request-byte, and response-byte bounds.
+- [x] Run replay and full MCP tests green, then
   `.agents/skills/libgdx-agent-runtime-dev/scripts/verify.sh mcp`.
-- [ ] Commit `feat: add bounded replay MCP tools`.
+- [x] Commit `feat: add bounded replay MCP tools`.
 
 ### Task 8: Real Box2D and hidden LWJGL3 replay qualification
 

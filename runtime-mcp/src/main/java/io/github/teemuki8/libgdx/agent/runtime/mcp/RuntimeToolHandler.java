@@ -241,6 +241,11 @@ public final class RuntimeToolHandler implements AutoCloseable {
                             string(arguments, "determinismRequestId"),
                             simulationDeterminism(arguments),
                             number(arguments, "timeoutNanos", -1));
+            case "runtime_replay_recording_start" -> replayRecordingStart(arguments);
+            case "runtime_replay" -> new RuntimeCommand.Replay(
+                    string(arguments, "recordingId"),
+                    string(arguments, "replayRequestId"),
+                    number(arguments, "timeoutNanos", -1));
             case "runtime_simulation" -> new RuntimeCommand.Simulation();
             case "runtime_simulation_ticks" -> new RuntimeCommand.SimulationTicks(
                     number(arguments, "executionEpochId", -1),
@@ -271,6 +276,7 @@ public final class RuntimeToolHandler implements AutoCloseable {
                     "runtime_simulation_advance" -> ProtocolVersion.V2_2;
             case "runtime_simulation_assert" -> ProtocolVersion.V2_3;
             case "runtime_simulation_determinism_check" -> ProtocolVersion.V2_4;
+            case "runtime_replay_recording_start", "runtime_replay" -> ProtocolVersion.V2_5;
             default -> ProtocolVersion.V2;
         };
         return new RuntimeRequest(version,
@@ -703,6 +709,26 @@ public final class RuntimeToolHandler implements AutoCloseable {
                 simulationConfigurationRequirements(values.get("configurationRequirements")),
                 simulationEvidenceRequirements(values.get("evidenceRequirements")),
                 strings(values.get("eventTypes")).stream().map(EventType::of).toList());
+    }
+
+    private static RuntimeCommand.ReplayRecordingStart replayRecordingStart(
+            Map<String, Object> values) {
+        String originKind = string(values, "originKind");
+        String originId = string(values, "originId");
+        if (!"scenario".equals(originKind) && !"checkpoint".equals(originKind)) {
+            throw new IllegalArgumentException("unknown replay origin kind");
+        }
+        return new RuntimeCommand.ReplayRecordingStart(
+                string(values, "recordingId"), string(values, "replayRequestId"),
+                "scenario".equals(originKind) ? originId : null,
+                "checkpoint".equals(originKind) ? originId : null,
+                optionalLong(values, "randomSeed"),
+                recordingConfiguration(values.get("configuration")),
+                determinismProfile(values.get("profile")),
+                simulationConfigurationRequirements(values.get("configurationRequirements")),
+                simulationEvidenceRequirements(values.get("evidenceRequirements")),
+                strings(values.get("eventTypes")).stream().map(EventType::of).toList(),
+                number(values, "timeoutNanos", -1));
     }
 
     private List<SimulationDeterminismInput> simulationDeterminismInputs(Object raw) {

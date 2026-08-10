@@ -30,6 +30,7 @@ import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeLimits;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import io.github.teemuki8.libgdx.agent.runtime.core.SessionId;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationControllerSpec;
+import io.github.teemuki8.libgdx.agent.runtime.core.SimulationTimelineSpec;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.ProtocolJson;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.PublishedRuntime;
 import io.github.teemuki8.libgdx.agent.runtime.protocol.RuntimeProtocolService;
@@ -71,6 +72,36 @@ final class RuntimeMcpTest {
         McpSchema.Tool capabilities = catalog.tool("runtime_capabilities");
         Map<?, ?> properties = (Map<?, ?>) capabilities.inputSchema().get("properties");
         assertTrue(properties.containsKey("protocolMinor"));
+    }
+
+    @Test
+    @Timeout(30)
+    void stdioListsReplayToolsForACapablePublishedRuntime() throws Exception {
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("stdio-replay"))
+                .commandDispatcher(command -> {}).build();
+        runtime.simulation().register(SimulationTimelineSpec.fixedStep(16));
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {}).resume(() -> {}).acknowledgedTick(delta -> delta).build());
+        runtime.scenarios().register("origin", context -> {});
+        runtime.start();
+        RuntimeRegistry registry = new RuntimeRegistry();
+        try (PublishedRuntime publication = registry.publish(runtime)) {
+            assertEquals(runtime.sessionId(), publication.sessionId());
+            byte[] input = concat(
+                    initializeFrame(18),
+                    initializedNotification(),
+                    ("{\"jsonrpc\":\"2.0\",\"id\":19,\"method\":\"tools/list\","
+                            + "\"params\":{}}\n").getBytes(StandardCharsets.UTF_8));
+            StdioOutcome outcome = runServer(new RuntimeProtocolService(registry), input);
+            assertNull(outcome.failure());
+            Map<String, Object> response = withId(responses(outcome), 19);
+            Map<?, ?> result = assertInstanceOf(Map.class, response.get("result"));
+            List<?> tools = assertInstanceOf(List.class, result.get("tools"));
+            List<?> names = tools.stream().map(tool -> ((Map<?, ?>) tool).get("name")).toList();
+            assertTrue(names.containsAll(List.of(
+                    "runtime_replay_recording_start", "runtime_replay")));
+        }
     }
 
     @Test

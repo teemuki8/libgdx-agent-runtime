@@ -11,6 +11,7 @@ import io.github.teemuki8.libgdx.agent.runtime.core.ActionParameter;
 import io.github.teemuki8.libgdx.agent.runtime.core.ActionParameterType;
 import io.github.teemuki8.libgdx.agent.runtime.core.AssertionScope;
 import io.github.teemuki8.libgdx.agent.runtime.core.InputDescriptor;
+import io.github.teemuki8.libgdx.agent.runtime.core.ReplayCaptureSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertion;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertionScope;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertionSpec;
@@ -275,6 +276,20 @@ public final class RuntimeToolCatalog {
             selected.add(tool("runtime_simulation_determinism_check",
                     "Repeat exact simulation ticks and report the first selected divergence",
                     simulationDeterminismInput()));
+        }
+        if (supported.contains("runtime_replay_recording_start")) {
+            selected.add(tool("runtime_replay_recording_start",
+                    "Start or poll one bounded replay-ready recording",
+                    replayRecordingStartInput()));
+        }
+        if (supported.contains("runtime_replay")) {
+            selected.add(tool("runtime_replay",
+                    "Execute or poll one retained replay-ready recording",
+                    sessionInput(Map.of(
+                            "recordingId", string(),
+                            "replayRequestId", string(),
+                            "timeoutNanos", integer(1, Long.MAX_VALUE)),
+                            List.of("recordingId", "replayRequestId", "timeoutNanos"))));
         }
         if (supported.contains("runtime_simulation")) {
             selected.add(tool("runtime_simulation",
@@ -586,6 +601,49 @@ public final class RuntimeToolCatalog {
                 "timeoutNanos")));
         schema.put("$defs", Map.of("simulationDeterminismValue",
                 simulationValueSchema("simulationDeterminismValue")));
+        return Map.copyOf(schema);
+    }
+
+    private static Map<String, Object> replayRecordingStartInput() {
+        Map<String, Object> configurationEntry = object(
+                Map.of("name", string(), "value", naturalValue()),
+                List.of("name", "value"));
+        Map<String, Object> profile = object(Map.of(
+                "comparisonScope", comparisonScope(),
+                "includeUiCorrelations", bool()),
+                List.of("comparisonScope", "includeUiCorrelations"));
+        Map<String, Object> configurationRequirement = object(Map.of(
+                "entityId", string(), "property", string(), "expected",
+                simulationValueSchema("replayValue")),
+                List.of("entityId", "property", "expected"));
+        Map<String, Object> evidenceRequirement = object(Map.of(
+                "entityId", string(), "property", string()),
+                List.of("entityId", "property"));
+        LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
+        properties.put("recordingId", string());
+        properties.put("replayRequestId", string());
+        properties.put("originKind", Map.of(
+                "type", "string", "enum", List.of("scenario", "checkpoint")));
+        properties.put("originId", string());
+        properties.put("randomSeed", integer(Long.MIN_VALUE, Long.MAX_VALUE));
+        properties.put("configuration", Map.of(
+                "type", "array", "items", configurationEntry, "maxItems", 100));
+        properties.put("profile", profile);
+        properties.put("configurationRequirements", Map.of(
+                "type", "array", "items", configurationRequirement,
+                "maxItems", ReplayCaptureSpec.MAX_CONFIGURATION_REQUIREMENTS));
+        properties.put("evidenceRequirements", Map.of(
+                "type", "array", "items", evidenceRequirement,
+                "maxItems", ReplayCaptureSpec.MAX_EVIDENCE_REQUIREMENTS));
+        properties.put("eventTypes", Map.of(
+                "type", "array", "items", string(),
+                "maxItems", ReplayCaptureSpec.MAX_EVENT_TYPES));
+        properties.put("timeoutNanos", integer(1, Long.MAX_VALUE));
+        LinkedHashMap<String, Object> schema = new LinkedHashMap<>(sessionInput(properties, List.of(
+                "recordingId", "replayRequestId", "originKind", "originId",
+                "configuration", "profile", "configurationRequirements",
+                "evidenceRequirements", "eventTypes", "timeoutNanos")));
+        schema.put("$defs", Map.of("replayValue", simulationValueSchema("replayValue")));
         return Map.copyOf(schema);
     }
 

@@ -1,5 +1,10 @@
 # Agent tools
 
+For a live, replayed sequence rather than isolated request fragments, see the tested
+[`controlled-workflow.json`](../../runtime-examples/src/main/resources/transcripts/controlled-workflow.json)
+transcript and [same-JVM MCP cookbook recipe](agent-cookbook.md#host-same-jvm-stdio-mcp). It covers
+discovery through exact input/tick control, inspection, assertions, and selected determinism.
+
 All tools use frozen protocol 1.0 by default, deterministic ascending frame/sequence ordering,
 strict closed input schemas (`additionalProperties: false`), and a maximum requested `limit` of
 1000. Query defaults are `fromFrame: 0`, `toFrame: 9223372036854775807`, and `limit: 100`.

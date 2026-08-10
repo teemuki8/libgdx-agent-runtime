@@ -1,5 +1,11 @@
 # Getting started
 
+For task-oriented integrations, start with the
+[agent cookbook task index](agent-cookbook.md#task-index). Its linked `runtime-examples` sources
+compile and run as ordinary consumers: basic state inspection, a complete controlled workflow,
+same-JVM stdio MCP, and deterministic actual-native Box2D. The module is repository scaffolding,
+not a published dependency.
+
 ## Linux development prerequisite
 
 Install `xvfb-run` before running the repository's native fixture or bundled headless MCP launcher:

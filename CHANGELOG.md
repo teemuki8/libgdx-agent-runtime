@@ -6,6 +6,12 @@ All notable changes follow Keep a Changelog structure.
 
 ### Added
 
+- A non-published `runtime-examples` module now provides a tested agent cookbook, runnable hidden
+  LWJGL3 state inspection, a complete application-owned controlled workflow, a same-JVM stdio MCP
+  launcher with replayable closed transcript, and an actual-native deterministic Box2D consumer
+  example. Documentation drift tests keep example paths, tools, versions, and the mandatory
+  same-PR cookbook-update policy aligned (#73).
+
 - An unpublished actual-native LWJGL3 + Box2D conformance fixture proves ball drop, dynamic
   collision, scheduled player movement, fixed-step render integration, exact controlled ticks,
   structured inspection/contacts/assertions, protocol and MCP access, deterministic selected-

@@ -31,8 +31,10 @@ full_gate() {
         fi
         exec xvfb-run -a ./gradlew clean check javadoc --warning-mode=fail
     fi
-    ./gradlew clean check javadoc -x :runtime-fixtures:test --warning-mode=fail
-    exec ./gradlew :runtime-fixtures:testClasses --warning-mode=fail
+    ./gradlew clean check javadoc \
+        -x :runtime-fixtures:test -x :runtime-examples:test --warning-mode=fail
+    exec ./gradlew :runtime-fixtures:testClasses :runtime-examples:testClasses \
+        --warning-mode=fail
 }
 
 case "$gate" in

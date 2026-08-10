@@ -1,0 +1,232 @@
+{
+  "steps": [
+    {
+      "name": "sessions",
+      "tool": "runtime_sessions",
+      "arguments": {},
+      "dispatch": false,
+      "expected": {
+        "/type": "sessions",
+        "/sessions/0/sessionId": "controlled-workflow-example",
+        "/sessions/0/status": "RUNNING"
+      }
+    },
+    {
+      "name": "capabilities",
+      "tool": "runtime_capabilities",
+      "arguments": {
+        "sessionId": "controlled-workflow-example",
+        "protocolMinor": 13
+      },
+      "dispatch": false,
+      "expected": {
+        "/type": "capabilities",
+        "/protocolVersion/major": 1,
+        "/protocolVersion/minor": 13,
+        "/runtimeStatus": "RUNNING"
+      }
+    },
+    {
+      "name": "scenarios",
+      "tool": "runtime_scenarios",
+      "arguments": {"sessionId": "controlled-workflow-example"},
+      "dispatch": false,
+      "expected": {
+        "/type": "scenarios",
+        "/scenarios/0/id": "walk"
+      }
+    },
+    {
+      "name": "reset",
+      "tool": "runtime_reset",
+      "arguments": {
+        "sessionId": "controlled-workflow-example",
+        "scenarioId": "walk",
+        "resetRequestId": "transcript-reset",
+        "timeoutNanos": 5000000000
+      },
+      "dispatch": true,
+      "expected": {
+        "/type": "reset",
+        "/reset/scenarioId": "walk",
+        "/reset/command/status/state": "SUCCEEDED",
+        "/reset/executionEpochId/value": 1
+      }
+    },
+    {
+      "name": "pause",
+      "tool": "runtime_control",
+      "arguments": {
+        "sessionId": "controlled-workflow-example",
+        "action": "PAUSE",
+        "controlRequestId": "transcript-pause",
+        "timeoutNanos": 5000000000
+      },
+      "dispatch": true,
+      "expected": {
+        "/type": "control",
+        "/operation/kind": "PAUSE",
+        "/operation/command/status/state": "SUCCEEDED",
+        "/operation/paused": true
+      }
+    },
+    {
+      "name": "input",
+      "tool": "runtime_input",
+      "arguments": {
+        "sessionId": "controlled-workflow-example",
+        "input": "set-velocity",
+        "inputRequestId": "transcript-input",
+        "parameters": {"velocityX": 2},
+        "targetTick": 1,
+        "timeoutNanos": 5000000000
+      },
+      "dispatch": true,
+      "expected": {
+        "/type": "input",
+        "/injection/inputId": "set-velocity",
+        "/injection/state": "SCHEDULED",
+        "/injection/actualTick": null
+      }
+    },
+    {
+      "name": "advance",
+      "tool": "runtime_simulation_advance",
+      "arguments": {
+        "sessionId": "controlled-workflow-example",
+        "controlRequestId": "transcript-advance",
+        "ticks": 2,
+        "timeoutNanos": 5000000000
+      },
+      "dispatch": true,
+      "expected": {
+        "/type": "control",
+        "/operation/kind": "ADVANCE",
+        "/operation/command/status/state": "SUCCEEDED",
+        "/operation/completedTicks": 2
+      }
+    },
+    {
+      "name": "entity",
+      "tool": "runtime_entity",
+      "arguments": {
+        "sessionId": "controlled-workflow-example",
+        "entityId": "player"
+      },
+      "dispatch": false,
+      "expected": {
+        "/type": "entity",
+        "/latest/id/value": "player",
+        "/latest/type/value": "player"
+      }
+    },
+    {
+      "name": "events",
+      "tool": "runtime_events",
+      "arguments": {
+        "sessionId": "controlled-workflow-example",
+        "fromFrame": 0,
+        "toFrame": 3,
+        "eventType": "player.moved",
+        "eventTypePrefix": false,
+        "limit": 10
+      },
+      "dispatch": false,
+      "expected": {
+        "/type": "events",
+        "/page/items/0/type/value": "player.moved",
+        "/page/items/0/subject/value": "player"
+      }
+    },
+    {
+      "name": "frame assertion",
+      "tool": "runtime_assert",
+      "arguments": {
+        "sessionId": "controlled-workflow-example",
+        "fromFrame": 0,
+        "toFrame": 3,
+        "executionEpochId": 1,
+        "evidenceLimit": 8,
+        "assertion": {
+          "assertionType": "eventOccurs",
+          "eventType": "player.moved"
+        }
+      },
+      "dispatch": false,
+      "expected": {
+        "/type": "assertion",
+        "/result/status": "PASS",
+        "/result/assertionType": "eventOccurs"
+      }
+    },
+    {
+      "name": "assertion",
+      "tool": "runtime_simulation_assert",
+      "arguments": {
+        "sessionId": "controlled-workflow-example",
+        "executionEpochId": 1,
+        "fromEpochTick": 1,
+        "toEpochTick": 2,
+        "evidenceLimit": 8,
+        "evidenceRequirements": [],
+        "assertion": {
+          "assertionType": "vectorApproximatelyEquals",
+          "entityId": "player",
+          "property": "position",
+          "expected": {"x": 0.04, "y": 0},
+          "absoluteTolerance": 0.0001,
+          "toleranceMode": "COMPONENT"
+        }
+      },
+      "dispatch": false,
+      "expected": {
+        "/type": "simulationAssertion",
+        "/result/status": "PASS",
+        "/result/assertionType": "vectorApproximatelyEquals",
+        "/result/observed/valueType": "vector2"
+      }
+    },
+    {
+      "name": "determinism",
+      "tool": "runtime_simulation_determinism_check",
+      "arguments": {
+        "sessionId": "controlled-workflow-example",
+        "determinismRequestId": "transcript-determinism",
+        "scenarioId": "walk",
+        "randomSeed": 7,
+        "configuration": [],
+        "repeatCount": 2,
+        "ticksPerRepeat": 2,
+        "deltaNanos": 10000000,
+        "profile": {
+          "comparisonScope": {
+            "entityIds": ["player"],
+            "properties": ["position", "velocity"],
+            "excludedProperties": [],
+            "includeEvents": false,
+            "includeDecisions": false
+          },
+          "includeUiCorrelations": false
+        },
+        "inputs": [
+          {
+            "epochTick": 1,
+            "inputId": "set-velocity",
+            "parameters": {"velocityX": 2}
+          }
+        ],
+        "configurationRequirements": [],
+        "evidenceRequirements": [],
+        "eventTypes": [],
+        "timeoutNanos": 5000000000
+      },
+      "dispatch": true,
+      "expected": {
+        "/type": "simulationDeterminism",
+        "/operation/result/status": "EQUAL",
+        "/operation/result/divergence": null,
+        "/operation/result/bounds/completedRepeats": 2
+      }
+    }
+  ]
+}

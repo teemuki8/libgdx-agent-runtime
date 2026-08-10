@@ -165,6 +165,7 @@ game running elsewhere. Remote process attachment is explicitly outside V1.
 | `runtime-protocol` | strict V1 JSON and session registry | `agent-runtime-protocol` |
 | `runtime-mcp` | closed base and registered optional stdio MCP tools | `agent-runtime-mcp` |
 | `runtime-fixtures` | deterministic LWJGL3 qualification | not published |
+| `runtime-examples` | compiled consumer examples and tested MCP transcript | not published |
 
 Group: `io.github.teemuki8`. Current release: `2.0.0`. Development version: `2.0.1-SNAPSHOT`.
 
@@ -213,6 +214,7 @@ publishes.
 
 ## Guides
 
+- [Agent cookbook and compiled examples](docs/guides/agent-cookbook.md#task-index)
 - [Getting started](docs/guides/getting-started.md)
 - [Instrumenting game state](docs/guides/instrumenting-game-state.md)
 - [Frame correlation](docs/guides/frame-correlation.md)

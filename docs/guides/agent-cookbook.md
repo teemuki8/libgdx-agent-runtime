@@ -10,6 +10,390 @@ described below are
 development-version APIs until a release containing them is published. The current published
 2.0.0 artifacts do not contain them.
 
+## Task index
+
+Choose the smallest recipe that answers the current question. The complete sources compile in the
+non-published `runtime-examples` module as ordinary consumers of the public artifacts.
+
+| Task | Start here | Compiled evidence |
+| --- | --- | --- |
+| Add observable state to a libGDX game | [Instrument and inspect state](#instrument-and-inspect-state) | [`BasicInspectionApplication.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/BasicInspectionApplication.java) |
+| Inspect current registered state | [Instrument and inspect state](#instrument-and-inspect-state) | `runtime_entity` in the tested transcript |
+| Find what changed | [Query changes, events, and decisions](#query-changes-events-and-decisions) | `runtime_changes` closed query |
+| Emit and query a semantic event | [Query changes, events, and decisions](#query-changes-events-and-decisions) | `player.damaged` in `BasicInspectionApplicationTest` |
+| Trace an application decision | [Decision tracing](decision-tracing.md) | application `beginDecision`/candidate/choose plus `runtime_decisions` |
+| Reset a scenario | [Run controlled scenarios and input](#run-controlled-scenarios-and-input) | `runtime_reset` in the tested transcript |
+| Pause and advance exact ticks | [Run controlled scenarios and input](#run-controlled-scenarios-and-input) | `runtime_control` then `runtime_simulation_advance` |
+| Schedule registered input | [Run controlled scenarios and input](#run-controlled-scenarios-and-input) | `runtime_input` at epoch tick 1 |
+| Create or restore a checkpoint | [Run controlled scenarios and input](#run-controlled-scenarios-and-input) | [`ControlledWorkflowExample.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/ControlledWorkflowExample.java) |
+| Evaluate an assertion | [Run controlled scenarios and input](#run-controlled-scenarios-and-input) | frame and simulation assertions in the transcript |
+| Record bounded execution | [Run controlled scenarios and input](#run-controlled-scenarios-and-input) | recording retrieval in `ControlledWorkflowExample` |
+| Compare deterministic reruns | [Run controlled scenarios and input](#run-controlled-scenarios-and-input) | selected `EQUAL` result in both controlled examples |
+| Correlate runtime and UI evidence | [Frame correlation](frame-correlation.md) | explicit `UiFrameCorrelation`, never guessed frames |
+| Connect an MCP coding agent | [Host same-JVM stdio MCP](#host-same-jvm-stdio-mcp) | [`SameJvmMcpApplication.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/SameJvmMcpApplication.java) and [`controlled-workflow.json`](../../runtime-examples/src/main/resources/transcripts/controlled-workflow.json) |
+| Interpret missing, bounded, or failed evidence | [Diagnose incomplete and failed evidence](#diagnose-incomplete-and-failed-evidence) | `AgentCookbookContractTest` and runtime fixture regressions |
+| Build a deterministic Box2D game | [Use the deterministic Box2D example](#use-the-deterministic-box2d-example) | [`DeterministicBox2dExample.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/DeterministicBox2dExample.java) |
+
+For released inspection-only APIs use `2.0.0`. Recipes using fixed-step simulation, simulation
+assertions, simulation determinism, or `agent-runtime-box2d` currently require the repository
+development version `2.0.1-SNAPSHOT` until the next release. The examples module itself is test
+scaffolding and is never a dependency or published artifact.
+
+## Instrument and inspect state
+
+Prerequisites: add the smallest published artifacts your game consumes, construct the runtime on
+the libGDX render thread, and register only explicit safe properties. For released basic state
+inspection:
+
+```kotlin
+implementation("io.github.teemuki8:agent-runtime-core:2.0.0")
+implementation("io.github.teemuki8:agent-runtime-libgdx:2.0.0")
+```
+
+The canonical order is register, start, capture, query, close. `start()` captures baseline frame
+0, and application mutation plus semantic events belong inside one application-owned frame:
+
+```java
+runtime.entities().register(EntityId.of("player"), EntityType.of("player"),
+        () -> "Player", inspector -> inspector.property("health", () -> health));
+runtime.start();
+runtime.frame(16_666_667L, () -> {
+    health = 75;
+    runtime.emit(EventSpec.type("player.damaged")
+            .subject(EntityId.of("player"))
+            .attribute("amount", RuntimeValues.integer(25)));
+});
+EntitySnapshot player = runtime.entity(EntityId.of("player")).orElseThrow();
+```
+
+Representative evidence is `frameId=1`, `player.health=75`, and one explicitly emitted
+`player.damaged` event. Registration, start, frame capture, and close stay on the capture thread;
+completed immutable queries may run on any thread. Runtime limits bound values, property counts,
+frames, and events. Truncation or eviction is evidence and must not be recast as a complete answer.
+Close on the owner thread; the runtime never disposes application objects.
+
+Do not register a mutable `Body`, actor graph, secret-bearing object, or reflective serializer.
+The typed failure for an unregistered entity is absence (`Optional.empty()` or an empty query), not
+permission to traverse the game. See the full hidden LWJGL3 application in
+[`BasicInspectionApplication.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/BasicInspectionApplication.java).
+
+## Query changes, events, and decisions
+
+Use structural changes for observed property differences, semantic events for facts the game
+explicitly emits, and decisions for an application-declared candidate choice. Query an inclusive
+completed-frame range with bounded filters:
+
+```java
+QueryPage<PropertyChange> changes = runtime.changes(
+        new ChangeQuery(FrameRange.of(0, 60), Optional.of(EntityId.of("player")),
+                Optional.empty(), Optional.of("health"), 32));
+QueryPage<RuntimeEvent> events = runtime.events(
+        new EventQuery(FrameRange.of(0, 60), Optional.of("player.damaged"), false,
+                Optional.of(EntityId.of("player")), Optional.empty(), 32));
+```
+
+Trace only decisions the application explicitly recorded:
+
+```json
+{"name":"runtime_decisions","arguments":{"sessionId":"game","fromFrame":0,"toFrame":60,"decisionType":"target.selected","actor":"player","limit":32}}
+```
+
+The application-side `beginDecision`, candidate, chosen/rejected, and close sequence are in
+[Decision tracing](decision-tracing.md); the exact MCP query is above. The runtime never
+reconstructs a decision from the final entity state.
+
+The MCP equivalents are closed calls such as:
+
+```json
+{"name":"runtime_changes","arguments":{"sessionId":"game","fromFrame":0,"toFrame":60,"entityId":"player","property":"health","limit":32}}
+```
+
+```json
+{"name":"runtime_events","arguments":{"sessionId":"game","fromFrame":0,"toFrame":60,"eventType":"player.damaged","eventTypePrefix":false,"subject":"player","limit":32}}
+```
+
+An empty retained page only says that no matching evidence was retained in that query. It does not
+infer why health changed or prove an event never happened outside the complete retained range.
+Inspect page completeness, eviction, and truncation fields before making a negative claim.
+Decisions and events require an open frame and capture-thread ownership. Query results are frozen;
+cleanup is still the runtime owner's responsibility.
+
+Do not infer “the collision damaged the player” because a contact and health change share a frame.
+Supply explicit correlation or a semantic event when the application knows that fact. Invalid
+filters and unknown fields produce typed `INVALID_QUERY` transport failures.
+
+## Run controlled scenarios and input
+
+This development workflow requires `2.0.1-SNAPSHOT`. Register the application dispatcher,
+scenario, closed input schema, optional checkpoint provider, and acknowledged fixed-step helper
+before `start()`. Then use idempotent request IDs and poll the exact same request after the
+application thread drains it:
+
+```java
+runtime.scenarios().reset("walk", "reset-1", timeout);
+runtime.controls().control(true, "pause-1", timeout);
+long tick = runtime.controls().currentTick() + 1;
+runtime.inputs().inject("set-velocity", "input-1",
+        RuntimeValues.object(RuntimeValues.field(
+                "velocityX", RuntimeValues.decimal("2"))),
+        OptionalLong.of(tick), timeout);
+runtime.controls().advanceFixed("advance-1", 60, timeout);
+```
+
+Checkpoint and recording use the same dispatch/poll contract; these are the exact calls from the
+compiled workflow:
+
+```java
+runtime.checkpoints().create(
+        "start", "Before scheduled movement", "checkpoint-create-1", timeout);
+runtime.recordings().start(new RecordingSpec(
+        "walk-recording", "2.4",
+        List.of(new RecordingCapabilityVersion("fixed-step-simulation", "2.2")),
+        Optional.of("walk"), Optional.of("start"), OptionalLong.of(7),
+        RuntimeValues.object(), false), "recording-start-1", timeout);
+// inject and advance exact ticks
+runtime.recordings().stop("walk-recording", "recording-stop-1", timeout);
+RecordingChunk recording = runtime.recordings().get("walk-recording", 0, 64);
+runtime.checkpoints().restore("start", "checkpoint-restore-1", timeout);
+```
+
+After application dispatch, create/stop/restore report command `SUCCEEDED`; the chunk contains a
+bounded `RecordingInputEntry` and the exact retained `RecordingTickEntry` values. Restore produces
+a new epoch baseline and the example verifies position `(0,0)`. A recording chunk explicitly
+reports truncation/eviction rather than fabricating missing entries.
+
+The scheduled input executes immediately before its selected tick. An acknowledged tick records
+the configured, supplied, and application-reported executed delta plus its resulting runtime
+frame. Assertions consume completed immutable evidence and return `PASS`, `FAIL`, or
+`INCONCLUSIVE`. Recordings and deterministic comparison reuse the same scenario/input/tick path;
+`EQUAL` applies only to the selected evidence.
+
+Submitted commands may first return `QUEUED` or `EXECUTING`. The application must drain its own
+dispatcher and retry with the identical request ID and fields. Reusing an ID with changed fields is
+rejected; retrying unknown partial mutation is unsafe until the application resets. Tick counts,
+future scheduling, retained operations, recordings, evidence, and execution time are bounded.
+Restore/reset callbacks must restore application state and clear or restore the accumulator.
+
+Do not call a mutation from an MCP worker or invent a loop with `Thread.sleep`. The complete
+application-owned Java sequence—including checkpoint restore, recording, PASS/FAIL assertions,
+and selected reruns—is
+[`ControlledWorkflowExample.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/ControlledWorkflowExample.java).
+
+## Host same-JVM stdio MCP
+
+MCP is a local development transport, not remote attachment. Publish the started runtime and open
+the server inside the same libGDX JVM:
+
+```java
+publication = registry.publish(runtime);
+server = RuntimeMcpServer.open(
+        new RuntimeProtocolService(registry), System.in, System.out);
+```
+
+Send MCP `initialize`, `notifications/initialized`, then closed `tools/call` requests. The tested
+[`controlled-workflow.json`](../../runtime-examples/src/main/resources/transcripts/controlled-workflow.json)
+transcript covers sessions, capabilities, scenarios, reset, pause, scheduled input, configured-step
+advance, entity/event inspection, frame and simulation assertions, and simulation determinism.
+Representative terminal results include command `SUCCEEDED`, assertion `PASS`, and selected
+comparison `EQUAL` with a null divergence.
+
+`System.out` is exclusively newline-framed JSON-RPC. Put human logs on stderr or in a bounded file.
+The game owns dispatch via `Gdx.app.postRunnable`; the server creates no game loop. Inputs, nesting,
+strings, result lists, and frames use the runtime's hard protocol/MCP bounds, and unknown fields are
+rejected before dispatch. Close in order: server, publication, runtime. EOF is a clean launcher
+shutdown signal.
+
+Do not run a catalog-only MCP JVM beside the game and expect it to inspect process memory. Do not
+open both runtime and UI-harness stdio servers on the same streams. See the runnable hidden launcher
+in [`SameJvmMcpApplication.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/SameJvmMcpApplication.java).
+
+Prepare the tested application distribution once (and after dependency/source changes):
+
+```bash
+./gradlew :runtime-examples:installDist
+```
+
+The repository wrapper invokes the installed script directly. It also preserves the original
+stderr on file descriptor 3 because Debian/Ubuntu `xvfb-run` otherwise merges child stderr into
+stdout. The MCP command therefore emits only JSON-RPC on stdout while Java/LWJGL diagnostics remain
+on stderr. From the repository, use this client configuration:
+
+```json
+{
+  "mcpServers": {
+    "libgdx-runtime-example": {
+      "command": "./runtime-examples/run-mcp-example-xvfb.sh",
+      "args": []
+    }
+  }
+}
+```
+
+## Diagnose incomplete and failed evidence
+
+Interpret evidence conservatively:
+
+| Observation | Meaning | Agent action |
+| --- | --- | --- |
+| entity/query absent with complete retained range | no matching registered evidence in that range | verify ID and registration; do not infer application semantics |
+| range partially evicted or paginated | requested evidence is incomplete | narrow/repeat the query or return `INCONCLUSIVE` |
+| truncation/limit diagnostic | only a bounded prefix was retained | raise an application-configured limit or reduce explicit scope |
+| command `QUEUED`/`EXECUTING` | application thread has not completed it | drain dispatch and poll the identical request |
+| command `FAILED` with mutation unknown | callback may have partially changed state | reset/restore before retrying |
+| assertion `FAIL` | complete evidence contradicts the expected fact | inspect typed expected/observed/evidence fields |
+| assertion `INCONCLUSIVE` | PASS/negative proof is unsafe | inspect eviction, truncation, missing correlation, and completeness |
+| determinism `DIVERGED` | selected evidence first differs at the reported tick | inspect entity/property or event difference for both runs |
+| determinism `INCONCLUSIVE` | setup or evidence could not support equality | fix the named timing/configuration/completeness fault |
+
+For negative claims, absence is not proof when any relevant evidence is evicted, truncated,
+unmapped, failed, unacknowledged, or missing frame correlation. A screenshot can supplement these
+facts but never makes incomplete structured evidence complete. Diagnostics are closed typed values;
+the runtime does not serialize a stack trace or infer causality.
+
+Incorrect example: treating an empty contact-event page as “contact never occurred” after contact
+history eviction. The correct result is `INCONCLUSIVE`, followed by a reset and a smaller exact-tick
+range or larger application-selected retention limit.
+
+### Minimal structured failure reproductions
+
+These are failure boundaries, not strings to pattern-match. Inspect the typed result or error code.
+
+| Deliberate reproduction | Expected structured outcome | Recovery |
+| --- | --- | --- |
+| send a protocol 2.5 request to this 2.4 development server | `UNSUPPORTED_VERSION`; no command dispatch | negotiate a listed version and rebuild the request |
+| omit `commandDispatcher`, scenario, input, or fixed-step registration | the dependent capability/tool is absent; a forced MCP call is `INVALID_QUERY` | register on the application thread before publishing |
+| submit reset/pause/input and do not drain the application dispatcher | command state remains `QUEUED` or `EXECUTING` | drain application work and poll the identical request |
+| reuse one request ID for a different command or fields | Java rejects conflicting correlation with `IllegalArgumentException`; MCP returns a bounded invalid-query result | allocate a new ID or restore the original fields |
+| call fixed-step update from a non-capture thread | `AgentRuntimeException` with `WRONG_THREAD` | post work to the application/capture thread |
+| update/register/close while a frame is open | `AgentRuntimeException` with `INVALID_LIFECYCLE` | complete or abort the frame before lifecycle mutation |
+| time out or cancel after a callback starts | command reports timeout/failure and may carry unknown mutation outcome | reset or restore before retrying |
+| query a missing/evicted frame, entity history, or simulation tick | `FRAME_NOT_FOUND`, `ENTITY_HISTORY_NOT_RETAINED`, or partial-eviction/`NOT_YET_EXECUTED` evidence | narrow to a retained exact range or reproduce from reset |
+| exceed value/contact/shape/history limits | explicit truncation/eviction diagnostics and completeness false | reduce registered scope or change an application-owned bound |
+| evaluate a negative/whole-range assertion over incomplete evidence | `INCONCLUSIVE`, never misleading `PASS` | restore complete evidence and rerun |
+| compare with missing correlation, timing mismatch, or incomplete evidence | determinism `INCONCLUSIVE`, never `EQUAL` | fix the named setup/evidence diagnostic |
+| throw from an application callback | bounded `ApplicationFailureEvidence` exposes category, exception class, correlation ID, and optional sanitized detail; no raw message/stack trace | inspect local logs by correlation, then reset if mutation is unknown |
+| write game logs to stdout while MCP is active | JSON-RPC framing is contaminated and the client receives a parse/transport failure | reserve stdout for MCP and move logs to stderr/file |
+| start MCP in a separate JVM from the live game | only that process's registry/catalog is visible; the game session is absent | embed the server in the game development launcher |
+| report a different executed delta, omit a colliding fixture, use a suspicious unit expectation, or overrun catch-up | `DELTA_MISMATCH`, incomplete contact evidence, assertion `FAIL`, or clamp/drop diagnostics | correct the application testimony/registration/scale or bounded update policy |
+
+### Exact failure calls
+
+Unsupported version and absent-capability calls fail before application dispatch:
+
+```java
+RuntimeResponse.Failure unsupported = (RuntimeResponse.Failure) service.execute(
+        new RuntimeRequest(new ProtocolVersion(2, 5), "bad-version", null,
+                new RuntimeCommand.Sessions()));
+assert unsupported.error().code() == ProtocolErrorCode.UNSUPPORTED_VERSION;
+```
+
+```json
+{"name":"runtime_reset","arguments":{"sessionId":"basic-inspection-example","scenarioId":"walk","resetRequestId":"missing-capability","timeoutNanos":1000000000}}
+```
+
+The second call is `INVALID_QUERY` because that basic runtime registered neither a scenario nor an
+application dispatcher, so the server catalog does not advertise `runtime_reset`.
+
+Queued polling and conflicting correlation are reproduced without a clock or worker:
+
+```java
+ScenarioReset queued = runtime.scenarios().reset("walk", "same-id", timeout);
+assert queued.command().status().orElseThrow().state() == CommandState.QUEUED;
+ScenarioReset same = runtime.scenarios().reset("walk", "same-id", timeout); // same operation
+assertThrows(IllegalArgumentException.class,
+        () -> runtime.controls().control(true, "same-id", timeout));
+applicationQueue.removeFirst().run();
+ScenarioReset completed = runtime.scenarios().reset("walk", "same-id", timeout);
+assert completed.command().status().orElseThrow().state() == CommandState.SUCCEEDED;
+```
+
+Wrong-thread and open-frame lifecycle errors retain their exact local categories:
+
+```java
+Thread.ofPlatform().start(() -> {
+    AgentRuntimeException failure = assertThrows(
+            AgentRuntimeException.class, () -> simulation.updateNanos(0));
+    assert failure.code() == RuntimeErrorCode.WRONG_THREAD;
+}).join();
+runtime.frame(1, () -> {
+    AgentRuntimeException failure = assertThrows(
+            AgentRuntimeException.class, () -> simulation.updateNanos(0));
+    assert failure.code() == RuntimeErrorCode.INVALID_LIFECYCLE;
+});
+```
+
+For a queued command, cancel by its command request ID before dispatch and inspect
+`CommandCancellation`; after dispatch begins, cancellation cannot prove rollback. If status becomes
+`TIMED_OUT` or `FAILED` with `mutationOutcome=UNKNOWN`, reset or restore instead of resubmitting.
+
+```java
+CommandCancellation cancelled = runtime.commands().orElseThrow().cancel("queued-request");
+SimulationTickPage ticks = runtime.simulation().ticks(
+        new SimulationTickQuery(epoch, 1, 60, 60));
+if (!ticks.complete()) {
+    assert assertion.status() == AssertionStatus.INCONCLUSIVE;
+    assert determinism.status() == DeterminismStatus.INCONCLUSIVE;
+}
+```
+
+Use deliberately small application limits to reproduce truncation; inspect the typed loss rather
+than an empty list:
+
+```java
+Box2dContactLimits limits = new Box2dContactLimits(1, 1, 1, 1, 1, 8, 16, 16);
+// A tick with two callbacks retains one record, emits RECORD_LIMIT_REACHED, and complete=false.
+```
+
+Sanitize application exceptions at construction. The callback's raw message and stack trace never
+enter protocol evidence:
+
+```java
+AgentRuntime runtime = AgentRuntime.builder()
+        .applicationFailureSanitizer(
+                (context, failure) -> Optional.of("reset callback failed"))
+        .build();
+// ApplicationFailureEvidence = category + exceptionClass + correlationId + bounded detail.
+```
+
+For stdio contamination, the minimal incorrect call is `System.out.println("game started")` after
+opening `RuntimeMcpServer`; the next client read is not a JSON-RPC object. Put that message on
+`System.err`. For a separate-JVM failure, start a new `RuntimeRegistry` process and call
+`runtime_sessions`: the live game session is absent because registries are process-local.
+
+## Use the deterministic Box2D example
+
+Use development dependencies `agent-runtime-core`, `agent-runtime-libgdx`, and
+`agent-runtime-box2d` at `2.0.1-SNAPSHOT`. The consumer example explicitly owns a native `World`,
+registers stable world/body/fixture/joint IDs, installs an evidence-first/application-second
+listener from `Box2dContacts.compose(applicationListener)`, and steps only inside the acknowledged
+fixed-step callback:
+
+```java
+contacts.captureStep(() -> world.step(
+        tick.fixedStepSeconds(), velocityIterations, positionIterations));
+return tick.fixedStepNanos();
+```
+
+Its workflow resets `player-movement`, pauses, schedules velocity for epoch tick 1, advances 90
+exact ticks, checks final position and player-wall contact, verifies tick/frame correlation, and
+runs two selected body/contact evidence repeats. The expected summary is position `PASS`, contact
+`PASS`, determinism `EQUAL`, and no whole-program determinism claim. Structured entities remain
+available at `box2d.world.main`, `box2d.body.player`, `box2d.fixture.player-shape`,
+`box2d.joint.static-link`, and `box2d.contacts.main`.
+The native regression also requires the composed application listener to observe a begin callback;
+each recreated world reinstalls that same composed listener.
+
+World objects, callbacks, contacts, and native disposal remain capture-thread/application-owned.
+The adapter copies only explicitly registered bounded facts; contact completeness and truncation
+control negative assertions. Recreated worlds must rebind or re-register stable IDs and reinstall
+the listener before old native objects are disposed.
+
+Do not call `world.step(renderDelta)`, use native pointers as IDs, assume pixels equal metres, or
+read screenshots as authoritative physics state. The compact copyable implementation and native
+test are [`DeterministicBox2dExample.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/DeterministicBox2dExample.java)
+and `DeterministicBox2dExampleTest`; the larger conformance fixture below supplies deliberate
+timing, scale, truncation, and unmapped-endpoint failures.
+
 ## Fixed-step simulation ticks
 
 Use this when game correctness depends on Box2D or another authoritative fixed-step simulation.

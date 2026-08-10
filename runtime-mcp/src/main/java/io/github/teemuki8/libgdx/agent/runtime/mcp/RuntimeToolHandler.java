@@ -18,6 +18,7 @@ import io.github.teemuki8.libgdx.agent.runtime.core.EntityType;
 import io.github.teemuki8.libgdx.agent.runtime.core.EventType;
 import io.github.teemuki8.libgdx.agent.runtime.core.FrameId;
 import io.github.teemuki8.libgdx.agent.runtime.core.InputDescriptor;
+import io.github.teemuki8.libgdx.agent.runtime.core.InputTimelineTransition;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeAssertion;
 import io.github.teemuki8.libgdx.agent.runtime.core.SnapshotComparisonScope;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue;
@@ -246,6 +247,11 @@ public final class RuntimeToolHandler implements AutoCloseable {
                     string(arguments, "recordingId"),
                     string(arguments, "replayRequestId"),
                     number(arguments, "timeoutNanos", -1));
+            case "runtime_input_timeline" -> new RuntimeCommand.InputTimeline(
+                    string(arguments, "timelineRequestId"),
+                    Math.toIntExact(number(arguments, "totalTicks", -1)),
+                    inputTimelineTransitions(arguments.get("transitions")),
+                    number(arguments, "timeoutNanos", -1));
             case "runtime_simulation" -> new RuntimeCommand.Simulation();
             case "runtime_simulation_ticks" -> new RuntimeCommand.SimulationTicks(
                     number(arguments, "executionEpochId", -1),
@@ -277,6 +283,7 @@ public final class RuntimeToolHandler implements AutoCloseable {
             case "runtime_simulation_assert" -> ProtocolVersion.V2_3;
             case "runtime_simulation_determinism_check" -> ProtocolVersion.V2_4;
             case "runtime_replay_recording_start", "runtime_replay" -> ProtocolVersion.V2_5;
+            case "runtime_input_timeline" -> ProtocolVersion.V2_6;
             default -> ProtocolVersion.V2;
         };
         return new RuntimeRequest(version,
@@ -367,6 +374,24 @@ public final class RuntimeToolHandler implements AutoCloseable {
             fields.add(RuntimeValues.field(name, actionValue(parameter, entry.getValue())));
         }
         return new RuntimeValue.ObjectValue(fields);
+    }
+
+    private List<InputTimelineTransition> inputTimelineTransitions(Object raw) {
+        if (!(raw instanceof List<?> values)) {
+            throw new IllegalArgumentException("input timeline transitions must be an array");
+        }
+        return values.stream().map(value -> {
+            Map<String, Object> fields = stringMap(value, "input timeline transition");
+            if (!fields.keySet().equals(java.util.Set.of(
+                    "transitionId", "timelineTick", "inputId", "parameters"))) {
+                throw new IllegalArgumentException("input timeline transition is invalid");
+            }
+            String inputId = string(fields, "inputId");
+            return new InputTimelineTransition(
+                    string(fields, "transitionId"),
+                    Math.toIntExact(number(fields, "timelineTick", -1)), inputId,
+                    inputParameters(inputId, fields.get("parameters")));
+        }).toList();
     }
 
     private static RuntimeValue.ObjectValue recordingConfiguration(Object raw) {

@@ -11,6 +11,7 @@ import io.github.teemuki8.libgdx.agent.runtime.core.ActionParameter;
 import io.github.teemuki8.libgdx.agent.runtime.core.ActionParameterType;
 import io.github.teemuki8.libgdx.agent.runtime.core.AssertionScope;
 import io.github.teemuki8.libgdx.agent.runtime.core.InputDescriptor;
+import io.github.teemuki8.libgdx.agent.runtime.core.InputTimelineLimits;
 import io.github.teemuki8.libgdx.agent.runtime.core.ReplayCaptureSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertion;
 import io.github.teemuki8.libgdx.agent.runtime.core.SimulationAssertionScope;
@@ -291,6 +292,12 @@ public final class RuntimeToolCatalog {
                             "timeoutNanos", integer(1, Long.MAX_VALUE)),
                             List.of("recordingId", "replayRequestId", "timeoutNanos"))));
         }
+        if (supported.contains("runtime_input_timeline")) {
+            selected.add(tool("runtime_input_timeline",
+                    "Submit or poll one bounded exact-tick sequence of registered input "
+                            + "transitions; transitions sharing a tick execute in list order",
+                    inputTimelineInput(inputs.values())));
+        }
         if (supported.contains("runtime_simulation")) {
             selected.add(tool("runtime_simulation",
                     "Read application-reported simulation timing and current tick state",
@@ -461,6 +468,28 @@ public final class RuntimeToolCatalog {
                     "sessionId", "input", "inputRequestId", "parameters", "timeoutNanos"));
         }).toList();
         return Map.of("oneOf", branches);
+    }
+
+    private static Map<String, Object> inputTimelineInput(
+            java.util.Collection<InputDescriptor> descriptors) {
+        List<Map<String, Object>> branches = descriptors.stream().map(descriptor -> object(
+                Map.of(
+                        "transitionId", string(),
+                        "timelineTick", integer(1, InputTimelineLimits.MAXIMUM_TICKS),
+                        "inputId", Map.of("type", "string", "const", descriptor.id()),
+                        "parameters", inputParameterObject(descriptor)),
+                List.of("transitionId", "timelineTick", "inputId", "parameters"))).toList();
+        Map<String, Object> items = branches.isEmpty()
+                ? Map.of("not", Map.of()) : Map.of("oneOf", branches);
+        return object(Map.of(
+                "sessionId", string(),
+                "timelineRequestId", string(),
+                "totalTicks", integer(1, InputTimelineLimits.MAXIMUM_TICKS),
+                "transitions", Map.of("type", "array", "items", items,
+                        "minItems", 1, "maxItems", InputTimelineLimits.MAXIMUM_TRANSITIONS),
+                "timeoutNanos", integer(1, Long.MAX_VALUE)),
+                List.of("sessionId", "timelineRequestId", "totalTicks",
+                        "transitions", "timeoutNanos"));
     }
 
     private static Map<String, Object> uiBindingInput() {

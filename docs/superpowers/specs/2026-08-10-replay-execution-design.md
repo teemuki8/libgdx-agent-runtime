@@ -1,7 +1,7 @@
 # Replay Execution Design
 
 **Status:** Approved
-**Date:** 2026-08-10  
+**Date:** 2026-08-10
 **Scope:** Bounded deterministic execution of replay-ready recordings
 
 ## Goal

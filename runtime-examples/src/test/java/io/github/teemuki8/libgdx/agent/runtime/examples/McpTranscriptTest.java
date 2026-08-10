@@ -46,6 +46,8 @@ class McpTranscriptTest {
                 "sessions", "capabilities", "scenarios", "reset", "pause",
                 "replay recording start", "input", "advance", "entity", "events",
                 "frame assertion", "assertion", "replay recording stop", "replay",
+                "divergent replay recording start", "divergent input", "divergent advance",
+                "divergent replay recording stop", "divergent replay",
                 "determinism"),
                 transcript.steps().stream().map(Step::name).toList());
 

@@ -252,6 +252,106 @@
       }
     },
     {
+      "name": "divergent replay recording start",
+      "tool": "runtime_replay_recording_start",
+      "arguments": {
+        "sessionId": "controlled-workflow-example",
+        "recordingId": "transcript-divergent-replay",
+        "replayRequestId": "transcript-divergent-replay-start",
+        "originKind": "scenario",
+        "originId": "walk-divergence",
+        "randomSeed": 7,
+        "configuration": [],
+        "profile": {
+          "comparisonScope": {
+            "entityIds": ["player"],
+            "properties": ["position", "velocity"],
+            "excludedProperties": [],
+            "includeEvents": false,
+            "includeDecisions": false
+          },
+          "includeUiCorrelations": false
+        },
+        "configurationRequirements": [],
+        "evidenceRequirements": [],
+        "eventTypes": [],
+        "timeoutNanos": 5000000000
+      },
+      "dispatch": true,
+      "expected": {
+        "/type": "replayCapture",
+        "/operation/command/status/state": "SUCCEEDED",
+        "/operation/baselineExecutionEpochId/value": 4
+      }
+    },
+    {
+      "name": "divergent input",
+      "tool": "runtime_input",
+      "arguments": {
+        "sessionId": "controlled-workflow-example",
+        "input": "set-velocity",
+        "inputRequestId": "transcript-divergent-input",
+        "parameters": {"velocityX": 2},
+        "targetTick": 5,
+        "timeoutNanos": 5000000000
+      },
+      "dispatch": true,
+      "expected": {
+        "/type": "input",
+        "/injection/inputId": "set-velocity",
+        "/injection/state": "SCHEDULED"
+      }
+    },
+    {
+      "name": "divergent advance",
+      "tool": "runtime_simulation_advance",
+      "arguments": {
+        "sessionId": "controlled-workflow-example",
+        "controlRequestId": "transcript-divergent-advance",
+        "ticks": 1,
+        "timeoutNanos": 5000000000
+      },
+      "dispatch": true,
+      "expected": {
+        "/type": "control",
+        "/operation/command/status/state": "SUCCEEDED",
+        "/operation/completedTicks": 1
+      }
+    },
+    {
+      "name": "divergent replay recording stop",
+      "tool": "runtime_recording_stop",
+      "arguments": {
+        "sessionId": "controlled-workflow-example",
+        "recordingId": "transcript-divergent-replay",
+        "recordingRequestId": "transcript-divergent-replay-stop",
+        "timeoutNanos": 5000000000
+      },
+      "dispatch": true,
+      "expected": {
+        "/type": "recordingOperation",
+        "/operation/command/status/state": "SUCCEEDED"
+      }
+    },
+    {
+      "name": "divergent replay",
+      "tool": "runtime_replay",
+      "arguments": {
+        "sessionId": "controlled-workflow-example",
+        "recordingId": "transcript-divergent-replay",
+        "replayRequestId": "transcript-divergent-replay-execute",
+        "timeoutNanos": 5000000000
+      },
+      "dispatch": true,
+      "expected": {
+        "/type": "replay",
+        "/operation/result/status": "DIVERGED",
+        "/operation/result/divergence/phase": "SIMULATION_TICK",
+        "/operation/result/divergence/epochTick": 1,
+        "/operation/result/bounds/completedTicks": 0
+      }
+    },
+    {
       "name": "determinism",
       "tool": "runtime_simulation_determinism_check",
       "arguments": {

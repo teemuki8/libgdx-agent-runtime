@@ -776,8 +776,8 @@ public final class RuntimeProtocolService {
                             "maximumEncodedEvidenceBytes",
                             (long) replayLimits.maximumEncodedEvidenceBytes(),
                             "maximumExecutionNanos", replayLimits.maximumExecutionNanos()),
-                    List.of("bounded", "checkpoint-restore", "first-divergence",
-                            "inconclusive-safe", "scenario-reset"),
+                    List.of("bounded", "checkpoint-restore", "exact-fixed-tick",
+                            "first-divergence", "inconclusive-safe", "scenario-reset"),
                     List.of("command-dispatch", "recording", "simulation-timeline",
                             "acknowledged-simulation-control")));
         }

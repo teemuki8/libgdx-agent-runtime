@@ -236,7 +236,8 @@ public final class ReplayRegistry {
         }
     }
 
-    synchronized void freeze(String recordingId) {
+    synchronized void freeze(String recordingId, RecordingStopReason stopReason,
+            boolean reproductionEvidenceComplete) {
         if (activeCapture == null) {
             return;
         }
@@ -244,6 +245,16 @@ public final class ReplayRegistry {
         if (!capture.spec.recording().id().equals(recordingId)) {
             capture.markIncomplete("replay recording lifecycle is inconsistent");
             return;
+        }
+        if (!runtime.currentEpoch().equals(capture.baselineEpoch)) {
+            capture.markIncomplete("simulation execution epoch changed during replay capture");
+        }
+        if (!reproductionEvidenceComplete || stopReason != RecordingStopReason.REQUESTED) {
+            capture.markIncomplete("recording stopped with incomplete reproduction evidence: "
+                    + stopReason.name().toLowerCase().replace('_', '-'));
+        }
+        if (uiEvidenceEvicted(capture.spec.profile(), capture.uiEvictions)) {
+            capture.markIncomplete("UI correlation evidence was evicted");
         }
         try {
             freezeInputs(capture);
@@ -304,8 +315,9 @@ public final class ReplayRegistry {
             inputMode = true;
             previouslyPaused = runtime.controls().pauseForDeterminism();
             pauseEstablished = true;
-            result = executeWhilePaused(
-                    replay, deadline, executionNanos, counters, completedTicks);
+            long uiEvictions = runtime.uiCorrelations().evictedFrameCount();
+            result = executeWhilePaused(replay, deadline, executionNanos, counters,
+                    completedTicks, uiEvictions);
         } catch (RuntimeException | Error failure) {
             result = inconclusive(replay, completedTicks[0], counters, executionNanos,
                     failureEvidence(requestId, "replay.execute", failure));
@@ -326,7 +338,8 @@ public final class ReplayRegistry {
 
     private ReplayResult executeWhilePaused(RetainedReplay replay,
             long deadline, long executionNanos,
-            ObservableEvidenceComparator.Counters counters, int[] completedTicks) {
+            ObservableEvidenceComparator.Counters counters, int[] completedTicks,
+            long uiEvictions) {
         if (expired(deadline)) {
             return inconclusive(replay, 0, counters, executionNanos,
                     "replay execution deadline elapsed", Optional.empty());
@@ -345,6 +358,14 @@ public final class ReplayRegistry {
             return inconclusive(replay, 0, counters, executionNanos,
                     counters.incompleteReason().orElse("replay baseline evidence is incomplete"),
                     Optional.empty());
+        }
+        if (expired(deadline)) {
+            return inconclusive(replay, 0, counters, executionNanos,
+                    "replay execution deadline elapsed", Optional.empty());
+        }
+        if (uiEvidenceEvicted(replay.spec().profile(), uiEvictions)) {
+            return inconclusive(replay, 0, counters, executionNanos,
+                    "UI correlation evidence was evicted", Optional.empty());
         }
         Optional<DeterminismDifference> baselineDifference = comparator.difference(
                 replay.baselineEvidence().orElseThrow(), baselineEvidence.orElseThrow());
@@ -389,6 +410,14 @@ public final class ReplayRegistry {
                         counters.incompleteReason().orElse("replay tick evidence is incomplete"),
                         Optional.empty());
             }
+            if (expired(deadline)) {
+                return inconclusive(replay, completedTicks[0], counters, executionNanos,
+                        "replay execution deadline elapsed", Optional.empty());
+            }
+            if (uiEvidenceEvicted(replay.spec().profile(), uiEvictions)) {
+                return inconclusive(replay, completedTicks[0], counters, executionNanos,
+                        "UI correlation evidence was evicted", Optional.empty());
+            }
             Optional<DeterminismDifference> difference = comparator.difference(
                     reference.evidence(), replayEvidence.orElseThrow());
             if (difference.isPresent()) {
@@ -402,6 +431,14 @@ public final class ReplayRegistry {
                                 completed.frame().frameId(), difference.orElseThrow()));
             }
             completedTicks[0]++;
+        }
+        if (expired(deadline)) {
+            return inconclusive(replay, completedTicks[0], counters, executionNanos,
+                    "replay execution deadline elapsed", Optional.empty());
+        }
+        if (uiEvidenceEvicted(replay.spec().profile(), uiEvictions)) {
+            return inconclusive(replay, completedTicks[0], counters, executionNanos,
+                    "UI correlation evidence was evicted", Optional.empty());
         }
         return new ReplayResult(DeterminismStatus.EQUAL,
                 "equal for the selected replay evidence; whole-program determinism is not proven",
@@ -498,6 +535,7 @@ public final class ReplayRegistry {
     private void startNow(CaptureEvidence operation) {
         ReplayCaptureSpec spec = operation.spec;
         validateEnvironment(spec);
+        long uiEvictions = runtime.uiCorrelations().evictedFrameCount();
         long fixedStepNanos = runtime.simulation().state()
                 .configuredFixedStepNanos().orElseThrow();
         long metadataBytes = ReplayCanonicalSize.captureMetadata(spec, fixedStepNanos);
@@ -525,11 +563,14 @@ public final class ReplayRegistry {
         if (incompleteReason.isEmpty() && baselineEvidence.isEmpty()) {
             incompleteReason = Optional.of("replay baseline evidence is incomplete");
         }
+        if (incompleteReason.isEmpty() && uiEvidenceEvicted(spec.profile(), uiEvictions)) {
+            incompleteReason = Optional.of("UI correlation evidence was evicted");
+        }
         long encodedBytes = ReplayCanonicalSize.add(
                 metadataBytes, counters.encodedEvidenceBytes());
         MutableCapture candidate = new MutableCapture(spec, fixedStepNanos,
                 baselineEpoch, baselineFrame, baselineEvidence, incompleteReason,
-                counters.observedEntities(), counters.observedFacts(), encodedBytes);
+                counters.observedEntities(), counters.observedFacts(), encodedBytes, uiEvictions);
 
         runtime.recordings().startNowForReplay(spec.recording());
         synchronized (this) {
@@ -659,6 +700,11 @@ public final class ReplayRegistry {
         }
     }
 
+    private boolean uiEvidenceEvicted(DeterminismProfile profile, long expectedEvictions) {
+        return profile.includeUiCorrelations()
+                && runtime.uiCorrelations().evictedFrameCount() != expectedEvictions;
+    }
+
     private Optional<String> baselineProblem(ReplayCaptureSpec spec, FrameSnapshot baseline,
             ExecutionEpochId expectedEpoch) {
         BaselineKind expectedKind = spec.recording().scenarioId().isPresent()
@@ -688,6 +734,12 @@ public final class ReplayRegistry {
     }
 
     private void validateEnvironment(ReplayCaptureSpec spec) {
+        SnapshotComparisonScope scope = spec.profile().comparisonScope();
+        if (scope.entityIds().size() > limits.maximumEntitiesPerFrame()
+                || scope.properties().size() > limits.maximumFactsPerFrame()) {
+            throw new AgentRuntimeException(RuntimeErrorCode.LIMIT_EXCEEDED,
+                    "replay selectors exceed configured evidence limits");
+        }
         if (runtime.status() != RuntimeStatus.RUNNING) {
             throw new AgentRuntimeException(
                     RuntimeErrorCode.INVALID_LIFECYCLE, "replay capture requires a running runtime");
@@ -927,12 +979,13 @@ public final class ReplayRegistry {
         private long observedEntities;
         private long observedFacts;
         private long encodedBytes;
+        private final long uiEvictions;
 
         private MutableCapture(ReplayCaptureSpec spec, long fixedStepNanos,
                 ExecutionEpochId baselineEpoch, FrameId baselineFrame,
                 Optional<ObservableEvidenceComparator.FrameEvidence> baselineEvidence,
                 Optional<String> incompleteReason, long observedEntities, long observedFacts,
-                long encodedBytes) {
+                long encodedBytes, long uiEvictions) {
             this.spec = spec;
             this.fixedStepNanos = fixedStepNanos;
             this.baselineEpoch = baselineEpoch;
@@ -942,6 +995,7 @@ public final class ReplayRegistry {
             this.observedEntities = observedEntities;
             this.observedFacts = observedFacts;
             this.encodedBytes = encodedBytes;
+            this.uiEvictions = uiEvictions;
         }
 
         private void markIncomplete(String reason) {

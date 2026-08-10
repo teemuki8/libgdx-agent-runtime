@@ -28,6 +28,8 @@ public record ReplayCaptureSpec(RecordingSpec recording, DeterminismProfile prof
             throw new IllegalArgumentException(
                     "replay capture requires explicit replay testimony");
         }
+        recording.configuration().fields().forEach(field ->
+                requireScalarConfiguration(field.value()));
         configurationRequirements = configuration(configurationRequirements);
         evidenceRequirements = evidence(evidenceRequirements);
         eventTypes = eventTypes(eventTypes);
@@ -92,6 +94,18 @@ public record ReplayCaptureSpec(RecordingSpec recording, DeterminismProfile prof
     private static void requireLimit(int size, int limit, String name) {
         if (size > limit) {
             throw new IllegalArgumentException(name + " count exceeds the hard bound");
+        }
+    }
+
+    private static void requireScalarConfiguration(RuntimeValue value) {
+        switch (value) {
+            case RuntimeValue.BooleanValue ignored -> { }
+            case RuntimeValue.IntegerValue ignored -> { }
+            case RuntimeValue.DecimalValue ignored -> { }
+            case RuntimeValue.StringValue ignored -> { }
+            case RuntimeValue.EnumValue ignored -> { }
+            default -> throw new IllegalArgumentException(
+                    "replay configuration values must be closed scalars");
         }
     }
 }

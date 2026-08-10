@@ -50,9 +50,11 @@ final class ReplayProtocolTest {
                 success(service.execute(new RuntimeRequest(ProtocolVersion.V2_5, "capabilities",
                         "replay-protocol", new RuntimeCommand.Capabilities()))).result());
         assertTrue(capabilities.supportedTools().contains("runtime_replay"));
-        assertEquals(ProtocolVersion.V2_5, capabilities.capabilityReport().orElseThrow()
+        RuntimeCapability replayCapability = capabilities.capabilityReport().orElseThrow()
                 .capabilities().stream().filter(value -> value.id().equals("replay-execution"))
-                .findFirst().orElseThrow().capabilityVersion());
+                .findFirst().orElseThrow();
+        assertEquals(ProtocolVersion.V2_5, replayCapability.capabilityVersion());
+        assertTrue(replayCapability.modes().contains("exact-fixed-tick"));
 
         RuntimeCommand.ReplayRecordingStart start = startCommand();
         RuntimeRequest startRequest = new RuntimeRequest(
@@ -111,6 +113,12 @@ final class ReplayProtocolTest {
                 valid.recordingId(), valid.replayRequestId(), "origin", "checkpoint",
                 valid.randomSeed(), valid.configuration(), valid.profile(),
                 valid.configurationRequirements(), valid.evidenceRequirements(),
+                valid.eventTypes(), valid.timeoutNanos()));
+        assertThrows(IllegalArgumentException.class, () -> new RuntimeCommand.ReplayRecordingStart(
+                valid.recordingId(), valid.replayRequestId(), "origin", null,
+                valid.randomSeed(), RuntimeValues.object(RuntimeValues.field(
+                        "nested", RuntimeValues.list(RuntimeValues.integer(1)))),
+                valid.profile(), valid.configurationRequirements(), valid.evidenceRequirements(),
                 valid.eventTypes(), valid.timeoutNanos()));
         List<SimulationConfigurationRequirement> oversized = new java.util.AbstractList<>() {
             @Override public SimulationConfigurationRequirement get(int index) {

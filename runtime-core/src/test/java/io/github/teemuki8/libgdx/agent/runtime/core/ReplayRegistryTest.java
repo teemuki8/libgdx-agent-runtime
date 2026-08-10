@@ -157,6 +157,49 @@ final class ReplayRegistryTest {
     }
 
     @Test
+    void rejectsProvablyOverLimitSelectorsBeforeOriginMutation() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        long[] position = {0};
+        int[] resets = {0};
+        AgentRuntime runtime = runtimeBuilder(queue, position)
+                .replayLimits(new ReplayLimits(8, 8, 8, 1, 1,
+                        65_536, Duration.ofSeconds(1).toNanos()))
+                .build();
+        registerRuntimeCapabilities(runtime, position);
+        runtime.entities().register(EntityId.of("other"), EntityType.of("state"),
+                () -> "Other", inspector -> inspector.property("velocity", () -> 0));
+        runtime.scenarios().register("ball-drop", context -> {
+            resets[0]++;
+            position[0] = 0;
+        });
+        runtime.start();
+        pause(runtime, queue);
+        RecordingSpec recording = scenarioSpec("over-limit", "ball-drop").recording();
+        ReplayCaptureSpec tooManyEntities = new ReplayCaptureSpec(recording,
+                new DeterminismProfile(new SnapshotComparisonScope(
+                        List.of(EntityId.of("world"), EntityId.of("other")),
+                        List.of("position"), List.of(), false, false), false),
+                List.of(), List.of(), List.of());
+        ReplayCaptureSpec tooManyFacts = new ReplayCaptureSpec(recording,
+                new DeterminismProfile(new SnapshotComparisonScope(
+                        List.of(EntityId.of("world")),
+                        List.of("fixedStepNanos", "position"), List.of(), false, false), false),
+                List.of(), List.of(), List.of());
+
+        AgentRuntimeException entityLimit = assertThrows(AgentRuntimeException.class,
+                () -> runtime.replays().start(
+                        tooManyEntities, "start-over-limit-entities", TIMEOUT));
+        assertEquals(RuntimeErrorCode.LIMIT_EXCEEDED, entityLimit.code());
+        AgentRuntimeException factLimit = assertThrows(AgentRuntimeException.class,
+                () -> runtime.replays().start(
+                        tooManyFacts, "start-over-limit-facts", TIMEOUT));
+        assertEquals(RuntimeErrorCode.LIMIT_EXCEEDED, factLimit.code());
+        assertEquals(0, resets[0]);
+        assertEquals(new ExecutionEpochId(0), runtime.currentEpoch());
+        assertTrue(queue.isEmpty());
+    }
+
+    @Test
     void failedOriginResetIsRetainedOnceWithoutActivatingRecording() {
         ArrayDeque<Runnable> queue = new ArrayDeque<>();
         long[] position = {0};
@@ -500,6 +543,91 @@ final class ReplayRegistryTest {
                 .result().orElseThrow();
         assertEquals(DeterminismStatus.INCONCLUSIVE, evicted.status());
         assertTrue(evicted.message().contains("evicted"));
+    }
+
+    @Test
+    void automaticallyTruncatedRecordingsCannotReportEqualReplay() {
+        assertAutomaticStopIsInconclusive(new RecordingLimits(4, 8, 32, 32,
+                        1, 65_536, 16, 128), 1,
+                RecordingStopReason.DURATION_LIMIT, "duration");
+        assertAutomaticStopIsInconclusive(new RecordingLimits(4, 8, 1, 32,
+                        Duration.ofSeconds(1).toNanos(), 65_536, 16, 128), 1,
+                RecordingStopReason.ITEM_LIMIT, "items");
+        assertAutomaticStopIsInconclusive(new RecordingLimits(4, 8, 32, 1,
+                        Duration.ofSeconds(1).toNanos(), 65_536, 16, 128), 2,
+                RecordingStopReason.TICK_SPAN_LIMIT, "tick-span");
+        assertAutomaticStopIsInconclusive(new RecordingLimits(4, 8, 32, 32,
+                        Duration.ofSeconds(1).toNanos(), 512, 16, 128), 4,
+                RecordingStopReason.ENCODED_SIZE_LIMIT, "encoded-size");
+    }
+
+    @Test
+    void actionOrInputTriggeredAutoStopCannotFreezeCompleteReplay() {
+        assertCommandTriggeredAutoStopIsInconclusive(true);
+        assertCommandTriggeredAutoStopIsInconclusive(false);
+    }
+
+    @Test
+    void epochTransitionDuringCaptureMakesReplayInconclusiveWithoutAnotherTick() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        long[] position = {0};
+        AgentRuntime runtime = runtime(queue, position);
+        runtime.scenarios().register("origin", context -> position[0] = 0);
+        runtime.scenarios().register("other", context -> position[0] = 99);
+        runtime.start();
+        pause(runtime, queue);
+        runtime.replays().start(scenarioSpec("epoch-change", "origin"),
+                "start-epoch-change", TIMEOUT);
+        queue.removeFirst().run();
+
+        runtime.scenarios().reset("other", "reset-other", TIMEOUT);
+        queue.removeFirst().run();
+        runtime.recordings().stop("epoch-change", "stop-epoch-change", TIMEOUT);
+        queue.removeFirst().run();
+
+        runtime.replays().execute("epoch-change", "execute-epoch-change", TIMEOUT);
+        queue.removeFirst().run();
+        ReplayResult result = runtime.replays().execute(
+                "epoch-change", "execute-epoch-change", TIMEOUT).result().orElseThrow();
+
+        assertEquals(DeterminismStatus.INCONCLUSIVE, result.status());
+        assertTrue(result.message().contains("epoch"));
+    }
+
+    @Test
+    void uiCorrelationEvictionDuringExecutionMakesReplayInconclusive() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        long[] position = {0};
+        int[] resets = {0};
+        AgentRuntime runtime = runtimeBuilder(queue, position)
+                .uiCorrelationLimits(new UiCorrelationLimits(8, 8, 1, 64))
+                .build();
+        registerRuntimeCapabilities(runtime, position);
+        runtime.scenarios().register("ui-origin", context -> {
+            position[0] = 0;
+            resets[0]++;
+            runtime.uiCorrelations().recordFrame(new UiFrameCorrelation(
+                    runtime.currentEpoch(), new FrameId(resets[0]), "ui",
+                    Optional.of("ui-" + resets[0]), Optional.empty()));
+        });
+        runtime.start();
+        pause(runtime, queue);
+        ReplayCaptureSpec base = scenarioSpec("ui-eviction", "ui-origin");
+        ReplayCaptureSpec spec = new ReplayCaptureSpec(base.recording(),
+                new DeterminismProfile(base.profile().comparisonScope(), true),
+                base.configurationRequirements(), base.evidenceRequirements(), base.eventTypes());
+        runtime.replays().start(spec, "start-ui-eviction", TIMEOUT);
+        queue.removeFirst().run();
+        runtime.recordings().stop("ui-eviction", "stop-ui-eviction", TIMEOUT);
+        queue.removeFirst().run();
+
+        runtime.replays().execute("ui-eviction", "execute-ui-eviction", TIMEOUT);
+        queue.removeFirst().run();
+        ReplayResult result = runtime.replays().execute(
+                "ui-eviction", "execute-ui-eviction", TIMEOUT).result().orElseThrow();
+
+        assertEquals(DeterminismStatus.INCONCLUSIVE, result.status());
+        assertTrue(result.message().contains("UI correlation evidence was evicted"));
     }
 
     @Test
@@ -854,6 +982,91 @@ final class ReplayRegistryTest {
         assertEquals(epochBeforeTimeout, runtime.currentEpoch().value());
     }
 
+    @Test
+    void deadlineAfterZeroTickBaselineCannotReportEqualOrDiverged() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        long[] position = {0};
+        long[] now = {1};
+        boolean[] expire = {false};
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("zero-tick-replay-deadline"))
+                .clock(() -> now[0])
+                .commandDispatcher(queue::addLast)
+                .build();
+        registerRuntimeCapabilities(runtime, position);
+        runtime.scenarios().register("deadline-origin", context -> {
+            position[0] = expire[0] ? 99 : 0;
+            if (expire[0]) {
+                now[0] = Duration.ofSeconds(2).toNanos();
+            }
+        });
+        runtime.start();
+        pause(runtime, queue);
+        runtime.replays().start(scenarioSpec("zero-tick-deadline", "deadline-origin"),
+                "start-zero-tick-deadline", TIMEOUT);
+        queue.removeFirst().run();
+        runtime.recordings().stop(
+                "zero-tick-deadline", "stop-zero-tick-deadline", TIMEOUT);
+        queue.removeFirst().run();
+        expire[0] = true;
+
+        runtime.replays().execute(
+                "zero-tick-deadline", "execute-zero-tick-deadline", TIMEOUT);
+        queue.removeFirst().run();
+        ReplayResult result = runtime.replays().execute(
+                "zero-tick-deadline", "execute-zero-tick-deadline", TIMEOUT)
+                .result().orElseThrow();
+
+        assertEquals(DeterminismStatus.INCONCLUSIVE, result.status());
+        assertTrue(result.message().contains("deadline"));
+        assertEquals(0, result.bounds().requestedTicks());
+    }
+
+    @Test
+    void deadlineCrossedInsideFinalTickCannotReportEqual() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        long[] position = {0};
+        long[] now = {1};
+        boolean[] expireOnTick = {false};
+        AgentRuntime runtime = AgentRuntime.builder()
+                .sessionId(SessionId.of("tick-replay-deadline"))
+                .clock(() -> now[0])
+                .commandDispatcher(queue::addLast)
+                .build();
+        runtime.simulation().register(SimulationTimelineSpec.fixedStep(STEP));
+        runtime.entities().register(EntityId.of("world"), EntityType.of("state"),
+                () -> "World", inspector -> inspector
+                        .property("fixedStepNanos", () -> STEP)
+                        .property("position", () -> position[0]));
+        runtime.controls().register(SimulationControllerSpec.builder()
+                .pause(() -> {}).resume(() -> {}).acknowledgedTick(delta -> {
+                    position[0]++;
+                    if (expireOnTick[0]) {
+                        now[0] = Duration.ofSeconds(2).toNanos();
+                    }
+                    return delta;
+                }).build());
+        runtime.scenarios().register("deadline-origin", context -> position[0] = 0);
+        runtime.start();
+        pause(runtime, queue);
+        runtime.replays().start(scenarioSpec("tick-deadline", "deadline-origin"),
+                "start-tick-deadline", TIMEOUT);
+        queue.removeFirst().run();
+        advance(runtime, queue, "capture-tick-deadline");
+        runtime.recordings().stop("tick-deadline", "stop-tick-deadline", TIMEOUT);
+        queue.removeFirst().run();
+        expireOnTick[0] = true;
+
+        runtime.replays().execute("tick-deadline", "execute-tick-deadline", TIMEOUT);
+        queue.removeFirst().run();
+        ReplayResult result = runtime.replays().execute(
+                "tick-deadline", "execute-tick-deadline", TIMEOUT).result().orElseThrow();
+
+        assertEquals(DeterminismStatus.INCONCLUSIVE, result.status());
+        assertTrue(result.message().contains("deadline"));
+        assertEquals(0, result.bounds().completedTicks());
+    }
+
     private static AgentRuntime runtime(ArrayDeque<Runnable> queue, long[] position) {
         AgentRuntime runtime = runtimeBuilder(queue, position).build();
         registerRuntimeCapabilities(runtime, position);
@@ -891,6 +1104,80 @@ final class ReplayRegistryTest {
         queue.removeFirst().run();
         runtime.recordings().stop(recordingId, "stop-" + recordingId, TIMEOUT);
         queue.removeFirst().run();
+    }
+
+    private static void assertAutomaticStopIsInconclusive(RecordingLimits limits,
+            int advances, RecordingStopReason expectedReason, String suffix) {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        long[] position = {0};
+        AgentRuntime runtime = runtimeBuilder(queue, position).recordingLimits(limits).build();
+        registerRuntimeCapabilities(runtime, position);
+        runtime.scenarios().register("ball-drop", context -> position[0] = 0);
+        runtime.start();
+        pause(runtime, queue);
+        String recordingId = "auto-" + suffix;
+        runtime.replays().start(scenarioSpec(recordingId, "ball-drop"),
+                "start-" + recordingId, TIMEOUT);
+        queue.removeFirst().run();
+        for (int index = 0; index < advances; index++) {
+            advance(runtime, queue, "advance-" + suffix + '-' + index);
+        }
+
+        RecordingMetadata metadata = runtime.recordings().get(recordingId, 0, 16).metadata();
+        assertEquals(expectedReason, metadata.stopReason());
+        assertFalse(metadata.reproductionEvidenceComplete());
+        runtime.replays().execute(recordingId, "execute-" + recordingId, TIMEOUT);
+        queue.removeFirst().run();
+        ReplayResult result = runtime.replays().execute(
+                recordingId, "execute-" + recordingId, TIMEOUT).result().orElseThrow();
+        assertEquals(DeterminismStatus.INCONCLUSIVE, result.status());
+        assertTrue(result.message().contains("recording"));
+    }
+
+    private static void assertCommandTriggeredAutoStopIsInconclusive(boolean action) {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        long[] position = {0};
+        AgentRuntime runtime = runtimeBuilder(queue, position)
+                .recordingLimits(new RecordingLimits(4, 8, 32, 32,
+                        Duration.ofSeconds(1).toNanos(), 512, 16, 128))
+                .build();
+        registerRuntimeCapabilities(runtime, position);
+        if (action) {
+            runtime.actions().register(ActionSpec.builder("large-action")
+                    .requiredString("value").handler(parameters -> {}).build());
+        } else {
+            runtime.inputs().register(InputSpec.builder("large-input")
+                    .requiredString("value").handler(parameters -> {}).build());
+        }
+        runtime.scenarios().register("ball-drop", context -> position[0] = 0);
+        runtime.start();
+        pause(runtime, queue);
+        String kind = action ? "action" : "input";
+        String recordingId = kind + "-auto-stop";
+        runtime.replays().start(scenarioSpec(recordingId, "ball-drop"),
+                "start-" + recordingId, TIMEOUT);
+        queue.removeFirst().run();
+        RuntimeValue.ObjectValue parameters = RuntimeValues.object(
+                RuntimeValues.field("value", RuntimeValues.string("x".repeat(128))));
+        if (action) {
+            runtime.actions().invoke("large-action", "large-action-request",
+                    parameters, Optional.empty(), TIMEOUT);
+        } else {
+            runtime.inputs().inject("large-input", "large-input-request", parameters,
+                    OptionalLong.of(runtime.controls().currentTick() + 1), TIMEOUT);
+        }
+        queue.removeFirst().run();
+        RecordingMetadata metadata = runtime.recordings().get(recordingId, 0, 16).metadata();
+        assertEquals(RecordingStopReason.ENCODED_SIZE_LIMIT, metadata.stopReason());
+        if (!action) {
+            advance(runtime, queue, "clear-large-input");
+        }
+        runtime.replays().execute(recordingId, "execute-" + recordingId, TIMEOUT);
+        queue.removeFirst().run();
+        ReplayResult result = runtime.replays().execute(
+                recordingId, "execute-" + recordingId, TIMEOUT).result().orElseThrow();
+        assertEquals(DeterminismStatus.INCONCLUSIVE, result.status());
+        assertTrue(result.message().contains("recording"));
     }
 
     private static void pause(AgentRuntime runtime, ArrayDeque<Runnable> queue) {

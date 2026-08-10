@@ -5,8 +5,10 @@ the runtime. Every public Java API, protocol/MCP contract, dependency, or agent-
 change must update its affected recipe in the same pull request. Examples are exercised by the
 repository fixture tests.
 
-The simulation timeline, fixed-step, assertion, determinism, and replay APIs and protocols 2.1-2.5
-described below are available in release 2.1.0. Earlier 2.0.0 artifacts do not contain them.
+The simulation timeline, fixed-step, assertion, and determinism APIs through protocol 2.4 are
+available in release 2.1.0. Protocol 2.5 and replay execution are unreleased and currently require
+the repository development version, `2.1.1-SNAPSHOT`. Earlier 2.0.0 artifacts do not contain the
+released 2.1 capabilities.
 
 ## Task index
 
@@ -26,16 +28,17 @@ non-published `runtime-examples` module as ordinary consumers of the public arti
 | Create or restore a checkpoint | [Run controlled scenarios and input](#run-controlled-scenarios-and-input) | [`ControlledWorkflowExample.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/ControlledWorkflowExample.java) |
 | Evaluate an assertion | [Run controlled scenarios and input](#run-controlled-scenarios-and-input) | frame and simulation assertions in the transcript |
 | Record bounded execution | [Run controlled scenarios and input](#run-controlled-scenarios-and-input) | recording retrieval in `ControlledWorkflowExample` |
-| Execute a replay-ready recording | [Capture and execute deterministic replay](#capture-and-execute-deterministic-replay) | Java and MCP `EQUAL` paths in `ControlledWorkflowExample` |
+| Execute a replay-ready recording | [Capture and execute deterministic replay](#capture-and-execute-deterministic-replay) | Java and MCP `EQUAL` and `DIVERGED` paths in `ControlledWorkflowExample` |
 | Compare deterministic reruns | [Run controlled scenarios and input](#run-controlled-scenarios-and-input) | selected `EQUAL` result in both controlled examples |
 | Correlate runtime and UI evidence | [Frame correlation](frame-correlation.md) | explicit `UiFrameCorrelation`, never guessed frames |
 | Connect an MCP coding agent | [Host same-JVM stdio MCP](#host-same-jvm-stdio-mcp) | [`SameJvmMcpApplication.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/SameJvmMcpApplication.java) and [`controlled-workflow.json`](../../runtime-examples/src/main/resources/transcripts/controlled-workflow.json) |
 | Interpret missing, bounded, or failed evidence | [Diagnose incomplete and failed evidence](#diagnose-incomplete-and-failed-evidence) | `AgentCookbookContractTest` and runtime fixture regressions |
 | Build a deterministic Box2D game | [Use the deterministic Box2D example](#use-the-deterministic-box2d-example) | [`DeterministicBox2dExample.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/DeterministicBox2dExample.java) |
 
-Use release `2.1.0` for every recipe in this cookbook. The examples module itself is test
-scaffolding and is never a dependency or published artifact. Repository contributors use the
-next development version, `2.1.1-SNAPSHOT`.
+Use release `2.1.0` for recipes through protocol 2.4. The replay recipe documents the unreleased
+2.5 contract and must not be presented as available from Maven Central until a later publication is
+explicitly authorized and verified. The examples module itself is test scaffolding and is never a
+dependency or published artifact. Repository contributors use `2.1.1-SNAPSHOT`.
 
 ## Instrument and inspect state
 
@@ -212,6 +215,11 @@ or truncated evidence, skipped/non-fixed/unacknowledged ticks, actions, failed o
 eviction, timeout, and bounded application failure. Application callback evidence never contains a
 serialized stack trace.
 
+The compiled DIVERGED path in `ControlledWorkflowExample` uses a second application-owned
+scenario whose registered input behavior changes between capture and replay. Its tested result is
+`SIMULATION_TICK` at epoch tick 1 with zero prior completed replay ticks. This deliberately reports
+the first structural mismatch without claiming why the application behavior changed.
+
 The checkpoint form changes only the origin fields: `scenarioId` is empty and `checkpointId` names
 one retained opaque application checkpoint. Its seed/configuration remain testimony; baseline
 comparison detects a bad restore. The application must restore all state that affects its selected
@@ -245,10 +253,10 @@ server = RuntimeMcpServer.open(
 Send MCP `initialize`, `notifications/initialized`, then closed `tools/call` requests. The tested
 [`controlled-workflow.json`](../../runtime-examples/src/main/resources/transcripts/controlled-workflow.json)
 transcript covers sessions, capabilities, scenarios, reset, pause, replay-ready capture, scheduled
-input, configured-step advance, entity/event inspection, frame and simulation assertions, replay,
-and simulation determinism.
-Representative terminal results include command `SUCCEEDED`, assertion `PASS`, and selected
-comparison `EQUAL` with a null divergence.
+input, configured-step advance, entity/event inspection, frame and simulation assertions, equal and
+first-divergence replay, and simulation determinism. Representative terminal results include
+command `SUCCEEDED`, assertion `PASS`, selected comparison `EQUAL` with a null divergence, and
+`DIVERGED` at `SIMULATION_TICK` epoch tick 1.
 
 `System.out` is exclusively newline-framed JSON-RPC. Put human logs on stderr or in a bounded file.
 The game owns dispatch via `Gdx.app.postRunnable`; the server creates no game loop. Inputs, nesting,

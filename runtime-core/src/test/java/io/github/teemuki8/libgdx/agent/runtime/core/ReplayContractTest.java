@@ -84,6 +84,14 @@ final class ReplayContractTest {
         assertThrows(IllegalArgumentException.class, () -> new ReplayCaptureSpec(
                 recording(Optional.of("ball-drop"), Optional.empty(), true), profile(false),
                 List.of(), List.of(), List.of(EventType.of("box2d.contact.begin"))));
+
+        RecordingSpec nestedConfiguration = new RecordingSpec(
+                "nested-configuration", "2.5", List.of(), Optional.of("ball-drop"),
+                Optional.empty(), OptionalLong.empty(), RuntimeValues.object(
+                        RuntimeValues.field("nested", RuntimeValues.list(
+                                RuntimeValues.integer(1)))), true);
+        assertThrows(IllegalArgumentException.class, () -> new ReplayCaptureSpec(
+                nestedConfiguration, profile(false), List.of(), List.of(), List.of()));
     }
 
     @Test

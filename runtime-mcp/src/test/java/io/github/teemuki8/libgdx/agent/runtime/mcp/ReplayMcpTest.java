@@ -100,6 +100,13 @@ final class ReplayMcpTest {
                     .get("properties") instanceof Map<?, ?> profileProperties
                             ? profileProperties.get("comparisonScope") : null);
             assertClosedArrayItems(startProperties.get("configuration"));
+            Map<?, ?> configurationItems = (Map<?, ?>) ((Map<?, ?>)
+                    startProperties.get("configuration")).get("items");
+            Map<?, ?> configurationProperties = (Map<?, ?>) configurationItems.get("properties");
+            assertTrue(((Map<?, ?>) configurationProperties.get("value"))
+                    .containsKey("anyOf"));
+            assertFalse(configurationProperties.get("value").toString().contains("array"));
+            assertFalse(configurationProperties.get("value").toString().contains("object"));
             assertClosedArrayItems(startProperties.get("configurationRequirements"));
             assertClosedArrayItems(startProperties.get("evidenceRequirements"));
             Map<?, ?> definitions = (Map<?, ?>) startTool.inputSchema().get("$defs");
@@ -172,6 +179,11 @@ final class ReplayMcpTest {
                             .get("comparisonScope"),
                     "includeUiCorrelations", false,
                     "unknown", true));
+            assertTrue(handler.handle(call("runtime_replay_recording_start", invalid))
+                    .block(Duration.ofSeconds(5)).isError());
+            invalid = new LinkedHashMap<>(start);
+            invalid.put("configuration", List.of(Map.of(
+                    "name", "nested", "value", List.of(1))));
             assertTrue(handler.handle(call("runtime_replay_recording_start", invalid))
                     .block(Duration.ofSeconds(5)).isError());
             invalid = new LinkedHashMap<>(start);
@@ -300,7 +312,11 @@ final class ReplayMcpTest {
         request.put("originKind", "scenario");
         request.put("originId", "origin");
         request.put("randomSeed", 7);
-        request.put("configuration", List.of());
+        request.put("configuration", List.of(
+                Map.of("name", "enabled", "value", true),
+                Map.of("name", "iterations", "value", 8),
+                Map.of("name", "scale", "value", 1.5),
+                Map.of("name", "quality", "value", "high")));
         request.put("profile", Map.of(
                 "comparisonScope", Map.of(
                         "entityIds", List.of("world"),

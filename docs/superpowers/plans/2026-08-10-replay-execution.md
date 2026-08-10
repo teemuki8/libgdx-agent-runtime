@@ -487,31 +487,31 @@ record Replay(
 
 ### Task 10: Compatibility audit, independent review, and full verification
 
-- [ ] Review `main..HEAD` against the approved design at
+- [x] Review `main..HEAD` against the approved design at
   `docs/superpowers/specs/2026-08-10-replay-execution-design.md` and every checklist item in this
   plan. Confirm there is exactly one origin, one sidecar per replay-ready recording, baseline-first
   comparison, contiguous ticks, stable input order, first-divergence stop, and explicit incomplete
   evidence for every invalid condition.
-- [ ] Inspect all new public records/methods for defensive copies, validation, stable ordering,
+- [x] Inspect all new public records/methods for defensive copies, validation, stable ordering,
   warning-free Javadocs, hard bounds, closed enums, and no leaked mutable/provider/native values.
-- [ ] Inspect module dependencies and implementation for reflection, arbitrary serialization,
+- [x] Inspect module dependencies and implementation for reflection, arbitrary serialization,
   filesystem/network/listener/thread additions, inferred causality, checkpoint state inspection,
   action replay, or changes to the schema-1 `Recording` shape. Remove any such scope drift.
-- [ ] Run all focused new suites once more:
+- [x] Run all focused new suites once more:
   `./gradlew :runtime-core:test --tests '*Replay*' :runtime-protocol:test --tests '*Replay*'
   :runtime-mcp:test --tests '*Replay*' :runtime-examples:test --tests '*ControlledWorkflow*' --tests
   '*McpTranscript*' --tests '*AgentCookbookContract*' --warning-mode=fail`.
-- [ ] Run `.agents/skills/libgdx-agent-runtime-dev/scripts/verify.sh full` and require its
+- [x] Run `.agents/skills/libgdx-agent-runtime-dev/scripts/verify.sh full` and require its
   Xvfb-backed `clean check javadoc --warning-mode=fail` gate to pass from a fresh build.
-- [ ] Run
+- [x] Run
   `jdeps --multi-release 25 --print-module-deps runtime-core/build/libs/runtime-core-*.jar` and
   require exactly `java.base`.
-- [ ] Run `git diff --check`, inspect `git status --short`, and confirm the branch contains only the
+- [x] Run `git diff --check`, inspect `git status --short`, and confirm the branch contains only the
   approved replay slice plus its design/plan/docs, with no generated junk, credentials, publish
   task, or unrelated user change.
-- [ ] Perform a fresh exact-head review after the final fix. Any Critical or Important finding gets
+- [x] Perform a fresh exact-head review after the final fix. Any Critical or Important finding gets
   a focused failing regression first, the smallest fix, the relevant focused gate, and another full
   gate before completion.
-- [ ] Commit any review-only corrections with a narrowly descriptive message. Do not push, open a
+- [x] Commit any review-only corrections with a narrowly descriptive message. Do not push, open a
   pull request, tag, stage, or publish; report the verified local branch/head and wait for explicit
   distribution authorization.

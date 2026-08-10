@@ -272,8 +272,9 @@ public final class RecordingRegistry {
         stopping.reconciling = true;
         reconcileRequests(stopping);
         stopping.reconciling = false;
-        runtime.replays().freeze(recordingId);
         RecordingStopReason effectiveReason = stopping.forcedStopReason.orElse(reason);
+        runtime.replays().freeze(
+                recordingId, effectiveReason, stopping.truncations.isEmpty());
         List<RecordingEntry> entries = List.copyOf(stopping.entries.values());
         RecordingMetadata preliminary = metadata(
                 stopping, effectiveReason, entries.size(), 0);

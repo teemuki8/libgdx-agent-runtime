@@ -21,6 +21,7 @@ import io.github.teemuki8.libgdx.agent.runtime.core.RecordingInputEntry;
 import io.github.teemuki8.libgdx.agent.runtime.core.RecordingSpec;
 import io.github.teemuki8.libgdx.agent.runtime.core.RecordingTickEntry;
 import io.github.teemuki8.libgdx.agent.runtime.core.ReplayCaptureSpec;
+import io.github.teemuki8.libgdx.agent.runtime.core.ReplayResult;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import io.github.teemuki8.libgdx.agent.runtime.core.SessionId;
@@ -56,6 +57,8 @@ public final class ControlledWorkflowExample implements AutoCloseable {
     private final LibGdxFixedStepSimulation simulation;
     private double positionX;
     private double velocityX;
+    private double velocityScale = 1;
+    private int divergenceResets;
     private boolean closed;
 
     private ControlledWorkflowExample(ApplicationCommandDispatcher dispatcher,
@@ -73,7 +76,7 @@ public final class ControlledWorkflowExample implements AutoCloseable {
         runtime.inputs().register(InputSpec.builder("set-velocity")
                 .description("Sets horizontal velocity before an exact simulation tick")
                 .requiredDecimal("velocityX")
-                .handler(parameters -> velocityX = parameters
+                .handler(parameters -> velocityX = velocityScale * parameters
                         .requiredDecimal("velocityX").doubleValue())
                 .build());
         runtime.checkpoints().register(new CheckpointProvider() {
@@ -96,6 +99,16 @@ public final class ControlledWorkflowExample implements AutoCloseable {
                 context -> {
                     positionX = 0;
                     velocityX = 0;
+                    velocityScale = 1;
+                    runtime.fixedStepSimulation().clearAccumulator();
+                });
+        runtime.scenarios().register("walk-divergence",
+                "Changes application input behavior between capture and replay",
+                context -> {
+                    positionX = 0;
+                    velocityX = 0;
+                    divergenceResets++;
+                    velocityScale = divergenceResets == 1 ? 1 : 2;
                     runtime.fixedStepSimulation().clearAccumulator();
                 });
         simulation = LibGdxFixedStepSimulation.acknowledged(runtime,
@@ -164,7 +177,8 @@ public final class ControlledWorkflowExample implements AutoCloseable {
                 "start", "Before scheduled movement", "workflow-checkpoint-create", TIMEOUT);
         drainAll();
 
-        ReplayCaptureSpec replayCaptureSpec = replayCaptureSpec();
+        ReplayCaptureSpec replayCaptureSpec = replayCaptureSpec(
+                "walk-recording", "walk");
         runtime.replays().start(
                 replayCaptureSpec, "workflow-replay-capture-start", TIMEOUT);
         drainAll();
@@ -196,6 +210,8 @@ public final class ControlledWorkflowExample implements AutoCloseable {
                 "walk-recording", "workflow-replay-execute", TIMEOUT)
                 .result().orElseThrow();
 
+        var divergentReplay = runDivergentReplay();
+
         SimulationDeterminismSpec determinismSpec = determinismSpec(velocity);
         runtime.determinism().checkSimulation(
                 determinismSpec, "workflow-determinism", TIMEOUT);
@@ -221,7 +237,7 @@ public final class ControlledWorkflowExample implements AutoCloseable {
                         .count()),
                 Math.toIntExact(entries.stream().filter(RecordingTickEntry.class::isInstance)
                         .count()), replay.status(), replay.bounds().completedTicks(),
-                determinism.status(), restored, correlated);
+                divergentReplay.status(), determinism.status(), restored, correlated);
     }
 
     /** Runs the queued example and writes only human-readable diagnostics to stderr. */
@@ -271,12 +287,35 @@ public final class ControlledWorkflowExample implements AutoCloseable {
                 List.of(), List.of(), List.of());
     }
 
-    private static ReplayCaptureSpec replayCaptureSpec() {
+    private ReplayResult runDivergentReplay() {
+        ReplayCaptureSpec capture = replayCaptureSpec(
+                "walk-divergent-recording", "walk-divergence");
+        runtime.replays().start(
+                capture, "workflow-divergent-replay-capture-start", TIMEOUT);
+        drainAll();
+        long targetTick = runtime.controls().currentTick() + 1;
+        runtime.inputs().inject("set-velocity", "workflow-divergent-input",
+                velocityParameters(2), OptionalLong.of(targetTick), TIMEOUT);
+        drainAll();
+        runtime.controls().advanceFixed("workflow-divergent-advance", 1, TIMEOUT);
+        drainAll();
+        runtime.recordings().stop("walk-divergent-recording",
+                "workflow-divergent-recording-stop", TIMEOUT);
+        drainAll();
+        runtime.replays().execute("walk-divergent-recording",
+                "workflow-divergent-replay-execute", TIMEOUT);
+        drainAll();
+        return runtime.replays().execute("walk-divergent-recording",
+                "workflow-divergent-replay-execute", TIMEOUT).result().orElseThrow();
+    }
+
+    private static ReplayCaptureSpec replayCaptureSpec(
+            String recordingId, String scenarioId) {
         SimulationDeterminismSpec template = determinismSpec(velocityParameters(2));
         RecordingSpec recording = new RecordingSpec(
-                "walk-recording", "2.5",
+                recordingId, "2.5",
                 List.of(new RecordingCapabilityVersion("fixed-step-simulation", "2.2")),
-                Optional.of("walk"), Optional.empty(), OptionalLong.of(7),
+                Optional.of(scenarioId), Optional.empty(), OptionalLong.of(7),
                 RuntimeValues.object(), true);
         return new ReplayCaptureSpec(recording, template.execution().profile(),
                 template.configurationRequirements(), template.evidenceRequirements(),
@@ -317,7 +356,7 @@ public final class ControlledWorkflowExample implements AutoCloseable {
     public record WorkflowResult(CommandState resetState, int completedTicks,
             long firstAppliedEpochTick, String expectedPosition, String wrongPosition,
             int recordedInputs, int recordedTicks, DeterminismStatus replay, int replayedTicks,
-            DeterminismStatus determinism,
+            DeterminismStatus divergentReplay, DeterminismStatus determinism,
             RuntimeValue.Vector2Value restoredPosition, boolean tickFrameCorrelated) {
         /** Validates required immutable evidence. */
         public WorkflowResult {
@@ -325,6 +364,7 @@ public final class ControlledWorkflowExample implements AutoCloseable {
             Objects.requireNonNull(expectedPosition, "expectedPosition");
             Objects.requireNonNull(wrongPosition, "wrongPosition");
             Objects.requireNonNull(replay, "replay");
+            Objects.requireNonNull(divergentReplay, "divergentReplay");
             Objects.requireNonNull(determinism, "determinism");
             Objects.requireNonNull(restoredPosition, "restoredPosition");
         }

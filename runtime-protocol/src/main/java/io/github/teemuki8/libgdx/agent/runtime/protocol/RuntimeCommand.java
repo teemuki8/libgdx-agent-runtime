@@ -2,6 +2,7 @@ package io.github.teemuki8.libgdx.agent.runtime.protocol;
 
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
+import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue;
 
 /** Explicit allowlisted versioned command union. */
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "type")
@@ -613,6 +614,8 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
                         "replay start requires exactly one scenario or checkpoint origin");
             }
             java.util.Objects.requireNonNull(configuration, "configuration");
+            configuration.fields().forEach(field -> requireReplayConfigurationValue(
+                    field.value()));
             java.util.Objects.requireNonNull(profile, "profile");
             java.util.Objects.requireNonNull(
                     configurationRequirements, "configurationRequirements");
@@ -646,6 +649,18 @@ public sealed interface RuntimeCommand permits RuntimeCommand.Sessions, RuntimeC
     private static void validateRange(long from, long to) {
         if (from < 0 || to < from) {
             throw new IllegalArgumentException("frame range must be non-negative and ascending");
+        }
+    }
+
+    private static void requireReplayConfigurationValue(RuntimeValue value) {
+        switch (value) {
+            case RuntimeValue.BooleanValue ignored -> { }
+            case RuntimeValue.IntegerValue ignored -> { }
+            case RuntimeValue.DecimalValue ignored -> { }
+            case RuntimeValue.StringValue ignored -> { }
+            case RuntimeValue.EnumValue ignored -> { }
+            default -> throw new IllegalArgumentException(
+                    "replay configuration values must be closed scalars");
         }
     }
 

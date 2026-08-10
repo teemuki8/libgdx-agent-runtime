@@ -606,7 +606,7 @@ public final class RuntimeToolCatalog {
 
     private static Map<String, Object> replayRecordingStartInput() {
         Map<String, Object> configurationEntry = object(
-                Map.of("name", string(), "value", naturalValue()),
+                Map.of("name", string(), "value", scalarValue()),
                 List.of("name", "value"));
         Map<String, Object> profile = object(Map.of(
                 "comparisonScope", comparisonScope(),
@@ -874,6 +874,11 @@ public final class RuntimeToolCatalog {
     private static Map<String, Object> naturalValue() {
         return Map.of("type", List.of(
                 "null", "boolean", "integer", "number", "string", "array", "object"));
+    }
+
+    private static Map<String, Object> scalarValue() {
+        return Map.of("anyOf", List.of(
+                bool(), integer(Long.MIN_VALUE, Long.MAX_VALUE), number(), string()));
     }
 
     private static Map<String, Object> simulationValueSchema() {

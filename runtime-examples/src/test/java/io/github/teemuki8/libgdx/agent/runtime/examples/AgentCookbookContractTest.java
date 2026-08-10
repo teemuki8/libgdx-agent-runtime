@@ -69,6 +69,8 @@ class AgentCookbookContractTest {
         assertTrue(cookbook.contains("runtime_replay_recording_start"));
         assertTrue(cookbook.contains("runtime_replay"));
         assertTrue(cookbook.contains("ordinary recording is not executable replay evidence"));
+        assertTrue(cookbook.contains("Protocol 2.5 and replay execution are unreleased"));
+        assertTrue(cookbook.contains("DIVERGED path in `ControlledWorkflowExample`"));
         assertLocalLinksResolve(cookbook);
         assertCurrentConsumerVersions();
 

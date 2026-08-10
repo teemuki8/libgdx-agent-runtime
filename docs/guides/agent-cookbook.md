@@ -98,9 +98,9 @@ Trace only decisions the application explicitly recorded:
 {"name":"runtime_decisions","arguments":{"sessionId":"game","fromFrame":0,"toFrame":60,"decisionType":"target.selected","actor":"player","limit":32}}
 ```
 
-The application-side `beginDecision`, candidate, chosen/rejected, and close sequence plus the exact
-result schema are in [Decision tracing](decision-tracing.md). The runtime never reconstructs a
-decision from the final entity state.
+The application-side `beginDecision`, candidate, chosen/rejected, and close sequence are in
+[Decision tracing](decision-tracing.md); the exact MCP query is above. The runtime never
+reconstructs a decision from the final entity state.
 
 The MCP equivalents are closed calls such as:
 

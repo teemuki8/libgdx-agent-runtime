@@ -103,7 +103,8 @@ libGDX/LWJGL3/Box2D 1.14.2, Xvfb on Linux.
 **Files:**
 - Create: `runtime-core/src/main/java/io/github/teemuki8/libgdx/agent/runtime/core/ObservableEvidenceComparator.java`
 - Modify: `runtime-core/src/main/java/io/github/teemuki8/libgdx/agent/runtime/core/DeterminismRegistry.java`
-- Modify: `runtime-core/src/main/java/io/github/teemuki8/libgdx/agent/runtime/core/DeterminismCanonicalSize.java`
+- Inspect (unchanged; already package-private and reusable):
+  `runtime-core/src/main/java/io/github/teemuki8/libgdx/agent/runtime/core/DeterminismCanonicalSize.java`
 - Create: `runtime-core/src/test/java/io/github/teemuki8/libgdx/agent/runtime/core/ObservableEvidenceComparatorTest.java`
 - Test: `runtime-core/src/test/java/io/github/teemuki8/libgdx/agent/runtime/core/DeterminismRegistryTest.java`
 - Test: `runtime-core/src/test/java/io/github/teemuki8/libgdx/agent/runtime/core/SimulationDeterminismRegistryTest.java`
@@ -120,23 +121,23 @@ libGDX/LWJGL3/Box2D 1.14.2, Xvfb on Linux.
 - `difference(FrameEvidence, FrameEvidence)` returns the existing first canonical
   `DeterminismDifference`.
 
-- [ ] Add characterization tests that build frames containing entities, facts, events, decisions,
-  UI snapshots, numeric values, selection exclusions, missing evidence, truncations, diagnostics,
-  and low limits. Assert exact normalized ordering, exact first difference, exact counters, and exact
-  incomplete reason currently produced by determinism checks.
-- [ ] Run
+- [x] Add characterization tests that build frames containing entities, numeric facts, events,
+  decisions, UI correlations, missing requirements, diagnostics, and low limits. Assert volatile
+  normalization, exact first-difference priority, exact counters, and exact incomplete reasons while
+  retaining the existing determinism suites for the broader selection/truncation matrix.
+- [x] Run
   `./gradlew :runtime-core:test --tests '*ObservableEvidenceComparatorTest' --warning-mode=fail` and
   observe missing comparator compilation failure.
-- [ ] Move the existing private capture, selection/configuration/evidence validation, comparable
+- [x] Move the existing private capture, selection/configuration/evidence validation, comparable
   records, counters, and difference functions into the package-private comparator. Keep canonical
   byte accounting in `DeterminismCanonicalSize`; do not duplicate JSON serialization or add a public
   abstraction.
-- [ ] Change `DeterminismRegistry` to delegate to the comparator with its existing limits. Preserve
+- [x] Change `DeterminismRegistry` to delegate to the comparator with its existing limits. Preserve
   messages, ordering, timeout semantics, retained operations, status, and every public record shape.
-- [ ] Run the focused comparator and both determinism suites green. Then run
+- [x] Run the focused comparator and both determinism suites green. Then run
   `.agents/skills/libgdx-agent-runtime-dev/scripts/verify.sh core` and require no determinism-test
   changes beyond the new characterization coverage.
-- [ ] Commit `refactor: share deterministic evidence comparison`.
+- [x] Commit `refactor: share deterministic evidence comparison`.
 
 ### Task 3: Replay-ready recording start and baseline capture
 

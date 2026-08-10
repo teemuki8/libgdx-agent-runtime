@@ -3,11 +3,8 @@ package io.github.teemuki8.libgdx.agent.runtime.core;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -19,6 +16,8 @@ public final class DeterminismRegistry {
             "equal for the configured observable state; whole-program determinism is not proven";
     private final AgentRuntime runtime;
     private final DeterminismLimits limits;
+    private final ObservableEvidenceComparator evidenceComparator;
+    private final ObservableEvidenceComparator.Limits evidenceLimits;
     private final LinkedHashMap<String, Evidence> operations = new LinkedHashMap<>();
     private final LinkedHashMap<String, DeterminismSpec> evictedOperations =
             new LinkedHashMap<>();
@@ -32,6 +31,10 @@ public final class DeterminismRegistry {
     DeterminismRegistry(AgentRuntime runtime, DeterminismLimits limits) {
         this.runtime = Objects.requireNonNull(runtime, "runtime");
         this.limits = Objects.requireNonNull(limits, "limits");
+        evidenceComparator = new ObservableEvidenceComparator(runtime);
+        evidenceLimits = new ObservableEvidenceComparator.Limits(
+                limits.maximumEntitiesPerFrame(), limits.maximumFactsPerFrame(),
+                limits.maximumEncodedEvidenceBytes());
     }
 
     /** Submits or polls one at-most-once bounded determinism comparison. */
@@ -169,7 +172,7 @@ public final class DeterminismRegistry {
     private DeterminismResult execute(
             DeterminismSpec spec, long deadline, long executionNanos, String requestId) {
         ArrayList<RunEvidence> runs = new ArrayList<>();
-        Counters counters = new Counters();
+        ExecutionCounters counters = new ExecutionCounters();
         boolean previouslyPaused;
         try {
             previouslyPaused = runtime.controls().pauseForDeterminism();
@@ -191,7 +194,7 @@ public final class DeterminismRegistry {
 
     private DeterminismResult executeWhilePaused(DeterminismSpec spec, long deadline,
             long executionNanos, String requestId, ArrayList<RunEvidence> runs,
-            Counters counters, long uiEvictions) {
+            ExecutionCounters counters, long uiEvictions) {
         try {
             for (int repeat = 0; repeat < spec.repeatCount(); repeat++) {
                 if (expired(deadline)) {
@@ -201,13 +204,13 @@ public final class DeterminismRegistry {
                 FrameId baseline = runtime.scenarios().resetForDeterminism(
                         spec.scenarioId(), new ScenarioResetContext(
                                 OptionalLong.of(spec.randomSeed()), spec.configuration()));
-                ArrayList<FrameEvidence> frames = new ArrayList<>();
+                ArrayList<ObservableEvidenceComparator.FrameEvidence> frames = new ArrayList<>();
                 FrameSnapshot baselineSnapshot = runtime.frame(baseline).orElseThrow();
-                Optional<FrameEvidence> baselineEvidence =
+                Optional<ObservableEvidenceComparator.FrameEvidence> baselineEvidence =
                         capture(baselineSnapshot, spec.profile(), counters);
                 if (baselineEvidence.isEmpty()) {
                     return inconclusive(spec, counters, executionNanos,
-                            counters.incompleteReason.orElse(
+                            counters.incompleteReason().orElse(
                                     "determinism evidence bounds were exceeded"));
                 }
                 frames.add(baselineEvidence.orElseThrow());
@@ -217,20 +220,20 @@ public final class DeterminismRegistry {
                                 "execution deadline elapsed");
                     }
                     FrameSnapshot frame = runtime.controls().tickForDeterminism(spec.deltaNanos());
-                    Optional<FrameEvidence> evidence =
+                    Optional<ObservableEvidenceComparator.FrameEvidence> evidence =
                             capture(frame, spec.profile(), counters);
                     if (evidence.isEmpty()) {
                         return inconclusive(spec, counters, executionNanos,
-                                counters.incompleteReason.orElse(
+                                counters.incompleteReason().orElse(
                                         "determinism evidence bounds were exceeded"));
                     }
                     frames.add(evidence.orElseThrow());
                 }
                 runs.add(new RunEvidence(runtime.currentEpoch(), List.copyOf(frames)));
                 counters.completedRepeats++;
-                if (counters.incompleteReason.isPresent()) {
+                if (counters.incompleteReason().isPresent()) {
                     return inconclusive(spec, counters, executionNanos,
-                            counters.incompleteReason.orElseThrow());
+                            counters.incompleteReason().orElseThrow());
                 }
                 if (spec.profile().includeUiCorrelations()
                         && runtime.uiCorrelations().evictedFrameCount() != uiEvictions) {
@@ -248,7 +251,7 @@ public final class DeterminismRegistry {
     private SimulationDeterminismResult executeSimulation(SimulationDeterminismSpec spec,
             long deadline, long executionNanos, String requestId) {
         ArrayList<SimulationRunEvidence> runs = new ArrayList<>();
-        Counters counters = new Counters();
+        ExecutionCounters counters = new ExecutionCounters();
         try {
             runtime.inputs().beginDeterminism(spec.inputs());
         } catch (RuntimeException | Error failure) {
@@ -280,7 +283,7 @@ public final class DeterminismRegistry {
     private SimulationDeterminismResult executeSimulationWhilePaused(
             SimulationDeterminismSpec spec, long deadline, long executionNanos,
             String requestId, ArrayList<SimulationRunEvidence> runs,
-            Counters counters, long uiEvictions) {
+            ExecutionCounters counters, long uiEvictions) {
         try {
             for (int repeat = 0; repeat < spec.execution().repeatCount(); repeat++) {
                 if (expired(deadline)) {
@@ -307,7 +310,7 @@ public final class DeterminismRegistry {
                 if (capture(baselineSnapshot, spec.execution().profile(), counters,
                         spec.eventTypes()).isEmpty()) {
                     return simulationInconclusive(spec, counters, executionNanos,
-                            counters.incompleteReason.orElse(
+                            counters.incompleteReason().orElse(
                                     "determinism evidence bounds were exceeded"));
                 }
                 ArrayList<SimulationFrameEvidence> frames = new ArrayList<>();
@@ -340,11 +343,12 @@ public final class DeterminismRegistry {
                         return simulationInconclusive(spec, counters, executionNanos,
                                 selectionProblem.orElseThrow());
                     }
-                    Optional<FrameEvidence> evidence = capture(completed.frame(),
+                    Optional<ObservableEvidenceComparator.FrameEvidence> evidence =
+                            capture(completed.frame(),
                             spec.execution().profile(), counters, spec.eventTypes());
                     if (evidence.isEmpty()) {
                         return simulationInconclusive(spec, counters, executionNanos,
-                                counters.incompleteReason.orElse(
+                                counters.incompleteReason().orElse(
                                         "determinism evidence bounds were exceeded"));
                     }
                     frames.add(new SimulationFrameEvidence(
@@ -353,9 +357,9 @@ public final class DeterminismRegistry {
                 runs.add(new SimulationRunEvidence(
                         runtime.currentEpoch(), List.copyOf(frames)));
                 counters.completedRepeats++;
-                if (counters.incompleteReason.isPresent()) {
+                if (counters.incompleteReason().isPresent()) {
                     return simulationInconclusive(spec, counters, executionNanos,
-                            counters.incompleteReason.orElseThrow());
+                            counters.incompleteReason().orElseThrow());
                 }
                 if (spec.execution().profile().includeUiCorrelations()
                         && runtime.uiCorrelations().evictedFrameCount() != uiEvictions) {
@@ -371,7 +375,7 @@ public final class DeterminismRegistry {
     }
 
     private SimulationDeterminismResult compareSimulation(SimulationDeterminismSpec spec,
-            List<SimulationRunEvidence> runs, Counters counters, long executionNanos) {
+            List<SimulationRunEvidence> runs, ExecutionCounters counters, long executionNanos) {
         SimulationRunEvidence reference = runs.getFirst();
         for (int repeat = 1; repeat < runs.size(); repeat++) {
             SimulationRunEvidence candidate = runs.get(repeat);
@@ -379,7 +383,7 @@ public final class DeterminismRegistry {
                 SimulationFrameEvidence left = reference.frames.get(index);
                 SimulationFrameEvidence right = candidate.frames.get(index);
                 Optional<DeterminismDifference> difference =
-                        difference(left.frame, right.frame);
+                        difference(left.frame(), right.frame());
                 if (difference.isPresent()) {
                     return new SimulationDeterminismResult(DeterminismStatus.DIVERGED,
                             "first divergence in selected simulation evidence",
@@ -389,7 +393,7 @@ public final class DeterminismRegistry {
                                             left.tick.simulationTickId(),
                                             right.tick.simulationTickId(),
                                             reference.epoch, candidate.epoch,
-                                            left.frame.frameId, right.frame.frameId,
+                                            left.frame().frameId(), right.frame().frameId(),
                                             difference.orElseThrow())),
                             bounds(spec.execution(), counters, executionNanos), Optional.empty());
                 }
@@ -429,223 +433,46 @@ public final class DeterminismRegistry {
 
     private Optional<String> configurationProblem(FrameSnapshot frame,
             List<SimulationConfigurationRequirement> requirements) {
-        if (!frame.stats().diagnostics().isEmpty() || !frame.stats().truncations().isEmpty()) {
-            return Optional.of("configuration baseline contains diagnostics or truncation");
-        }
-        for (SimulationConfigurationRequirement requirement : requirements) {
-            Optional<EntitySnapshot> entity = entity(frame, requirement.entityId());
-            if (entity.isEmpty() || entity.orElseThrow().truncated()) {
-                return Optional.of("configuration requirement evidence is missing or truncated: "
-                        + requirement.entityId().value() + ':' + requirement.property());
-            }
-            Optional<RuntimeValue> observed = property(
-                    frame, requirement.entityId(), requirement.property());
-            if (!observed.equals(Optional.of(requirement.expected()))) {
-                return Optional.of("configuration requirement does not match baseline: "
-                        + requirement.entityId().value() + ':' + requirement.property());
-            }
-        }
-        return Optional.empty();
+        return evidenceComparator.configurationProblem(frame, requirements);
     }
 
     private Optional<String> evidenceProblem(FrameSnapshot frame,
             List<SimulationEvidenceRequirement> requirements) {
-        for (SimulationEvidenceRequirement requirement : requirements) {
-            Optional<EntitySnapshot> entity = entity(frame, requirement.entityId());
-            if (entity.isEmpty() || entity.orElseThrow().truncated()) {
-                return Optional.of("selected simulation evidence is missing or truncated: "
-                        + requirement.entityId().value() + ':' + requirement.property());
-            }
-            Optional<RuntimeValue> observed = property(
-                    frame, requirement.entityId(), requirement.property());
-            if (!observed.equals(Optional.of(RuntimeValues.bool(true)))) {
-                return Optional.of("selected simulation evidence is incomplete: "
-                        + requirement.entityId().value() + ':' + requirement.property());
-            }
-        }
-        return Optional.empty();
+        return evidenceComparator.evidenceProblem(frame, requirements);
     }
 
     private Optional<String> selectionProblem(
             FrameSnapshot frame, SnapshotComparisonScope scope) {
-        for (EntityId entityId : scope.entityIds()) {
-            Optional<EntitySnapshot> entity = frame.entities().stream()
-                    .filter(candidate -> candidate.id().equals(entityId)).findFirst();
-            if (entity.isEmpty()) {
-                return Optional.of("selected simulation entity is missing: " + entityId.value());
-            }
-            if (entity.orElseThrow().truncated()) {
-                return Optional.of(
-                        "selected simulation entity is truncated: " + entityId.value());
-            }
-        }
-        for (String property : scope.properties()) {
-            boolean present = frame.entities().stream()
-                    .filter(entity -> scope.entityIds().isEmpty()
-                            || scope.entityIds().contains(entity.id()))
-                    .anyMatch(entity -> entity.property(property).isPresent());
-            if (!present) {
-                return Optional.of(
-                        "selected simulation property is missing: " + property);
-            }
-        }
-        return Optional.empty();
+        return evidenceComparator.selectionProblem(frame, scope);
     }
 
-    private static Optional<RuntimeValue> property(
-            FrameSnapshot frame, EntityId entityId, String property) {
-        return entity(frame, entityId).flatMap(value -> value.property(property));
-    }
-
-    private static Optional<EntitySnapshot> entity(FrameSnapshot frame, EntityId entityId) {
-        return frame.entities().stream().filter(value -> value.id().equals(entityId)).findFirst();
-    }
-
-    private Optional<FrameEvidence> capture(
-            FrameSnapshot frame, DeterminismProfile profile, Counters counters) {
+    private Optional<ObservableEvidenceComparator.FrameEvidence> capture(
+            FrameSnapshot frame, DeterminismProfile profile, ExecutionCounters counters) {
         return capture(frame, profile, counters, List.of());
     }
 
-    private Optional<FrameEvidence> capture(FrameSnapshot frame,
-            DeterminismProfile profile, Counters counters, List<EventType> eventTypes) {
-        SnapshotComparisonScope scope = profile.comparisonScope();
-        int entityLimit = limits.maximumEntitiesPerFrame();
-        int factLimit = limits.maximumFactsPerFrame();
-        int selectedEntities = 0;
-        long selectedFacts = 0;
-        long entitiesBytes = 0;
-        for (EntitySnapshot entity : frame.entities()) {
-            if (!scope.entityIds().isEmpty() && !scope.entityIds().contains(entity.id())) {
-                continue;
-            }
-            selectedEntities++;
-            if (counters.observedEntities + selectedEntities > entityLimit) {
-                return countOverrun(counters, selectedEntities, selectedFacts,
-                        "determinism entity count limit exceeded");
-            }
-            entitiesBytes = DeterminismCanonicalSize.add(entitiesBytes,
-                    DeterminismCanonicalSize.entity(
-                            entity.id(), entity.type(), entity.displayName()));
-            long propertyBytes = 0;
-            for (RuntimeValue.Field property : entity.properties()) {
-                if ((scope.properties().isEmpty()
-                        || scope.properties().contains(property.name()))
-                        && !scope.excludedProperties().contains(property.name())) {
-                    selectedFacts++;
-                    if (counters.observedFacts + selectedFacts > factLimit) {
-                        return countOverrun(counters, selectedEntities, selectedFacts,
-                                "determinism fact count limit exceeded");
-                    }
-                    propertyBytes = DeterminismCanonicalSize.add(propertyBytes,
-                            DeterminismCanonicalSize.field(property));
-                }
-            }
-            entitiesBytes = DeterminismCanonicalSize.add(entitiesBytes,
-                    DeterminismCanonicalSize.listPrefix());
-            entitiesBytes = DeterminismCanonicalSize.add(entitiesBytes, propertyBytes);
-            entitiesBytes = DeterminismCanonicalSize.add(entitiesBytes,
-                    DeterminismCanonicalSize.listPrefix());
-        }
-        long eventsBytes = 0;
-        if (scope.includeEvents()) {
-            for (RuntimeEvent event : selectedEvents(frame, eventTypes)) {
-                selectedFacts++;
-                if (counters.observedFacts + selectedFacts > factLimit) {
-                    return countOverrun(counters, selectedEntities, selectedFacts,
-                            "determinism fact count limit exceeded");
-                }
-                ComparableEvent comparable = ComparableEvent.from(event, profile);
-                eventsBytes = DeterminismCanonicalSize.add(eventsBytes,
-                        DeterminismCanonicalSize.event(comparable.type(), comparable.subject(),
-                                comparable.source(), comparable.metadata(),
-                                comparable.attributes()));
-            }
-        }
-        long decisionsBytes = 0;
-        if (scope.includeDecisions()) {
-            for (DecisionTrace decision : frame.decisions()) {
-                selectedFacts++;
-                if (counters.observedFacts + selectedFacts > factLimit) {
-                    return countOverrun(counters, selectedEntities, selectedFacts,
-                            "determinism fact count limit exceeded");
-                }
-                decisionsBytes = DeterminismCanonicalSize.add(decisionsBytes,
-                        DeterminismCanonicalSize.decision(decision));
-            }
-        }
-        long uiBytes = 0;
-        if (profile.includeUiCorrelations()) {
-            for (UiFrameCorrelation correlation : runtime.uiCorrelations().correlationsFor(
-                    frame.executionEpochId(), frame.frameId())) {
-                selectedFacts++;
-                if (counters.observedFacts + selectedFacts > factLimit) {
-                    return countOverrun(counters, selectedEntities, selectedFacts,
-                            "determinism fact count limit exceeded");
-                }
-                uiBytes = DeterminismCanonicalSize.add(uiBytes,
-                        DeterminismCanonicalSize.ui(correlation));
-            }
-        }
-        counters.observeEntities(selectedEntities, entityLimit);
-        counters.observeFacts(selectedFacts, factLimit);
-        long candidateBytes = DeterminismCanonicalSize.frame(frame.frameId(),
-                entitiesBytes, eventsBytes, decisionsBytes, uiBytes);
-        long observedBytes = DeterminismCanonicalSize.add(counters.encodedBytes, candidateBytes);
-        if (observedBytes > limits.maximumEncodedEvidenceBytes()) {
-            counters.incompleteReason = Optional.of(
-                    "encoded determinism evidence limit exceeded");
-            return Optional.empty();
-        }
-        if (!frame.stats().diagnostics().isEmpty() || !frame.stats().truncations().isEmpty()
-                || frame.events().stream().anyMatch(value -> !value.truncations().isEmpty())
-                || frame.decisions().stream().anyMatch(value -> !value.truncations().isEmpty())) {
-            counters.incompleteReason = Optional.of(
-                    "capture diagnostics or truncation could hide a divergence");
-        }
-        List<EntitySnapshot> entities = frame.entities().stream()
-                .filter(entity -> scope.entityIds().isEmpty()
-                        || scope.entityIds().contains(entity.id()))
-                .map(entity -> comparableEntity(entity, scope))
-                .toList();
-        List<ComparableEvent> events = scope.includeEvents()
-                ? selectedEvents(frame, eventTypes).stream()
-                        .map(event -> ComparableEvent.from(event, profile)).toList() : List.of();
-        List<ComparableDecision> decisions = scope.includeDecisions()
-                ? frame.decisions().stream().map(ComparableDecision::from).toList() : List.of();
-        List<ComparableUi> ui = profile.includeUiCorrelations()
-                ? runtime.uiCorrelations().correlationsFor(
-                        frame.executionEpochId(), frame.frameId()).stream()
-                        .map(ComparableUi::from).toList()
-                : List.of();
-        counters.encodedBytes = observedBytes;
-        return Optional.of(new FrameEvidence(
-                frame.frameId(), entities, events, decisions, ui));
-    }
-
-    private static List<RuntimeEvent> selectedEvents(
-            FrameSnapshot frame, List<EventType> eventTypes) {
-        if (eventTypes.isEmpty()) {
-            return frame.events();
-        }
-        return frame.events().stream().filter(event -> eventTypes.contains(event.type())).toList();
+    private Optional<ObservableEvidenceComparator.FrameEvidence> capture(FrameSnapshot frame,
+            DeterminismProfile profile, ExecutionCounters counters, List<EventType> eventTypes) {
+        return evidenceComparator.capture(
+                frame, profile, eventTypes, evidenceLimits, counters.observable);
     }
 
     private DeterminismResult compare(DeterminismSpec spec, List<RunEvidence> runs,
-            Counters counters, long executionNanos) {
+            ExecutionCounters counters, long executionNanos) {
         RunEvidence reference = runs.getFirst();
         for (int repeat = 1; repeat < runs.size(); repeat++) {
             RunEvidence candidate = runs.get(repeat);
             for (int tick = 0; tick < reference.frames.size(); tick++) {
-                FrameEvidence left = reference.frames.get(tick);
-                FrameEvidence right = candidate.frames.get(tick);
+                ObservableEvidenceComparator.FrameEvidence left = reference.frames.get(tick);
+                ObservableEvidenceComparator.FrameEvidence right = candidate.frames.get(tick);
                 Optional<DeterminismDifference> difference = difference(left, right);
                 if (difference.isPresent()) {
                     return new DeterminismResult(
                             DeterminismStatus.DIVERGED,
                             "first divergence in configured observable state",
                             spec.profile(), OptionalInt.of(tick), Optional.of(reference.epoch),
-                            Optional.of(candidate.epoch), Optional.of(left.frameId),
-                            Optional.of(right.frameId), difference,
+                            Optional.of(candidate.epoch), Optional.of(left.frameId()),
+                            Optional.of(right.frameId()), difference,
                             bounds(spec, counters, executionNanos), Optional.empty());
                 }
             }
@@ -656,121 +483,24 @@ public final class DeterminismRegistry {
                 Optional.empty(), bounds(spec, counters, executionNanos), Optional.empty());
     }
 
-    private Optional<DeterminismDifference> difference(FrameEvidence left, FrameEvidence right) {
-        Map<EntityId, EntitySnapshot> leftEntities = index(left.entities);
-        Map<EntityId, EntitySnapshot> rightEntities = index(right.entities);
-        LinkedHashSet<EntityId> entityIds = new LinkedHashSet<>(leftEntities.keySet());
-        entityIds.addAll(rightEntities.keySet());
-        List<EntityId> orderedIds = entityIds.stream().sorted().toList();
-        for (EntityId id : orderedIds) {
-            EntitySnapshot leftEntity = leftEntities.get(id);
-            EntitySnapshot rightEntity = rightEntities.get(id);
-            if (leftEntity == null || rightEntity == null
-                    || !leftEntity.type().equals(rightEntity.type())
-                    || !leftEntity.displayName().equals(rightEntity.displayName())) {
-                return Optional.of(new DeterminismDifference(
-                        DeterminismDifferenceKind.ENTITY_LIFECYCLE, Optional.of(id.value()),
-                        entityIdentity(leftEntity), entityIdentity(rightEntity)));
-            }
-            Optional<DeterminismDifference> property = propertyDifference(leftEntity, rightEntity);
-            if (property.isPresent()) {
-                return property;
-            }
-        }
-        Optional<DeterminismDifference> event = listDifference(
-                DeterminismDifferenceKind.EVENT, "event", left.events, right.events);
-        if (event.isPresent()) {
-            return event;
-        }
-        Optional<DeterminismDifference> decision = listDifference(
-                DeterminismDifferenceKind.DECISION, "decision", left.decisions, right.decisions);
-        if (decision.isPresent()) {
-            return decision;
-        }
-        return listDifference(DeterminismDifferenceKind.UI_CORRELATION,
-                "uiCorrelation", left.ui, right.ui);
+    private Optional<DeterminismDifference> difference(
+            ObservableEvidenceComparator.FrameEvidence left,
+            ObservableEvidenceComparator.FrameEvidence right) {
+        return evidenceComparator.difference(left, right);
     }
 
-    private Optional<DeterminismDifference> propertyDifference(
-            EntitySnapshot left, EntitySnapshot right) {
-        Map<String, RuntimeValue> leftProperties = properties(left);
-        Map<String, RuntimeValue> rightProperties = properties(right);
-        LinkedHashSet<String> names = new LinkedHashSet<>(leftProperties.keySet());
-        names.addAll(rightProperties.keySet());
-        for (String name : names.stream().sorted().toList()) {
-            Optional<RuntimeValue> leftValue = Optional.ofNullable(leftProperties.get(name));
-            Optional<RuntimeValue> rightValue = Optional.ofNullable(rightProperties.get(name));
-            if (!leftValue.equals(rightValue)) {
-                return Optional.of(new DeterminismDifference(
-                        DeterminismDifferenceKind.PROPERTY,
-                        Optional.of(left.id().value() + ':' + name), leftValue, rightValue));
-            }
-        }
-        return Optional.empty();
-    }
-
-    private static <T> Optional<DeterminismDifference> listDifference(
-            DeterminismDifferenceKind kind, String name, List<T> left, List<T> right) {
-        int maximum = Math.max(left.size(), right.size());
-        for (int index = 0; index < maximum; index++) {
-            Optional<T> leftValue = index < left.size()
-                    ? Optional.of(left.get(index)) : Optional.empty();
-            Optional<T> rightValue = index < right.size()
-                    ? Optional.of(right.get(index)) : Optional.empty();
-            if (!leftValue.equals(rightValue)) {
-                return Optional.of(new DeterminismDifference(kind,
-                        Optional.of(name + ':' + index),
-                        leftValue.map(value -> RuntimeValues.string(value.toString())),
-                        rightValue.map(value -> RuntimeValues.string(value.toString()))));
-            }
-        }
-        return Optional.empty();
-    }
-
-    private static EntitySnapshot comparableEntity(
-            EntitySnapshot entity, SnapshotComparisonScope scope) {
-        List<RuntimeValue.Field> properties = entity.properties().stream()
-                .filter(property -> scope.properties().isEmpty()
-                        || scope.properties().contains(property.name()))
-                .filter(property -> !scope.excludedProperties().contains(property.name()))
-                .toList();
-        return new EntitySnapshot(
-                entity.id(), entity.type(), entity.displayName(), properties, List.of());
-    }
-
-    private static Map<EntityId, EntitySnapshot> index(List<EntitySnapshot> entities) {
-        LinkedHashMap<EntityId, EntitySnapshot> index = new LinkedHashMap<>();
-        entities.stream().sorted(Comparator.comparing(EntitySnapshot::id))
-                .forEach(value -> index.put(value.id(), value));
-        return index;
-    }
-
-    private static Map<String, RuntimeValue> properties(EntitySnapshot entity) {
-        LinkedHashMap<String, RuntimeValue> result = new LinkedHashMap<>();
-        entity.properties().forEach(value -> result.put(value.name(), value.value()));
-        return result;
-    }
-
-    private static Optional<RuntimeValue> entityIdentity(EntitySnapshot entity) {
-        if (entity == null) {
-            return Optional.empty();
-        }
-        return Optional.of(RuntimeValues.string(
-                entity.type().value() + ':' + entity.displayName().orElse("")));
-    }
-
-    private DeterminismResult inconclusive(DeterminismSpec spec, Counters counters,
+    private DeterminismResult inconclusive(DeterminismSpec spec, ExecutionCounters counters,
             long executionNanos, String message) {
         return inconclusive(spec, counters, executionNanos, message, Optional.empty());
     }
 
-    private DeterminismResult inconclusive(DeterminismSpec spec, Counters counters,
+    private DeterminismResult inconclusive(DeterminismSpec spec, ExecutionCounters counters,
             long executionNanos, ApplicationFailureEvidence failure) {
         return inconclusive(spec, counters, executionNanos,
                 failure.legacyEnvelope(), Optional.of(failure));
     }
 
-    private DeterminismResult inconclusive(DeterminismSpec spec, Counters counters,
+    private DeterminismResult inconclusive(DeterminismSpec spec, ExecutionCounters counters,
             long executionNanos, String message,
             Optional<ApplicationFailureEvidence> applicationFailure) {
         return new DeterminismResult(
@@ -780,21 +510,21 @@ public final class DeterminismRegistry {
     }
 
     private SimulationDeterminismResult simulationInconclusive(
-            SimulationDeterminismSpec spec, Counters counters,
+            SimulationDeterminismSpec spec, ExecutionCounters counters,
             long executionNanos, String message) {
         return simulationInconclusive(
                 spec, counters, executionNanos, message, Optional.empty());
     }
 
     private SimulationDeterminismResult simulationInconclusive(
-            SimulationDeterminismSpec spec, Counters counters,
+            SimulationDeterminismSpec spec, ExecutionCounters counters,
             long executionNanos, ApplicationFailureEvidence failure) {
         return simulationInconclusive(spec, counters, executionNanos,
                 failure.legacyEnvelope(), Optional.of(failure));
     }
 
     private SimulationDeterminismResult simulationInconclusive(
-            SimulationDeterminismSpec spec, Counters counters, long executionNanos,
+            SimulationDeterminismSpec spec, ExecutionCounters counters, long executionNanos,
             String message, Optional<ApplicationFailureEvidence> applicationFailure) {
         return new SimulationDeterminismResult(DeterminismStatus.INCONCLUSIVE,
                 message, spec.execution().profile(), Optional.empty(),
@@ -811,10 +541,10 @@ public final class DeterminismRegistry {
     }
 
     private DeterminismBounds bounds(
-            DeterminismSpec spec, Counters counters, long executionNanos) {
+            DeterminismSpec spec, ExecutionCounters counters, long executionNanos) {
         return new DeterminismBounds(counters.completedRepeats, spec.ticksPerRepeat(),
-                counters.observedEntities, counters.observedFacts,
-                counters.encodedBytes, executionNanos);
+                counters.observable.observedEntities(), counters.observable.observedFacts(),
+                counters.observable.encodedEvidenceBytes(), executionNanos);
     }
 
     private void validate(DeterminismSpec spec) {
@@ -1036,77 +766,22 @@ public final class DeterminismRegistry {
 
     private enum OperationKind { LEGACY, SIMULATION }
 
-    private static final class Counters {
+    private static final class ExecutionCounters {
         private int completedRepeats;
-        private long observedEntities;
-        private long observedFacts;
-        private long encodedBytes;
-        private Optional<String> incompleteReason = Optional.empty();
+        private final ObservableEvidenceComparator.Counters observable =
+                new ObservableEvidenceComparator.Counters();
 
-        private void observeEntities(long delta, int limit) {
-            observedEntities = saturate(observedEntities, delta, limit);
-        }
-
-        private void observeFacts(long delta, int limit) {
-            observedFacts = saturate(observedFacts, delta, limit);
+        private Optional<String> incompleteReason() {
+            return observable.incompleteReason();
         }
     }
 
-    private static long saturate(long current, long delta, long limit) {
-        if (delta >= limit - current) {
-            return limit;
-        }
-        return current + delta;
-    }
-
-    private Optional<FrameEvidence> countOverrun(Counters counters,
-            int selectedEntities, long selectedFacts, String reason) {
-        counters.observeEntities(selectedEntities, limits.maximumEntitiesPerFrame());
-        counters.observeFacts(selectedFacts, limits.maximumFactsPerFrame());
-        counters.incompleteReason = Optional.of(reason);
-        return Optional.empty();
-    }
-
-    private record RunEvidence(ExecutionEpochId epoch, List<FrameEvidence> frames) {}
+    private record RunEvidence(ExecutionEpochId epoch,
+            List<ObservableEvidenceComparator.FrameEvidence> frames) {}
 
     private record SimulationRunEvidence(
             ExecutionEpochId epoch, List<SimulationFrameEvidence> frames) {}
 
-    private record SimulationFrameEvidence(SimulationTick tick, FrameEvidence frame) {}
-
-    private record FrameEvidence(FrameId frameId, List<EntitySnapshot> entities,
-            List<ComparableEvent> events, List<ComparableDecision> decisions,
-            List<ComparableUi> ui) {}
-
-    private record ComparableEvent(EventType type, Optional<EntityId> subject,
-            Optional<EntityId> source, FactMetadata metadata,
-            List<RuntimeValue.Field> attributes) {
-        private static ComparableEvent from(
-                RuntimeEvent value, DeterminismProfile profile) {
-            return new ComparableEvent(value.type(), value.subject(), value.source(),
-                    value.metadata(), value.attributes().stream()
-                            .filter(attribute -> !profile.excludedVolatileFields()
-                                    .contains(attribute.name()))
-                            .toList());
-        }
-    }
-
-    private record ComparableDecision(DecisionType type, EntityId actor,
-            List<DecisionCandidate> candidates, Optional<EntityId> chosenCandidate,
-            Optional<Reason> choiceReason, FactMetadata metadata,
-            DecisionTrace.Completion completion) {
-        private static ComparableDecision from(DecisionTrace value) {
-            return new ComparableDecision(value.type(), value.actor(), value.candidates(),
-                    value.chosenCandidate(), value.choiceReason(), value.metadata(),
-                    value.completion());
-        }
-    }
-
-    private record ComparableUi(String uiSessionId, Optional<String> uiFrameId,
-            Optional<String> correlationToken) {
-        private static ComparableUi from(UiFrameCorrelation value) {
-            return new ComparableUi(
-                    value.uiSessionId(), value.uiFrameId(), value.correlationToken());
-        }
-    }
+    private record SimulationFrameEvidence(SimulationTick tick,
+            ObservableEvidenceComparator.FrameEvidence frame) {}
 }

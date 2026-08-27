@@ -1,12 +1,15 @@
 package io.github.teemuki8.libgdx.agent.runtime.box2d;
 
-import com.badlogic.gdx.math.Vector2;
-import com.badlogic.gdx.physics.box2d.Body;
-import com.badlogic.gdx.physics.box2d.Filter;
-import com.badlogic.gdx.physics.box2d.Fixture;
-import com.badlogic.gdx.physics.box2d.Joint;
-import com.badlogic.gdx.physics.box2d.Shape;
-import com.badlogic.gdx.physics.box2d.World;
+import com.badlogic.gdx.box2d.Box2d;
+import com.badlogic.gdx.box2d.enums.b2JointType;
+import com.badlogic.gdx.box2d.structs.b2BodyId;
+import com.badlogic.gdx.box2d.structs.b2Counters;
+import com.badlogic.gdx.box2d.structs.b2Filter;
+import com.badlogic.gdx.box2d.structs.b2JointId;
+import com.badlogic.gdx.box2d.structs.b2ShapeId;
+import com.badlogic.gdx.box2d.structs.b2Rot;
+import com.badlogic.gdx.box2d.structs.b2Vec2;
+import com.badlogic.gdx.box2d.structs.b2WorldId;
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityRegistration;
@@ -14,26 +17,22 @@ import io.github.teemuki8.libgdx.agent.runtime.core.EntityType;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeStatus;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
-import java.lang.ref.WeakReference;
 import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
 
-/** Explicit bounded registration adapter for selected application-owned Box2D objects. */
+/** Explicit bounded registration adapter for selected application-owned Box2D 3 IDs. */
 public final class Box2dInspection implements AutoCloseable {
     private final AgentRuntime runtime;
     private final Box2dAdapterLimits limits;
     private final Thread ownerThread;
     private final LinkedHashMap<String, WorldEntry> worlds = new LinkedHashMap<>();
     private final LinkedHashMap<String, BodyEntry> bodies = new LinkedHashMap<>();
-    private final LinkedHashMap<String, FixtureEntry> fixtures = new LinkedHashMap<>();
+    private final LinkedHashMap<String, ShapeEntry> shapes = new LinkedHashMap<>();
     private final LinkedHashMap<String, JointEntry> joints = new LinkedHashMap<>();
     private final LinkedHashMap<String, Box2dContacts> contacts = new LinkedHashMap<>();
-    private final LinkedHashMap<String, Long> callbacksAfterClose = new LinkedHashMap<>();
     private boolean closed;
 
     /** Creates an adapter owned by the calling application/capture thread. */
@@ -43,92 +42,88 @@ public final class Box2dInspection implements AutoCloseable {
         ownerThread = Thread.currentThread();
     }
 
-    /** Registers one selected world and explicit solver/unit testimony. */
-    public Box2dRegistration<World> registerWorld(
-            String id, World world, Box2dWorldSpec spec) {
+    /** Registers one live world ID and copied solver/unit testimony. */
+    public Box2dRegistration<b2WorldId> registerWorld(
+            String id, b2WorldId world, Box2dWorldSpec spec) {
         requireOwnerOpen();
         validateId(id);
-        Objects.requireNonNull(world, "world");
         Objects.requireNonNull(spec, "spec");
+        WorldKey key = WorldKey.copyOf(requireLive(world));
+        requireUnique(id, key, worlds, "world");
         requireCapacity(worlds, limits.worlds(), "world");
-        requireUnique(id, world, worlds, "world");
-        WorldEntry entry = new WorldEntry(id, entityId("world", id), world, spec);
-        entry.entityRegistration = runtime.entities().register(entry.entityId,
-                EntityType.of("box2d.world"), () -> id, inspector -> declareWorld(inspector, entry));
+        WorldEntry entry = new WorldEntry(id, entityId("world", id), key, spec);
+        entry.registration = runtime.entities().register(entry.entityId,
+                EntityType.of("box2d.world"), () -> id,
+                inspector -> declareWorld(inspector, entry));
         worlds.put(id, entry);
         return handle(entry);
     }
 
-    /** Registers one selected body owned by an already registered world. */
-    public Box2dRegistration<Body> registerBody(String id, String worldId, Body body) {
+    /** Registers one live body ID owned by an already registered world. */
+    public Box2dRegistration<b2BodyId> registerBody(String id, String worldId, b2BodyId body) {
         requireOwnerOpen();
         validateId(id);
-        Body value = Objects.requireNonNull(body, "body");
+        b2BodyId value = requireLive(body);
         WorldEntry world = requireEntry(worlds, worldId, "world");
-        if (value.getWorld() != live(world)) {
+        BodyKey key = BodyKey.copyOf(value);
+        if (!WorldKey.copyOf(Box2d.b2Body_GetWorld(value)).equals(world.key)) {
             throw new IllegalArgumentException("body does not belong to the registered world");
         }
+        requireUnique(id, key, bodies, "body");
         requireCapacity(bodies, limits.bodies(), "body");
-        requireUnique(id, value, bodies, "body");
-        BodyEntry entry = new BodyEntry(id, entityId("body", id), value, worldId);
-        entry.entityRegistration = runtime.entities().register(entry.entityId,
-                EntityType.of("box2d.body"), () -> id, inspector -> declareBody(inspector, entry));
+        BodyEntry entry = new BodyEntry(id, entityId("body", id), key, worldId);
+        entry.registration = runtime.entities().register(entry.entityId,
+                EntityType.of("box2d.body"), () -> id,
+                inspector -> declareBody(inspector, entry));
         bodies.put(id, entry);
         return handle(entry);
     }
 
-    /** Registers one selected fixture owned by an already registered body. */
-    public Box2dRegistration<Fixture> registerFixture(String id, String bodyId, Fixture fixture) {
-        return registerFixture(id, bodyId, fixture, Box2dFixtureSpec.unspecified());
-    }
-
-    /** Registers one selected fixture with explicit metadata unavailable from its native wrapper. */
-    public Box2dRegistration<Fixture> registerFixture(String id, String bodyId, Fixture fixture,
-            Box2dFixtureSpec spec) {
+    /** Registers one live shape ID owned by an already registered body. */
+    public Box2dRegistration<b2ShapeId> registerShape(String id, String bodyId, b2ShapeId shape,
+            Box2dShapeSpec spec) {
         requireOwnerOpen();
         validateId(id);
-        Fixture value = Objects.requireNonNull(fixture, "fixture");
-        Box2dFixtureSpec metadata = Objects.requireNonNull(spec, "spec");
-        if (value.getType() == Shape.Type.Chain && metadata.chainLoop().isEmpty()) {
-            throw new IllegalArgumentException("chain fixture requires explicit loop-state testimony");
-        }
+        b2ShapeId value = requireLive(shape);
+        Objects.requireNonNull(spec, "spec");
         BodyEntry body = requireEntry(bodies, bodyId, "body");
-        if (value.getBody() != live(body)) {
-            throw new IllegalArgumentException("fixture does not belong to the registered body");
+        ShapeKey key = ShapeKey.copyOf(value);
+        if (!BodyKey.copyOf(Box2d.b2Shape_GetBody(value)).equals(body.key)) {
+            throw new IllegalArgumentException("shape does not belong to the registered body");
         }
-        requireCapacity(fixtures, limits.fixtures(), "fixture");
-        requireUnique(id, value, fixtures, "fixture");
-        FixtureEntry entry = new FixtureEntry(
-                id, entityId("fixture", id), value, bodyId, metadata);
-        entry.entityRegistration = runtime.entities().register(entry.entityId,
+        requireUnique(id, key, shapes, "shape");
+        requireCapacity(shapes, limits.fixtures(), "shape");
+        ShapeEntry entry = new ShapeEntry(id, entityId("fixture", id), key, bodyId, spec);
+        entry.registration = runtime.entities().register(entry.entityId,
                 EntityType.of("box2d.fixture"), () -> id,
-                inspector -> declareFixture(inspector, entry));
-        fixtures.put(id, entry);
+                inspector -> declareShape(inspector, entry));
+        shapes.put(id, entry);
         return handle(entry);
     }
 
-    /** Registers one selected joint whose endpoints are already registered bodies. */
-    public Box2dRegistration<Joint> registerJoint(String id, String worldId, Joint joint) {
+    /** Registers one live joint ID whose endpoint bodies are already registered. */
+    public Box2dRegistration<b2JointId> registerJoint(String id, String worldId, b2JointId joint) {
         requireOwnerOpen();
         validateId(id);
-        Joint value = Objects.requireNonNull(joint, "joint");
+        b2JointId value = requireLive(joint);
         WorldEntry world = requireEntry(worlds, worldId, "world");
-        String bodyA = bodyId(value.getBodyA());
-        String bodyB = bodyId(value.getBodyB());
-        if (value.getBodyA().getWorld() != live(world) || value.getBodyB().getWorld() != live(world)) {
+        if (!WorldKey.copyOf(Box2d.b2Joint_GetWorld(value)).equals(world.key)) {
             throw new IllegalArgumentException("joint does not belong to the registered world");
         }
+        String bodyA = bodyId(BodyKey.copyOf(Box2d.b2Joint_GetBodyA(value)));
+        String bodyB = bodyId(BodyKey.copyOf(Box2d.b2Joint_GetBodyB(value)));
+        JointKey key = JointKey.copyOf(value);
+        requireUnique(id, key, joints, "joint");
         requireCapacity(joints, limits.joints(), "joint");
-        requireUnique(id, value, joints, "joint");
-        JointEntry entry = new JointEntry(id, entityId("joint", id), value, worldId, bodyA, bodyB);
-        entry.entityRegistration = runtime.entities().register(entry.entityId,
+        JointEntry entry = new JointEntry(id, entityId("joint", id), key, worldId, bodyA, bodyB);
+        entry.registration = runtime.entities().register(entry.entityId,
                 EntityType.of("box2d.joint"), () -> id,
-                inspector -> Box2dJointValues.declare(inspector, entry, worlds));
+                inspector -> declareJoint(inspector, entry));
         joints.put(id, entry);
         return handle(entry);
     }
 
-    /** Registers one explicit bounded contact capture for an already registered world. */
+    /** Registers bounded post-step Box2D 3 contact-event capture for one registered world. */
     public Box2dContacts registerContacts(String worldId, Box2dContactLimits contactLimits,
             Box2dContactPolicy policy) {
         requireOwnerOpen();
@@ -140,11 +135,21 @@ public final class Box2dInspection implements AutoCloseable {
             throw new IllegalArgumentException(
                     "Box2D contacts are already registered for this world");
         }
+        requireContactEventFlags(id, policy, true);
         Box2dContacts registration = new Box2dContacts(
                 runtime, this, id, contactLimits, policy, ownerThread);
-        registration.registerEntity();
-        contacts.put(id, registration);
-        return registration;
+        try {
+            registration.registerEntity();
+            contacts.put(id, registration);
+            return registration;
+        } catch (RuntimeException | Error failure) {
+            try {
+                registration.closeFromInspection();
+            } catch (RuntimeException | Error cleanupFailure) {
+                failure.addSuppressed(cleanupFailure);
+            }
+            throw failure;
+        }
     }
 
     /** Returns configured adapter limits. */
@@ -152,50 +157,55 @@ public final class Box2dInspection implements AutoCloseable {
         return limits;
     }
 
-    /** Releases registrations and weak native references without disposing Box2D objects. */
+    /** Releases registrations without destroying application-owned native IDs. */
     @Override public void close() {
         requireOwner();
         if (closed) {
             return;
         }
+        contacts.values().forEach(Box2dContacts::closeFromInspection);
         if (runtime.status() != RuntimeStatus.CLOSED) {
             runtime.entities().requireProviderMutationAllowed();
-        }
-        List.copyOf(contacts.values()).forEach(Box2dContacts::closeFromInspection);
-        if (runtime.status() != RuntimeStatus.CLOSED) {
             joints.values().forEach(Entry::closeProvider);
-            fixtures.values().forEach(Entry::closeProvider);
+            shapes.values().forEach(Entry::closeProvider);
             bodies.values().forEach(Entry::closeProvider);
             worlds.values().forEach(Entry::closeProvider);
         }
-        contacts.clear();
-        callbacksAfterClose.clear();
         closed = true;
-        clearEntries(joints);
-        clearEntries(fixtures);
-        clearEntries(bodies);
-        clearEntries(worlds);
+        contacts.clear();
+        joints.clear();
+        shapes.clear();
+        bodies.clear();
+        worlds.clear();
     }
 
     private void declareWorld(io.github.teemuki8.libgdx.agent.runtime.core.EntityInspector inspector,
             WorldEntry entry) {
         inspector.property("id", () -> RuntimeValues.string(entry.id))
                 .property("runtimeEntityId", () -> RuntimeValues.string(entry.entityId.value()))
-                .property("gravity", () -> vector(live(entry).getGravity()))
-                .property("sleepingAllowed", () -> entry.spec.sleepingAllowed())
-                .property("warmStarting", () -> entry.spec.warmStarting())
-                .property("continuousPhysics", () -> entry.spec.continuousPhysics())
-                .property("velocityIterations", () -> (long) entry.spec.velocityIterations())
-                .property("positionIterations", () -> (long) entry.spec.positionIterations())
-                .property("fixedStepNanos", () -> fixedStep())
+                .property("gravity", () -> worldGravity(entry))
+                .property("sleepingAllowed", () -> Box2d.b2World_IsSleepingEnabled(entry.live()))
+                .property("warmStarting", () -> Box2d.b2World_IsWarmStartingEnabled(entry.live()))
+                .property("continuousPhysics", () -> Box2d.b2World_IsContinuousEnabled(entry.live()))
+                .property("hitEventThreshold",
+                        () -> decimal(Box2d.b2World_GetHitEventThreshold(entry.live())))
+                .property("restitutionThreshold",
+                        () -> decimal(Box2d.b2World_GetRestitutionThreshold(entry.live())))
+                .property("subStepCount", () -> (long) entry.spec.subStepCount())
+                .property("fixedStepNanos", this::fixedStep)
                 .property("registeredBodyCount", () -> count(bodies, entry.id))
-                .property("registeredFixtureCount", () -> countFixtures(entry.id))
+                .property("registeredShapeCount", () -> countShapes(entry.id))
+                .property("registeredFixtureCount", () -> countShapes(entry.id))
                 .property("registeredJointCount", () -> count(joints, entry.id))
-                .property("totalBodyCount", () -> (long) live(entry).getBodyCount())
-                .property("totalFixtureCount", () -> (long) live(entry).getFixtureCount())
-                .property("totalJointCount", () -> (long) live(entry).getJointCount())
-                .property("totalContactCount", () -> (long) live(entry).getContactCount())
-                .property("locked", () -> live(entry).isLocked())
+                .property("totalBodyCount", () -> counters(entry).bodyCount())
+                .property("totalShapeCount", () -> counters(entry).shapeCount())
+                .property("totalFixtureCount", () -> counters(entry).shapeCount())
+                .property("totalJointCount", () -> counters(entry).jointCount())
+                .property("totalContactCount", () -> counters(entry).contactCount())
+                .property("islandCount", () -> counters(entry).islandCount())
+                .property("awakeBodyCount", () -> Box2d.b2World_GetAwakeBodyCount(entry.live()))
+                .property("stackUsedBytes", () -> counters(entry).stackUsed())
+                .property("allocatedBytes", () -> counters(entry).byteCount())
                 .property("renderUnitsPerMeter",
                         () -> RuntimeValues.decimal(entry.spec.unitTransform().renderUnitsPerMeter()));
     }
@@ -205,48 +215,92 @@ public final class Box2dInspection implements AutoCloseable {
         inspector.property("id", () -> RuntimeValues.string(entry.id))
                 .property("runtimeEntityId", () -> RuntimeValues.string(entry.entityId.value()))
                 .property("worldId", () -> RuntimeValues.string(entry.parentId))
-                .property("bodyType", () -> RuntimeValues.enumValue(bodyType(live(entry))))
-                .property("position", () -> vector(live(entry).getPosition()))
-                .property("angleRadians", () -> decimal(live(entry).getAngle()))
-                .property("linearVelocity", () -> vector(live(entry).getLinearVelocity()))
-                .property("angularVelocity",
-                        () -> decimal(live(entry).getAngularVelocity()))
-                .property("mass", () -> decimal(live(entry).getMass()))
-                .property("inertia", () -> decimal(live(entry).getInertia()))
-                .property("gravityScale", () -> decimal(live(entry).getGravityScale()))
-                .property("linearDamping",
-                        () -> decimal(live(entry).getLinearDamping()))
-                .property("angularDamping",
-                        () -> decimal(live(entry).getAngularDamping()))
-                .property("awake", () -> live(entry).isAwake())
-                .property("active", () -> live(entry).isActive())
-                .property("bullet", () -> live(entry).isBullet())
-                .property("fixedRotation", () -> live(entry).isFixedRotation())
-                .property("sleepingAllowed", () -> live(entry).isSleepingAllowed())
-                .property("registeredFixtureCount", () -> count(fixtures, entry.id))
-                .property("totalFixtureCount", () -> (long) live(entry).getFixtureList().size);
+                .property("bodyType", () -> RuntimeValues.enumValue(bodyType(entry.live())))
+                .property("position", () -> bodyPosition(entry))
+                .property("angleRadians", () -> bodyAngle(entry))
+                .property("linearVelocity", () -> bodyVelocity(entry))
+                .property("angularVelocity", () -> decimal(
+                        Box2d.b2Body_GetAngularVelocity(entry.live())))
+                .property("mass", () -> decimal(Box2d.b2Body_GetMass(entry.live())))
+                .property("inertia", () -> decimal(
+                        Box2d.b2Body_GetRotationalInertia(entry.live())))
+                .property("gravityScale", () -> decimal(Box2d.b2Body_GetGravityScale(entry.live())))
+                .property("linearDamping", () -> decimal(
+                        Box2d.b2Body_GetLinearDamping(entry.live())))
+                .property("angularDamping", () -> decimal(
+                        Box2d.b2Body_GetAngularDamping(entry.live())))
+                .property("awake", () -> Box2d.b2Body_IsAwake(entry.live()))
+                .property("active", () -> Box2d.b2Body_IsEnabled(entry.live()))
+                .property("bullet", () -> Box2d.b2Body_IsBullet(entry.live()))
+                .property("fixedRotation", () -> Box2d.b2Body_IsFixedRotation(entry.live()))
+                .property("sleepingAllowed", () -> Box2d.b2Body_IsSleepEnabled(entry.live()))
+                .property("registeredShapeCount", () -> count(shapes, entry.id))
+                .property("registeredFixtureCount", () -> count(shapes, entry.id))
+                .property("totalShapeCount", () -> Box2d.b2Body_GetShapeCount(entry.live()))
+                .property("totalFixtureCount", () -> Box2d.b2Body_GetShapeCount(entry.live()))
+                .property("totalJointCount", () -> Box2d.b2Body_GetJointCount(entry.live()));
     }
 
-    private void declareFixture(
-            io.github.teemuki8.libgdx.agent.runtime.core.EntityInspector inspector,
-            FixtureEntry entry) {
+    private void declareShape(io.github.teemuki8.libgdx.agent.runtime.core.EntityInspector inspector,
+            ShapeEntry entry) {
         inspector.property("id", () -> RuntimeValues.string(entry.id))
                 .property("runtimeEntityId", () -> RuntimeValues.string(entry.entityId.value()))
                 .property("bodyId", () -> RuntimeValues.string(entry.parentId))
-                .property("shapeType", () -> RuntimeValues.enumValue(
-                        live(entry).getType().name().toUpperCase(Locale.ROOT)))
-                .property("sensor", () -> live(entry).isSensor())
-                .property("density", () -> decimal(live(entry).getDensity()))
-                .property("friction", () -> decimal(live(entry).getFriction()))
-                .property("restitution", () -> decimal(live(entry).getRestitution()))
-                .property("categoryBits", () -> (long) Short.toUnsignedInt(filter(entry).categoryBits))
-                .property("maskBits", () -> (long) Short.toUnsignedInt(filter(entry).maskBits))
-                .property("groupIndex", () -> (long) filter(entry).groupIndex)
+                .property("shapeType", () -> RuntimeValues.enumValue(shapeType(entry.live())))
+                .property("sensor", () -> Box2d.b2Shape_IsSensor(entry.live()))
+                .property("density", () -> decimal(Box2d.b2Shape_GetDensity(entry.live())))
+                .property("friction", () -> decimal(Box2d.b2Shape_GetFriction(entry.live())))
+                .property("restitution", () -> decimal(Box2d.b2Shape_GetRestitution(entry.live())))
+                .property("material", () -> Box2d.b2Shape_GetMaterial(entry.live()))
+                .property("categoryBits", () -> shapeFilter(entry).categoryBits())
+                .property("maskBits", () -> shapeFilter(entry).maskBits())
+                .property("groupIndex", () -> (long) shapeFilter(entry).groupIndex())
                 .property("geometry", () -> Box2dShapeValues.copy(
-                        live(entry).getShape(), limits.shapeVertices(), entry.spec))
+                        entry.live(), limits.shapeVertices(), entry.geometryScratch))
                 .property("diagnostics", () -> Box2dShapeValues.diagnostics(
-                        live(entry).getShape(), limits.shapeVertices(),
-                        limits.diagnosticEntries()));
+                        entry.live(), limits.shapeVertices(), entry.geometryScratch));
+    }
+
+    private void declareJoint(io.github.teemuki8.libgdx.agent.runtime.core.EntityInspector inspector,
+            JointEntry entry) {
+        inspector.property("id", () -> RuntimeValues.string(entry.id))
+                .property("runtimeEntityId", () -> RuntimeValues.string(entry.entityId.value()))
+                .property("worldId", () -> RuntimeValues.string(entry.parentId))
+                .property("jointType", () -> RuntimeValues.enumValue(jointType(entry.live())))
+                .property("bodyAId", () -> RuntimeValues.string(entry.bodyA))
+                .property("bodyBId", () -> RuntimeValues.string(entry.bodyB))
+                .property("localAnchorA", () -> jointAnchorA(entry))
+                .property("localAnchorB", () -> jointAnchorB(entry))
+                .property("collideConnected",
+                        () -> Box2d.b2Joint_GetCollideConnected(entry.live()))
+                .property("constraintForce", () -> jointConstraintForce(entry))
+                .property("constraintTorque",
+                        () -> decimal(Box2d.b2Joint_GetConstraintTorque(entry.live())))
+                .property("detail", () -> jointDetail(entry.live()));
+    }
+
+    private RuntimeValue jointDetail(b2JointId joint) {
+        if (Box2d.b2Joint_GetType(joint) == b2JointType.b2_revoluteJoint) {
+            return RuntimeValues.object(
+                    RuntimeValues.field("type", RuntimeValues.enumValue("REVOLUTE")),
+                    RuntimeValues.field("referenceAngle",
+                            decimal(Box2d.b2Joint_GetReferenceAngle(joint))),
+                    RuntimeValues.field("jointAngle", decimal(Box2d.b2RevoluteJoint_GetAngle(joint))),
+                    RuntimeValues.field("limitEnabled",
+                            RuntimeValues.bool(Box2d.b2RevoluteJoint_IsLimitEnabled(joint))),
+                    RuntimeValues.field("lowerLimit",
+                            decimal(Box2d.b2RevoluteJoint_GetLowerLimit(joint))),
+                    RuntimeValues.field("upperLimit",
+                            decimal(Box2d.b2RevoluteJoint_GetUpperLimit(joint))),
+                    RuntimeValues.field("motorEnabled",
+                            RuntimeValues.bool(Box2d.b2RevoluteJoint_IsMotorEnabled(joint))),
+                    RuntimeValues.field("motorSpeed",
+                            decimal(Box2d.b2RevoluteJoint_GetMotorSpeed(joint))),
+                    RuntimeValues.field("maxMotorTorque",
+                            decimal(Box2d.b2RevoluteJoint_GetMaxMotorTorque(joint))));
+        }
+        return RuntimeValues.object(RuntimeValues.field("type",
+                RuntimeValues.enumValue(jointType(joint))));
     }
 
     private RuntimeValue fixedStep() {
@@ -255,189 +309,188 @@ public final class Box2dInspection implements AutoCloseable {
                 : RuntimeValues.nullValue();
     }
 
-    private Filter filter(FixtureEntry entry) {
-        return live(entry).getFilterData();
+    private RuntimeValue.Vector2Value worldGravity(WorldEntry entry) {
+        Box2d.b2World_GetGravity(entry.live(), entry.vectorScratch);
+        return vector(entry.vectorScratch);
     }
 
-    private long count(Map<String, ? extends Entry<?>> entries, String parentId) {
+    private b2Counters counters(WorldEntry entry) {
+        Box2d.b2World_GetCounters(entry.live(), entry.countersScratch);
+        return entry.countersScratch;
+    }
+
+    private RuntimeValue.Vector2Value bodyPosition(BodyEntry entry) {
+        Box2d.b2Body_GetPosition(entry.live(), entry.positionScratch);
+        return vector(entry.positionScratch);
+    }
+
+    private RuntimeValue.DecimalValue bodyAngle(BodyEntry entry) {
+        Box2d.b2Body_GetRotation(entry.live(), entry.rotationScratch);
+        return decimal(Box2d.b2Rot_GetAngle(entry.rotationScratch));
+    }
+
+    private RuntimeValue.Vector2Value bodyVelocity(BodyEntry entry) {
+        Box2d.b2Body_GetLinearVelocity(entry.live(), entry.velocityScratch);
+        return vector(entry.velocityScratch);
+    }
+
+    private b2Filter shapeFilter(ShapeEntry entry) {
+        Box2d.b2Shape_GetFilter(entry.live(), entry.filterScratch);
+        return entry.filterScratch;
+    }
+
+    private RuntimeValue.Vector2Value jointAnchorA(JointEntry entry) {
+        Box2d.b2Joint_GetLocalAnchorA(entry.live(), entry.anchorAScratch);
+        return vector(entry.anchorAScratch);
+    }
+
+    private RuntimeValue.Vector2Value jointAnchorB(JointEntry entry) {
+        Box2d.b2Joint_GetLocalAnchorB(entry.live(), entry.anchorBScratch);
+        return vector(entry.anchorBScratch);
+    }
+
+    private RuntimeValue.Vector2Value jointConstraintForce(JointEntry entry) {
+        Box2d.b2Joint_GetConstraintForce(entry.live(), entry.forceScratch);
+        return vector(entry.forceScratch);
+    }
+
+    private long count(Map<String, ? extends Entry<?, ?>> entries, String parentId) {
         return entries.values().stream().filter(entry -> parentId.equals(entry.parentId)).count();
     }
 
-    private long countFixtures(String worldId) {
-        return fixtures.values().stream().filter(fixture -> {
-            BodyEntry body = bodies.get(fixture.parentId);
+    private long countShapes(String worldId) {
+        return shapes.values().stream().filter(shape -> {
+            BodyEntry body = bodies.get(shape.parentId);
             return body != null && worldId.equals(body.parentId);
         }).count();
     }
 
-    private String bodyId(Body body) {
-        return bodies.values().stream().filter(entry -> entry.reference.get() == body)
-                .map(entry -> entry.id).findFirst()
-                .orElseThrow(() -> new IllegalArgumentException(
+    private String bodyId(BodyKey key) {
+        return bodies.values().stream().filter(entry -> entry.key.equals(key)).map(entry -> entry.id)
+                .findFirst().orElseThrow(() -> new IllegalArgumentException(
                         "joint endpoints must be explicitly registered bodies"));
     }
 
-    private <T> Box2dRegistration<T> handle(Entry<T> entry) {
+    private <T, K> Box2dRegistration<T> handle(Entry<T, K> entry) {
         return new Registration<>(entry);
     }
 
-    private void rebind(Entry<?> entry, Object value) {
+    private <T, K> void rebind(Entry<T, K> entry, T value) {
         requireOwnerOpen();
         if (entry.closed) {
             throw new IllegalStateException("Box2D registration is closed");
         }
-        Objects.requireNonNull(value, "value");
         runtime.entities().requireProviderMutationAllowed();
-        if (entry instanceof WorldEntry world) {
-            if (bodies.values().stream().anyMatch(body -> body.parentId.equals(world.id))
-                    || joints.values().stream().anyMatch(joint -> joint.parentId.equals(world.id))) {
-                throw new IllegalStateException("unregister world descendants before rebinding");
-            }
-            requireUniqueNative(value, worlds, entry);
-        } else if (entry instanceof BodyEntry body) {
-            requireNoBodyDescendants(body);
-            Body nativeBody = (Body) value;
-            if (nativeBody.getWorld() != live(requireEntry(worlds, body.parentId, "world"))) {
-                throw new IllegalArgumentException("body does not belong to the registered world");
-            }
-            requireUniqueNative(value, bodies, entry);
-        } else if (entry instanceof FixtureEntry fixture) {
-            Fixture nativeFixture = (Fixture) value;
-            if (nativeFixture.getType() == Shape.Type.Chain
-                    && fixture.spec.chainLoop().isEmpty()) {
-                throw new IllegalArgumentException(
-                        "chain fixture requires explicit loop-state testimony");
-            }
-            if (nativeFixture.getBody() != live(requireEntry(bodies, fixture.parentId, "body"))) {
-                throw new IllegalArgumentException("fixture does not belong to the registered body");
-            }
-            requireUniqueNative(value, fixtures, entry);
-        } else if (entry instanceof JointEntry joint) {
-            Joint nativeJoint = (Joint) value;
-            if (!bodyId(nativeJoint.getBodyA()).equals(joint.bodyA)
-                    || !bodyId(nativeJoint.getBodyB()).equals(joint.bodyB)) {
-                throw new IllegalArgumentException("joint endpoints differ from registration");
-            }
-            requireUniqueNative(value, joints, entry);
-        }
+        K key = entry.copyAndValidate(value);
+        entry.validateParent(key);
+        entry.requireNoDescendants();
+        requireUniqueKey(key, entry.map(), entry);
+        entry.setKey(key);
         notifyContactMutation(entry);
-        entry.rebind(value);
     }
 
-    private void remove(Entry<?> entry) {
+    private void remove(Entry<?, ?> entry) {
         requireOwner();
         if (entry.closed) {
             return;
         }
-        if (entry instanceof WorldEntry world
-                && (bodies.values().stream().anyMatch(body -> body.parentId.equals(world.id))
-                        || joints.values().stream().anyMatch(
-                                joint -> joint.parentId.equals(world.id)))) {
-            throw new IllegalStateException("unregister world descendants before unregistering");
-        }
-        if (entry instanceof BodyEntry body) {
-            requireNoBodyDescendants(body);
-        }
+        entry.requireNoDescendants();
         if (runtime.status() != RuntimeStatus.CLOSED) {
             entry.closeProvider();
         }
-        notifyContactMutation(entry);
         entry.closed = true;
-        entry.reference.clear();
-        map(entry).remove(entry.id, entry);
-        if (entry instanceof WorldEntry) {
-            callbacksAfterClose.remove(entry.id);
-        }
+        notifyContactMutation(entry);
+        entry.map().remove(entry.id, entry);
     }
 
-    Optional<ContactMapping> contactMapping(String worldId, Fixture nativeA, int childA,
-            Fixture nativeB, int childB) {
-        FixtureEntry fixtureA = fixtureEntry(nativeA);
-        FixtureEntry fixtureB = fixtureEntry(nativeB);
-        if (fixtureA == null || fixtureB == null) {
+    b2WorldId worldId(String worldId) {
+        return requireEntry(worlds, worldId, "world").live();
+    }
+
+    Optional<ContactMapping> contactMapping(
+            String worldId, b2ShapeId nativeA, b2ShapeId nativeB) {
+        ShapeEntry shapeA = shapes.values().stream()
+                .filter(entry -> entry.key.equals(ShapeKey.copyOf(nativeA)))
+                .findFirst().orElse(null);
+        ShapeEntry shapeB = shapes.values().stream()
+                .filter(entry -> entry.key.equals(ShapeKey.copyOf(nativeB)))
+                .findFirst().orElse(null);
+        if (shapeA == null || shapeB == null) {
             return Optional.empty();
         }
-        BodyEntry bodyA = bodies.get(fixtureA.parentId);
-        BodyEntry bodyB = bodies.get(fixtureB.parentId);
+        BodyEntry bodyA = bodies.get(shapeA.parentId);
+        BodyEntry bodyB = bodies.get(shapeB.parentId);
         if (bodyA == null || bodyB == null || !worldId.equals(bodyA.parentId)
                 || !worldId.equals(bodyB.parentId)) {
             return Optional.empty();
         }
         Box2dContactRecord.Endpoint endpointA = new Box2dContactRecord.Endpoint(
-                bodyA.id, fixtureA.id, childA, nativeA.isSensor());
+                bodyA.id, shapeA.id, 0, Box2d.b2Shape_IsSensor(nativeA));
         Box2dContactRecord.Endpoint endpointB = new Box2dContactRecord.Endpoint(
-                bodyB.id, fixtureB.id, childB, nativeB.isSensor());
+                bodyB.id, shapeB.id, 0, Box2d.b2Shape_IsSensor(nativeB));
         int order = endpointA.compareTo(endpointB);
         if (order == 0) {
             return Optional.empty();
         }
         Box2dContactRecord.Endpoint canonicalA = order < 0 ? endpointA : endpointB;
         Box2dContactRecord.Endpoint canonicalB = order < 0 ? endpointB : endpointA;
-        Box2dContactRecord.Key key = new Box2dContactRecord.Key(
-                canonicalA.fixtureId(), canonicalA.childIndex(),
-                canonicalB.fixtureId(), canonicalB.childIndex());
-        return Optional.of(new ContactMapping(key, canonicalA, canonicalB, order > 0));
+        return Optional.of(new ContactMapping(
+                new Box2dContactRecord.Key(
+                        canonicalA.fixtureId(), 0, canonicalB.fixtureId(), 0),
+                canonicalA, canonicalB, order > 0));
+    }
+
+    void requireContactEventFlags(
+            String worldId, Box2dContactPolicy policy, boolean registration) {
+        try {
+            for (ShapeEntry shape : shapes.values()) {
+                BodyEntry body = bodies.get(shape.parentId);
+                if (body == null || !worldId.equals(body.parentId)) {
+                    continue;
+                }
+                b2ShapeId nativeShape = shape.live();
+                if ((policy.begin() || policy.end())
+                        && !Box2d.b2Shape_AreContactEventsEnabled(nativeShape)) {
+                    throw new IllegalArgumentException(
+                            "registered Box2D shape requires contact events");
+                }
+                if (policy.postSolve() && !Box2d.b2Shape_AreHitEventsEnabled(nativeShape)) {
+                    throw new IllegalArgumentException(
+                            "registered Box2D shape requires hit events");
+                }
+            }
+        } catch (IllegalArgumentException failure) {
+            if (registration) {
+                throw failure;
+            }
+            throw new IllegalStateException(
+                    "registered Box2D contact shape flags are no longer valid", failure);
+        }
     }
 
     void unregisterContacts(String worldId, Box2dContacts registration) {
         contacts.remove(worldId, registration);
     }
 
-    void callbackAfterContactsClosed(String worldId) {
-        if (!worlds.containsKey(worldId)) {
-            return;
-        }
-        callbacksAfterClose.compute(worldId, (ignored, count) ->
-                count == null ? 1L : count == Long.MAX_VALUE ? count : count + 1);
-    }
-
-    long takeCallbacksAfterClose(String worldId) {
-        Long observed = callbacksAfterClose.remove(worldId);
-        return observed == null ? 0 : observed;
-    }
-
-    private void notifyContactMutation(Entry<?> entry) {
+    private void notifyContactMutation(Entry<?, ?> entry) {
         if (entry instanceof WorldEntry) {
             Box2dContacts registration = contacts.get(entry.id);
             if (registration != null) {
                 registration.worldChanged();
             }
-        } else if (entry instanceof FixtureEntry fixture) {
-            BodyEntry body = bodies.get(fixture.parentId);
+        } else if (entry instanceof ShapeEntry shape) {
+            BodyEntry body = bodies.get(shape.parentId);
             if (body != null) {
                 Box2dContacts registration = contacts.get(body.parentId);
                 if (registration != null) {
-                    registration.fixtureChanged(fixture.id);
+                    registration.fixtureChanged(shape.id);
                 }
             }
         }
     }
 
-    private FixtureEntry fixtureEntry(Fixture fixture) {
-        return fixtures.values().stream()
-                .filter(entry -> entry.reference.get() == fixture)
-                .findFirst().orElse(null);
-    }
-
-    private void requireNoBodyDescendants(BodyEntry body) {
-        if (fixtures.values().stream().anyMatch(fixture -> fixture.parentId.equals(body.id))
-                || joints.values().stream().anyMatch(
-                        joint -> joint.bodyA.equals(body.id) || joint.bodyB.equals(body.id))) {
-            throw new IllegalStateException("unregister body fixtures and joints first");
-        }
-    }
-
-    @SuppressWarnings("unchecked")
-    private Map<String, Entry<?>> map(Entry<?> entry) {
-        if (entry instanceof WorldEntry) {
-            return (Map<String, Entry<?>>) (Map<?, ?>) worlds;
-        } else if (entry instanceof BodyEntry) {
-            return (Map<String, Entry<?>>) (Map<?, ?>) bodies;
-        } else if (entry instanceof FixtureEntry) {
-            return (Map<String, Entry<?>>) (Map<?, ?>) fixtures;
-        }
-        return (Map<String, Entry<?>>) (Map<?, ?>) joints;
-    }
+    record ContactMapping(Box2dContactRecord.Key key, Box2dContactRecord.Endpoint endpointA,
+            Box2dContactRecord.Endpoint endpointB, boolean reversed) {}
 
     private void requireOwnerOpen() {
         requireOwner();
@@ -463,19 +516,19 @@ public final class Box2dInspection implements AutoCloseable {
         return EntityId.of("box2d." + kind + "." + id);
     }
 
-    private static <T, E extends Entry<T>> void requireUnique(
-            String id, T value, Map<String, E> entries, String kind) {
+    private static <K, E extends Entry<?, K>> void requireUnique(
+            String id, K key, Map<String, E> entries, String kind) {
         if (entries.containsKey(id)) {
             throw new IllegalArgumentException("duplicate Box2D " + kind + " ID");
         }
-        requireUniqueNative(value, entries, null);
+        requireUniqueKey(key, entries, null);
     }
 
-    private static void requireUniqueNative(
-            Object value, Map<String, ? extends Entry<?>> entries, Entry<?> ignored) {
+    private static <K> void requireUniqueKey(
+            K key, Map<String, ? extends Entry<?, K>> entries, Entry<?, K> ignored) {
         if (entries.values().stream().anyMatch(
-                entry -> entry != ignored && entry.reference.get() == value)) {
-            throw new IllegalArgumentException("native Box2D object is already registered");
+                entry -> entry != ignored && entry.key.equals(key))) {
+            throw new IllegalArgumentException("native Box2D ID is already registered");
         }
     }
 
@@ -493,16 +546,40 @@ public final class Box2dInspection implements AutoCloseable {
         return entry;
     }
 
-    static <T> T live(Entry<T> entry) {
-        T value = entry.reference.get();
-        if (value == null) {
-            throw new IllegalStateException("registered Box2D object is no longer live; rebind it");
+    private static b2WorldId requireLive(b2WorldId value) {
+        Objects.requireNonNull(value, "world");
+        if (!Box2d.b2World_IsValid(value)) {
+            throw new IllegalArgumentException("Box2D world ID is stale or invalid");
         }
         return value;
     }
 
-    static RuntimeValue.Vector2Value vector(Vector2 value) {
-        return new RuntimeValue.Vector2Value(decimal(value.x), decimal(value.y));
+    private static b2BodyId requireLive(b2BodyId value) {
+        Objects.requireNonNull(value, "body");
+        if (!Box2d.b2Body_IsValid(value)) {
+            throw new IllegalArgumentException("Box2D body ID is stale or invalid");
+        }
+        return value;
+    }
+
+    private static b2ShapeId requireLive(b2ShapeId value) {
+        Objects.requireNonNull(value, "shape");
+        if (!Box2d.b2Shape_IsValid(value)) {
+            throw new IllegalArgumentException("Box2D shape ID is stale or invalid");
+        }
+        return value;
+    }
+
+    private static b2JointId requireLive(b2JointId value) {
+        Objects.requireNonNull(value, "joint");
+        if (!Box2d.b2Joint_IsValid(value)) {
+            throw new IllegalArgumentException("Box2D joint ID is stale or invalid");
+        }
+        return value;
+    }
+
+    static RuntimeValue.Vector2Value vector(b2Vec2 value) {
+        return new RuntimeValue.Vector2Value(decimal(value.x()), decimal(value.y()));
     }
 
     static RuntimeValue.DecimalValue decimal(float value) {
@@ -512,109 +589,249 @@ public final class Box2dInspection implements AutoCloseable {
         return RuntimeValues.decimal(Float.toString(value));
     }
 
-    private static String bodyType(Body body) {
-        return switch (body.getType()) {
-            case StaticBody -> "STATIC";
-            case KinematicBody -> "KINEMATIC";
-            case DynamicBody -> "DYNAMIC";
+    private static String bodyType(b2BodyId body) {
+        return switch (Box2d.b2Body_GetType(body)) {
+            case b2_staticBody -> "STATIC";
+            case b2_kinematicBody -> "KINEMATIC";
+            case b2_dynamicBody -> "DYNAMIC";
+            case b2_bodyTypeCount -> throw new IllegalStateException("invalid Box2D body type");
         };
     }
 
-    private static void clearEntries(Map<String, ? extends Entry<?>> entries) {
-        entries.values().forEach(entry -> entry.reference.clear());
-        entries.clear();
+    private static String shapeType(b2ShapeId shape) {
+        return switch (Box2d.b2Shape_GetType(shape)) {
+            case b2_circleShape -> "CIRCLE";
+            case b2_capsuleShape -> "CAPSULE";
+            case b2_segmentShape -> "SEGMENT";
+            case b2_polygonShape -> "POLYGON";
+            case b2_chainSegmentShape -> "CHAIN_SEGMENT";
+            case b2_shapeTypeCount -> throw new IllegalStateException("invalid Box2D shape type");
+        };
     }
 
-    abstract static class Entry<T> {
+    private static String jointType(b2JointId joint) {
+        String name = Box2d.b2Joint_GetType(joint).name();
+        return name.substring(3, name.length() - "Joint".length()).toUpperCase(java.util.Locale.ROOT);
+    }
+
+    private abstract class Entry<T, K> {
         final String id;
         final EntityId entityId;
         final String parentId;
-        WeakReference<T> reference;
-        EntityRegistration entityRegistration;
+        K key;
+        EntityRegistration registration;
         boolean closed;
 
-        Entry(String id, EntityId entityId, T value, String parentId) {
+        Entry(String id, EntityId entityId, K key, String parentId) {
             this.id = id;
             this.entityId = entityId;
+            this.key = key;
             this.parentId = parentId;
-            reference = new WeakReference<>(value);
         }
 
-        @SuppressWarnings("unchecked")
-        void rebind(Object value) {
-            reference.clear();
-            reference = new WeakReference<>((T) value);
-        }
+        abstract T live();
+        abstract K copyAndValidate(T value);
+        abstract Map<String, ? extends Entry<?, K>> map();
+        abstract void setKey(K replacement);
+
+        void validateParent(K replacement) {}
+        void requireNoDescendants() {}
 
         void closeProvider() {
-            if (entityRegistration != null) {
-                entityRegistration.close();
-                entityRegistration = null;
+            if (registration != null) {
+                registration.close();
+                registration = null;
             }
         }
     }
 
-    static final class WorldEntry extends Entry<World> {
+    private final class WorldEntry extends Entry<b2WorldId, WorldKey> {
         final Box2dWorldSpec spec;
-
-        WorldEntry(String id, EntityId entityId, World value, Box2dWorldSpec spec) {
-            super(id, entityId, value, null);
+        final b2WorldId nativeId;
+        final b2Vec2 vectorScratch = new b2Vec2();
+        final b2Counters countersScratch = new b2Counters();
+        WorldEntry(String id, EntityId entityId, WorldKey key, Box2dWorldSpec spec) {
+            super(id, entityId, key, null);
             this.spec = spec;
+            nativeId = key.toId();
+        }
+        @Override b2WorldId live() { return requireLive(nativeId); }
+        @Override WorldKey copyAndValidate(b2WorldId value) { return WorldKey.copyOf(requireLive(value)); }
+        @Override void setKey(WorldKey replacement) {
+            key = replacement;
+            replacement.copyTo(nativeId);
+        }
+        @Override Map<String, WorldEntry> map() { return worlds; }
+        @Override void requireNoDescendants() {
+            if (contacts.containsKey(id)
+                    || bodies.values().stream().anyMatch(body -> id.equals(body.parentId))
+                    || joints.values().stream().anyMatch(joint -> id.equals(joint.parentId))) {
+                throw new IllegalStateException("unregister world descendants first");
+            }
         }
     }
 
-    static final class BodyEntry extends Entry<Body> {
-        BodyEntry(String id, EntityId entityId, Body value, String worldId) {
-            super(id, entityId, value, worldId);
+    private final class BodyEntry extends Entry<b2BodyId, BodyKey> {
+        final b2BodyId nativeId;
+        final b2Vec2 positionScratch = new b2Vec2();
+        final b2Vec2 velocityScratch = new b2Vec2();
+        final b2Rot rotationScratch = new b2Rot();
+        BodyEntry(String id, EntityId entityId, BodyKey key, String worldId) {
+            super(id, entityId, key, worldId);
+            nativeId = key.toId();
+        }
+        @Override b2BodyId live() { return requireLive(nativeId); }
+        @Override BodyKey copyAndValidate(b2BodyId value) { return BodyKey.copyOf(requireLive(value)); }
+        @Override void setKey(BodyKey replacement) {
+            key = replacement;
+            replacement.copyTo(nativeId);
+        }
+        @Override Map<String, BodyEntry> map() { return bodies; }
+        @Override void validateParent(BodyKey replacement) {
+            b2BodyId id = replacement.toId();
+            if (!WorldKey.copyOf(Box2d.b2Body_GetWorld(id)).equals(worlds.get(parentId).key)) {
+                throw new IllegalArgumentException("body does not belong to the registered world");
+            }
+        }
+        @Override void requireNoDescendants() {
+            if (shapes.values().stream().anyMatch(shape -> id.equals(shape.parentId))
+                    || joints.values().stream().anyMatch(
+                            joint -> id.equals(joint.bodyA) || id.equals(joint.bodyB))) {
+                throw new IllegalStateException("unregister body shapes and joints first");
+            }
         }
     }
 
-    static final class FixtureEntry extends Entry<Fixture> {
-        final Box2dFixtureSpec spec;
-
-        FixtureEntry(String id, EntityId entityId, Fixture value, String bodyId,
-                Box2dFixtureSpec spec) {
-            super(id, entityId, value, bodyId);
+    private final class ShapeEntry extends Entry<b2ShapeId, ShapeKey> {
+        final Box2dShapeSpec spec;
+        final b2ShapeId nativeId;
+        final b2Filter filterScratch = new b2Filter();
+        final Box2dShapeValues.Scratch geometryScratch = new Box2dShapeValues.Scratch();
+        ShapeEntry(String id, EntityId entityId, ShapeKey key, String bodyId, Box2dShapeSpec spec) {
+            super(id, entityId, key, bodyId);
             this.spec = spec;
+            nativeId = key.toId();
+        }
+        @Override b2ShapeId live() { return requireLive(nativeId); }
+        @Override ShapeKey copyAndValidate(b2ShapeId value) { return ShapeKey.copyOf(requireLive(value)); }
+        @Override void setKey(ShapeKey replacement) {
+            key = replacement;
+            replacement.copyTo(nativeId);
+        }
+        @Override Map<String, ShapeEntry> map() { return shapes; }
+        @Override void validateParent(ShapeKey replacement) {
+            if (!BodyKey.copyOf(Box2d.b2Shape_GetBody(replacement.toId()))
+                    .equals(bodies.get(parentId).key)) {
+                throw new IllegalArgumentException("shape does not belong to the registered body");
+            }
         }
     }
 
-    static final class JointEntry extends Entry<Joint> {
+    private final class JointEntry extends Entry<b2JointId, JointKey> {
         final String bodyA;
         final String bodyB;
-
-        JointEntry(String id, EntityId entityId, Joint value, String worldId,
+        final b2JointId nativeId;
+        final b2Vec2 anchorAScratch = new b2Vec2();
+        final b2Vec2 anchorBScratch = new b2Vec2();
+        final b2Vec2 forceScratch = new b2Vec2();
+        JointEntry(String id, EntityId entityId, JointKey key, String worldId,
                 String bodyA, String bodyB) {
-            super(id, entityId, value, worldId);
+            super(id, entityId, key, worldId);
             this.bodyA = bodyA;
             this.bodyB = bodyB;
+            nativeId = key.toId();
+        }
+        @Override b2JointId live() { return requireLive(nativeId); }
+        @Override JointKey copyAndValidate(b2JointId value) { return JointKey.copyOf(requireLive(value)); }
+        @Override void setKey(JointKey replacement) {
+            key = replacement;
+            replacement.copyTo(nativeId);
+        }
+        @Override Map<String, JointEntry> map() { return joints; }
+        @Override void validateParent(JointKey replacement) {
+            b2JointId id = replacement.toId();
+            if (!WorldKey.copyOf(Box2d.b2Joint_GetWorld(id)).equals(worlds.get(parentId).key)
+                    || !bodyA.equals(bodyId(BodyKey.copyOf(Box2d.b2Joint_GetBodyA(id))))
+                    || !bodyB.equals(bodyId(BodyKey.copyOf(Box2d.b2Joint_GetBodyB(id))))) {
+                throw new IllegalArgumentException("joint world or endpoints differ from registration");
+            }
         }
     }
 
-    record ContactMapping(Box2dContactRecord.Key key, Box2dContactRecord.Endpoint endpointA,
-            Box2dContactRecord.Endpoint endpointB, boolean reversed) {}
+    private final class Registration<T, K> implements Box2dRegistration<T> {
+        private final Entry<T, K> entry;
+        Registration(Entry<T, K> entry) { this.entry = entry; }
+        @Override public String id() { return entry.id; }
+        @Override public EntityId runtimeEntityId() { return entry.entityId; }
+        @Override public void rebind(T value) { Box2dInspection.this.rebind(entry, value); }
+        @Override public void close() { remove(entry); }
+    }
 
-    private final class Registration<T> implements Box2dRegistration<T> {
-        private final Entry<T> entry;
-
-        Registration(Entry<T> entry) {
-            this.entry = entry;
+    private record WorldKey(char index1, char generation) {
+        static WorldKey copyOf(b2WorldId id) { return new WorldKey(id.index1(), id.generation()); }
+        b2WorldId toId() {
+            b2WorldId id = new b2WorldId();
+            id.index1(index1);
+            id.generation(generation);
+            return id;
         }
-
-        @Override public String id() {
-            return entry.id;
+        void copyTo(b2WorldId id) {
+            id.index1(index1);
+            id.generation(generation);
         }
+    }
 
-        @Override public EntityId runtimeEntityId() {
-            return entry.entityId;
+    private record BodyKey(int index1, char world0, char generation) {
+        static BodyKey copyOf(b2BodyId id) {
+            return new BodyKey(id.index1(), id.world0(), id.generation());
         }
-
-        @Override public void rebind(T value) {
-            Box2dInspection.this.rebind(entry, value);
+        b2BodyId toId() {
+            b2BodyId id = new b2BodyId();
+            id.index1(index1);
+            id.world0(world0);
+            id.generation(generation);
+            return id;
         }
+        void copyTo(b2BodyId id) {
+            id.index1(index1);
+            id.world0(world0);
+            id.generation(generation);
+        }
+    }
 
-        @Override public void close() {
-            remove(entry);
+    private record ShapeKey(int index1, char world0, char generation) {
+        static ShapeKey copyOf(b2ShapeId id) {
+            return new ShapeKey(id.index1(), id.world0(), id.generation());
+        }
+        b2ShapeId toId() {
+            b2ShapeId id = new b2ShapeId();
+            id.index1(index1);
+            id.world0(world0);
+            id.generation(generation);
+            return id;
+        }
+        void copyTo(b2ShapeId id) {
+            id.index1(index1);
+            id.world0(world0);
+            id.generation(generation);
+        }
+    }
+
+    private record JointKey(int index1, char world0, char generation) {
+        static JointKey copyOf(b2JointId id) {
+            return new JointKey(id.index1(), id.world0(), id.generation());
+        }
+        b2JointId toId() {
+            b2JointId id = new b2JointId();
+            id.index1(index1);
+            id.world0(world0);
+            id.generation(generation);
+            return id;
+        }
+        void copyTo(b2JointId id) {
+            id.index1(index1);
+            id.world0(world0);
+            id.generation(generation);
         }
     }
 }

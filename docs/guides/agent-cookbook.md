@@ -33,11 +33,10 @@ non-published `runtime-examples` module as ordinary consumers of the public arti
 | Correlate runtime and UI evidence | [Frame correlation](frame-correlation.md) | explicit `UiFrameCorrelation`, never guessed frames |
 | Connect an MCP coding agent | [Host same-JVM stdio MCP](#host-same-jvm-stdio-mcp) | [`SameJvmMcpApplication.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/SameJvmMcpApplication.java) and [`controlled-workflow.json`](../../runtime-examples/src/main/resources/transcripts/controlled-workflow.json) |
 | Interpret missing, bounded, or failed evidence | [Diagnose incomplete and failed evidence](#diagnose-incomplete-and-failed-evidence) | `AgentCookbookContractTest` and runtime fixture regressions |
-| Build a deterministic Box2D game | [Use the deterministic Box2D example](#use-the-deterministic-box2d-example) | [`DeterministicBox2dExample.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/DeterministicBox2dExample.java) |
+| Inspect a Box2D 3 game | [Use the Box2D 3 inspection recipe](#use-the-box2d-3-inspection-recipe) | `Box2dInspectionTest` and `Box2dInspectionFixtureTest` |
 
-Use release `2.2.0` for recipes through protocol 2.6. The examples module itself
-is test scaffolding and is never a dependency or published artifact. Repository contributors use
-`2.2.1-SNAPSHOT`.
+Use release `3.0.0` for the Box2D 3 inspection recipe. Protocol recipes remain compatible with
+their listed 2.2-era versions. Repository contributors use `3.0.0-SNAPSHOT`.
 
 ## Instrument and inspect state
 
@@ -487,39 +486,16 @@ opening `RuntimeMcpServer`; the next client read is not a JSON-RPC object. Put t
 `System.err`. For a separate-JVM failure, start a new `RuntimeRegistry` process and call
 `runtime_sessions`: the live game session is absent because registries are process-local.
 
-## Use the deterministic Box2D example
+## Use the Box2D 3 inspection recipe
 
-Use dependencies `agent-runtime-core`, `agent-runtime-libgdx`, and
-`agent-runtime-box2d` at `2.2.0`. The consumer example explicitly owns a native `World`,
-registers stable world/body/fixture/joint IDs, installs an evidence-first/application-second
-listener from `Box2dContacts.compose(applicationListener)`, and steps only inside the acknowledged
-fixed-step callback:
+Use `agent-runtime-box2d:3.0.0` with the official
+`com.badlogicgames.gdx:gdx-box2d:3.1.1-0` binding. The application owns every native ID, steps the
+world, and destroys joints before shapes, bodies, and the world. The runtime only copies bounded
+facts from explicitly registered live IDs.
 
-```java
-contacts.captureStep(() -> world.step(
-        tick.fixedStepSeconds(), velocityIterations, positionIterations));
-return tick.fixedStepNanos();
-```
-
-Its workflow resets `player-movement`, pauses, schedules velocity for epoch tick 1, advances 90
-exact ticks, checks final position and player-wall contact, verifies tick/frame correlation, and
-runs two selected body/contact evidence repeats. The expected summary is position `PASS`, contact
-`PASS`, determinism `EQUAL`, and no whole-program determinism claim. Structured entities remain
-available at `box2d.world.main`, `box2d.body.player`, `box2d.fixture.player-shape`,
-`box2d.joint.static-link`, and `box2d.contacts.main`.
-The native regression also requires the composed application listener to observe a begin callback;
-each recreated world reinstalls that same composed listener.
-
-World objects, callbacks, contacts, and native disposal remain capture-thread/application-owned.
-The adapter copies only explicitly registered bounded facts; contact completeness and truncation
-control negative assertions. Recreated worlds must rebind or re-register stable IDs and reinstall
-the listener before old native objects are disposed.
-
-Do not call `world.step(renderDelta)`, use native pointers as IDs, assume pixels equal metres, or
-read screenshots as authoritative physics state. The compact copyable implementation and native
-test are [`DeterministicBox2dExample.java`](../../runtime-examples/src/main/java/io/github/teemuki8/libgdx/agent/runtime/examples/DeterministicBox2dExample.java)
-and `DeterministicBox2dExampleTest`; the larger conformance fixture below supplies deliberate
-timing, scale, truncation, and unmapped-endpoint failures.
+The complete construction and close recipe is in
+[`box2d-inspection.md`](box2d-inspection.md). The native regression is
+`Box2dInspectionTest`; the unpublished fixture repeats the capsule path across the fixture module.
 
 ## Fixed-step simulation ticks
 
@@ -539,7 +515,7 @@ FixedStepSimulationConfiguration configuration =
 LibGdxFixedStepSimulation simulation = LibGdxFixedStepSimulation.acknowledged(
         runtime, configuration, tick -> {
             processGameInput();
-            world.step(tick.fixedStepSeconds(), 6, 2);
+            Box2d.b2World_Step(world, tick.fixedStepSeconds(), 4);
             gameLogicAfterPhysics();
             return tick.fixedStepNanos(); // the delta actually executed
         });
@@ -687,553 +663,107 @@ before retrying or resetting.
 Close the runtime on its capture thread. Completed immutable tick pages remain queryable after
 close; no new tick is accepted.
 
-## Inspect registered Box2D state
+## Inspect registered Box2D 3 state
 
-Use this 2.1 API when an agent needs authoritative physics evidence without
-reflection or native-pointer identities. Add `agent-runtime-box2d`, create the adapter on the
-runtime capture thread, and explicitly register the useful subset before `runtime.start()`:
+Initialize the official binding and create native objects with Box2D 3 definitions:
 
 ```java
+Box2d.initialize();
+b2WorldDef worldDef = Box2d.b2DefaultWorldDef();
+worldDef.workerCount(0);
+b2WorldId world = Box2d.b2CreateWorld(worldDef.asPointer());
+
+b2BodyDef bodyDef = Box2d.b2DefaultBodyDef();
+bodyDef.type(b2BodyType.b2_dynamicBody);
+b2BodyId body = Box2d.b2CreateBody(world, bodyDef.asPointer());
+
+b2ShapeDef shapeDef = Box2d.b2DefaultShapeDef();
+shapeDef.density(1.0f);
+b2Capsule capsule = new b2Capsule();
+capsule.center1().y(-0.5f);
+capsule.center2().y(0.5f);
+capsule.radius(0.25f);
+b2ShapeId shape = Box2d.b2CreateCapsuleShape(
+        body, shapeDef.asPointer(), capsule.asPointer());
+
 Box2dInspection physics = new Box2dInspection(
         runtime, Box2dAdapterLimits.developmentDefaults());
-Box2dRegistration<World> mainWorld = physics.registerWorld(
-        "main", world, new Box2dWorldSpec(
-                true, true, true, 6, 2, OptionalDouble.of(60),
-                new Box2dUnitTransform(100)));
-Box2dRegistration<Body> ball = physics.registerBody("ball", "main", ballBody);
-Box2dRegistration<Fixture> ballShape = physics.registerFixture(
-        "ball-shape", "ball", ballFixture);
-Box2dRegistration<Joint> spring = physics.registerJoint(
-        "spring", "main", springJoint); // register both endpoint bodies first
+Box2dRegistration<b2WorldId> mainWorld = physics.registerWorld(
+        "main", world, new Box2dWorldSpec(4, new Box2dUnitTransform(100)));
+Box2dRegistration<b2BodyId> player = physics.registerBody("player", "main", body);
+Box2dRegistration<b2ShapeId> playerShape = physics.registerShape(
+        "player-shape", "player", shape, Box2dShapeSpec.defaults());
 ```
 
-`Box2dUnitTransform(100)` explicitly means one physics metre equals 100 application render units.
-Use `physicsToRender` and `renderToPhysics` for finite scalar or `Box2dVector` conversion. The
-runtime never assumes that render units are pixels and does not invent a globally correct scale.
+Create a joint only after both endpoint bodies are registered, then register its `b2JointId`.
+Runtime entity IDs remain `box2d.world.*`, `box2d.body.*`, `box2d.fixture.*`, and
+`box2d.joint.*`. Evidence contains copied vectors, numbers, enums, strings, lists, and objects only;
+native handle fields, structs, and pointers are never serialized.
 
-Registration produces ordinary runtime entities with stable IDs and exact closed property sets:
-
-```text
-box2d.world.<id> / box2d.world
-  id, runtimeEntityId, gravity, sleepingAllowed, warmStarting, continuousPhysics,
-  velocityIterations, positionIterations, fixedStepNanos,
-  registeredBodyCount, registeredFixtureCount, registeredJointCount,
-  totalBodyCount, totalFixtureCount, totalJointCount, totalContactCount,
-  locked, renderUnitsPerMeter
-
-box2d.body.<id> / box2d.body
-  id, runtimeEntityId, worldId, bodyType, position, angleRadians,
-  linearVelocity, angularVelocity, mass, inertia, gravityScale,
-  linearDamping, angularDamping, awake, active, bullet, fixedRotation,
-  sleepingAllowed, registeredFixtureCount, totalFixtureCount
-
-box2d.fixture.<id> / box2d.fixture
-  id, runtimeEntityId, bodyId, shapeType, sensor, density, friction,
-  restitution, categoryBits, maskBits, groupIndex, geometry, diagnostics
-
-box2d.joint.<id> / box2d.joint
-  id, runtimeEntityId, worldId, jointType, bodyAId, bodyBId,
-  anchorA, anchorB, active, collideConnected, reactionForce,
-  reactionTorque, detail
-```
-
-The closed `geometry` variants are:
-
-```text
-CIRCLE:  type, radius, localCenter
-POLYGON: type, vertices, observedVertices, retainedVertices, vertexLimit, truncated
-EDGE:    type, endpoint1, endpoint2, hasAdjacent0, adjacent0,
-         hasAdjacent3, adjacent3
-CHAIN:   type, vertices, observedVertices, retainedVertices, vertexLimit, truncated, loop
-```
-
-`vertices` is the ordered bounded native prefix. Missing edge-adjacent vertices are explicit
-`null`. Chain registration must supply `Box2dFixtureSpec.chainLoop(true|false)`. A truncated polygon
-or chain also adds `SHAPE_VERTICES_TRUNCATED` to the bounded fixture `diagnostics` list.
-
-The joint `detail` object is also closed:
-
-```text
-DISTANCE:  type, localAnchorA, localAnchorB, length, frequency, dampingRatio
-REVOLUTE:  type, localAnchorA, localAnchorB, referenceAngle, jointAngle, jointSpeed,
-           limitEnabled, lowerLimit, upperLimit, motorEnabled, motorSpeed, maxMotorTorque
-PRISMATIC: type, localAnchorA, localAnchorB, localAxisA, referenceAngle, translation,
-           jointSpeed, limitEnabled, lowerLimit, upperLimit, motorEnabled, motorSpeed,
-           maxMotorForce
-GENERIC:   type, nativeJointType
-```
-
-Reaction force and torque are runtime `null` unless `Box2dWorldSpec.inverseStep` explicitly supplies
-a positive finite value representable by Box2D's float API.
-
-Inspect the result through the existing tool:
-
-```json
-{"name":"runtime_entity","arguments":{"sessionId":"game","entityId":"box2d.body.ball","fromFrame":0,"toFrame":60,"limit":60}}
-```
-
-A representative structured `latest` fragment is:
-
-```json
-{
-  "id": {"value": "box2d.body.ball"},
-  "type": {"value": "box2d.body"},
-  "properties": [
-    {"name": "active", "value": {"valueType": "boolean", "value": true}},
-    {"name": "angleRadians", "value": {"valueType": "decimal", "value": 0}},
-    {"name": "bodyType", "value": {"valueType": "enum", "value": "DYNAMIC"}},
-    {"name": "position", "value": {
-      "valueType": "vector2",
-      "x": {"valueType": "decimal", "value": 5},
-      "y": {"valueType": "decimal", "value": 0.51}
-    }}
-  ],
-  "truncations": []
-}
-```
-
-Properties are sorted by name in actual responses; the fragment omits unchanged keys only for
-readability. Query `truncations` before trusting a negative or complete-state conclusion.
-
-For a fixed-step game, capture happens after `world.step` inside the acknowledged simulation tick:
+Close registrations before native destruction. Descendants close first:
 
 ```java
-runtime.simulation().tick(FIXED_STEP_NANOS, supplied -> {
-    world.step((float) (supplied / 1_000_000_000.0), 6, 2);
-    gameLogicAfterPhysics();
-    return supplied;
-});
+jointRegistration.close();
+playerShape.close();
+player.close();
+mainWorld.close();
+physics.close();
+
+Box2d.b2DestroyJoint(joint);
+Box2d.b2DestroyShape(shape, true);
+Box2d.b2DestroyBody(body);
+Box2d.b2DestroyWorld(world);
 ```
 
-`Box2dAdapterLimits` bounds worlds, bodies, fixtures, joints, copied shape vertices, the largest
-closed property schema, and diagnostics. Core capture limits still apply afterward; always inspect
-`EntitySnapshot.truncations()` as well as fixture diagnostics. Capacity overflow, duplicate IDs or
-native wrappers, missing parents/endpoints, wrong-world relationships, missing chain-loop
-testimony, wrong-thread use, and use after close fail explicitly.
+Registration, rebind, and close require the owner thread and no open runtime frame. Invalid or stale
+IDs, duplicate native keys, wrong-world relationships, missing joint endpoints, registration
+bounds, closed adapters, and parent-before-child close all fail rather than producing partial
+evidence.
 
-The adapter stores weak native references and owns neither discovery nor lifecycle. Before replacing
-a native object, remove dependent fixture/joint registrations as required and call `rebind` on the
-stable registration. Close registrations from leaves to roots, or close `Box2dInspection` to remove
-all providers. The adapter never calls `World.dispose`, `Shape.dispose`, or any native destroy
-operation; application code remains responsible for those objects. World and fixture rebind
-preserve their registered `Box2dWorldSpec` or `Box2dFixtureSpec`; unregister and register again when
-solver/unit or chain-loop testimony changes. Rebind and close reject an open runtime frame without
-changing the registration.
+## Capture bounded Box2D 3 contacts
 
-Authors of other adapter modules that change an object behind an already registered entity provider
-must call `runtime.entities().requireProviderMutationAllowed()` immediately before the swap. This
-public guard preserves capture-thread ownership and rejects open-frame or closed-runtime mutation.
+Register contact capture after the world, bodies, and shapes. The adapter owns one bounded native
+contact-data scratch buffer but never owns or steps the world:
 
-## Capture and inspect Box2D contacts
+Every selected shape must be created with the flags required by the retained policy:
 
-Use this 2.1 API when collision callbacks must be correlated with an authoritative
-fixed simulation tick. Register both bodies and fixtures before registering contacts. There may be
-one live contact registration per registered world:
+```java
+shapeDef.enableContactEvents(true); // begin/end
+shapeDef.enableHitEvents(true);     // hit-derived postSolve
+```
+
+Registration rejects a missing flag. `captureStep` revalidates every selected live shape before
+stepping so later native flag mutation cannot produce falsely complete evidence.
 
 ```java
 Box2dContacts contacts = physics.registerContacts(
         "main",
         Box2dContactLimits.developmentDefaults(),
         Box2dContactPolicy.developmentDefaults());
-
-// The application installs the returned listener. Registration and listener() do not.
-world.setContactListener(contacts.listener());
 ```
 
-The defaults are an exact public contract:
+Wrap exactly one application-owned step inside each acknowledged simulation tick:
 
 ```java
-new Box2dContactLimits(
-        128,  // callbackRecordsPerTick
-        256,  // activeContactsPerTick
-        2,    // pointsPerContact
-        2,    // impulsesPerContact
-        2,    // oldManifoldPointsPerContact
-        8,    // diagnosticsPerTick
-        1_024,// retainedContactTicks
-        256); // queryPageSize
-
-new Box2dContactPolicy(
-        true,  // begin
-        true,  // end
-        false, // preSolve
-        true); // postSolve
+contacts.captureStep(() ->
+        Box2d.b2World_Step(world, tick.fixedStepSeconds(), worldSpec.subStepCount()));
 ```
 
-All contact limits are positive hard bounds. `queryPageSize` cannot exceed
-`retainedContactTicks`. Supply an explicit `Box2dContactPolicy` to enable pre-solve or omit another
-phase. Active-contact maintenance still processes native callbacks whose phase is not retained as a
-record.
-
-### Compose an existing application listener
-
-If the game already has one listener, install the evidence-first, application-second composition:
-
-```java
-ContactListener combined = contacts.compose(gameContactListener);
-world.setContactListener(combined);
-```
-
-`compose` accepts one application listener once and rejects composing the evidence listener with
-itself. If the application listener throws, the adapter retains the closed
-`APPLICATION_LISTENER_FAILED` and `STEP_FAILED` diagnostics and rethrows the original unchecked
-failure. It never copies the exception message or stack trace, and the simulation tick cannot
-silently report a successful callback.
-
-### Capture the authoritative step
-
-Wrap exactly one application-owned step inside the existing acknowledged tick callback:
-
-```java
-runtime.simulation().tick(FIXED_STEP_NANOS, suppliedDeltaNanos -> {
-    processScheduledInput();
-    contacts.captureStep(() -> world.step(
-            suppliedDeltaNanos / 1_000_000_000f,
-            worldSpec.velocityIterations(),
-            worldSpec.positionIterations()));
-    gameLogicAfterPhysics();
-    return suppliedDeltaNanos;
-});
-
-renderGame();
-```
-
-`captureStep` requires the adapter's application thread, an active timeline-owned runtime frame,
-and at most one captured step for that world in the simulation tick. It finalizes bounded contact
-evidence before the frame closes and then rethrows an application step or listener failure. It
-does not sleep, render, step again, install a listener, or create a loop or thread. Do not also step
-the world from `render(delta)`.
-
-With `RuntimeConfiguration.disabled()`, the same wrapper still invokes the application-owned step
-exactly once and a composed listener still forwards to the application listener. It retains no
-contact callbacks, history, entity, or events, so disabling observation never disables physics.
-
-The generic `runtime.simulation().activeTick()` API is the transient integration context used by
-the adapter. While the timeline-owned frame is open on the capture thread, including the simulation
-callback and provider capture, it returns:
-
-```text
-ActiveSimulationTick
-  simulationTickId
-  executionEpochId
-  epochTick
-  suppliedDeltaNanos
-  source
-  runtimeFrameId
-```
-
-It is empty before `tick`, after `tick` returns, and on every other thread, including while the
-callback is active. `source` is the closed `RUNNING` or `PAUSED` testimony. The context is cleared
-after success or failure. Do not retain it or treat it as completed tick evidence; query
-`SimulationTick` for the executed delta, outcome, elapsed simulation time, and final frame
-correlation.
-
-### Inspect typed Java evidence
-
-Completed contact history is safe to query from another thread:
-
-```java
-Box2dContactTickPage page = contacts.ticks(1, 60, 60);
-for (Box2dContactTick tick : page.ticks()) {
-    if (!tick.complete()) {
-        inspect(tick.diagnostics(), tick.truncations());
-    }
-    inspect(tick.records(), tick.activeContacts());
-}
-```
-
-The range is inclusive and uses session-monotonic `SimulationTickId` values, not epoch-relative
-ticks or render frames. `limit` must not exceed `queryPageSize`. `Box2dContactTickPage` exposes
-`ticks`, `hasMore`, `rangeStatus`, `oldestRetainedTickId`, and `newestRetainedTickId`. Its closed
-range statuses are `COMPLETE`, `PAGINATED`, `PARTIALLY_EVICTED`, `EVICTION_UNKNOWN`, and
-`NOT_YET_CAPTURED`. A missing tick inside the requested retained range is `NOT_YET_CAPTURED`, never
-an invented complete page.
-The adapter confirms the simulation timeline's resulting frame before moving a captured contact
-tick into typed history. A query made while that frame is pending omits it; a failed frame is
-retained with `MISSING_CORRELATION` and `complete=false`. Paging allocates at most the requested
-page. Bounded exact evicted-tick metadata survives history eviction and reset, so a known evicted
-tick reports `PARTIALLY_EVICTED`. If that metadata is itself discarded, the affected old range
-reports `EVICTION_UNKNOWN`; it does not silently become a PASS-capable negative result.
-
-Each immutable `Box2dContactTick` exposes:
-
-```text
-simulationTickId, executionEpochId, epochTick, runtimeFrameId,
-records, activeContacts,
-callbackRecordsObserved, callbackRecordsRetained, callbackRecordLimit,
-activeContactsObserved, activeContactsRetained, activeContactLimit,
-unmappedContactsObserved, diagnostics, truncations, complete
-```
-
-Each `Box2dContactRecord` exposes `phase`, `key`, `endpointA`, `endpointB`, combined `sensor`,
-`touching`, `enabled`, `availability`, `points`, optional `normal`, `impulses`, optional
-`oldManifold`, `occurrence`, and `truncations`. Its closed phases are `BEGIN`, `END`, `PRE_SOLVE`,
-and `POST_SOLVE`; availability is respectively `ENDPOINTS_ONLY`,
-`CURRENT_AND_OLD_MANIFOLD`, or
-`CURRENT_MANIFOLD_AND_IMPULSES`. `OldManifold` has a closed type of `CIRCLES`, `FACE_A`, or
-`FACE_B` and bounded `OldManifoldPoint(id, normalImpulse, tangentImpulse)` values. Impulses are
-`Impulse(normal, tangent)` values. `ActiveContact` exposes the latest bounded key/endpoints,
-combined sensor and touching/enabled state, points, optional normal, impulses, and truncations.
-
-The stable key is `Key(fixtureAId, childIndexA, fixtureBId, childIndexB)`. It is ordered by the
-application fixture ID and then child index; native pointer and Java identity never appear. Each
-endpoint adds its registered `bodyId`, `fixtureId`, `childIndex`, and copied `sensor` state. When
-native A/B is reversed, the adapter swaps the endpoint facts, negates the world normal and signed
-tangent impulses, preserves normal impulse magnitude, and leaves world points unchanged.
-
-### Exact runtime entity schema
-
-The current completed contact tick is the ordinary runtime entity
-`box2d.contacts.<worldId>` with type `box2d.contacts`. Its exact top-level property set is:
-
-```text
-worldId
-runtimeEntityId
-policy
-limits
-latestTick
-records
-activeContacts
-callbackCounts
-activeCounts
-unmappedContacts
-diagnostics
-truncations
-complete
-```
-
-Runtime properties and object fields are serialized in canonical name order. The exact nested
-closed schemas are:
-
-```text
-policy:
-  begin, end, preSolve, postSolve
-
-limits:
-  callbackRecordsPerTick, activeContactsPerTick, pointsPerContact,
-  impulsesPerContact, oldManifoldPointsPerContact, diagnosticsPerTick,
-  retainedContactTicks, queryPageSize
-
-latestTick:
-  simulationTickId, executionEpochId, epochTick, runtimeFrameId
-
-callbackCounts | activeCounts:
-  observed, retained, limit
-
-key:
-  fixtureAId, childIndexA, fixtureBId, childIndexB
-
-endpointA | endpointB:
-  bodyId, fixtureId, childIndex, sensor
-
-record:
-  phase, key, endpointA, endpointB, sensor, touching, enabled, availability,
-  points, normal, impulses, oldManifold, occurrence, truncations
-
-activeContact:
-  key, endpointA, endpointB, sensor, touching, enabled,
-  points, normal, impulses, truncations
-
-impulse:
-  normal, tangent
-
-oldManifold:
-  type, points
-
-oldManifoldPoint:
-  id, normalImpulse, tangentImpulse
-
-diagnostic:
-  code, observed
-
-truncation:
-  dimension, observed, retained, limit
-```
-
-The combined `sensor` field is true when either endpoint fixture is a sensor; the endpoint fields
-preserve which fixture supplied that state. `points` is a list of runtime `vector2` values.
-`normal` is a `vector2` or an explicit runtime `null`. `oldManifold` is an object or explicit
-runtime `null`. Begin/end records have `normal=null`, `oldManifold=null`, and empty `points` and
-`impulses`. Pre-solve records have current points/normal, an old-manifold object, and empty
-`impulses`. Post-solve records have current points/normal and impulses, with
-`oldManifold=null`. Zero is never substituted for an unavailable phase value.
-
-A representative begin record is:
-
-```text
-phase: BEGIN
-key: {fixtureAId: ball, childIndexA: 0, fixtureBId: ground, childIndexB: 0}
-endpointA: {bodyId: ball-body, fixtureId: ball, childIndex: 0, sensor: false}
-endpointB: {bodyId: ground-body, fixtureId: ground, childIndex: 0, sensor: false}
-sensor: false
-touching: true
-enabled: true
-availability: ENDPOINTS_ONLY
-points: []
-normal: null
-impulses: []
-oldManifold: null
-occurrence: 1
-truncations: []
-```
-
-Before the first captured step, and after a reset baseline, `latestTick` is explicit null,
-`records` and `activeContacts` are empty, and `complete` is false. Only a completed tick with
-`complete=true`, no relevant core snapshot truncation, and an empty exact active/record set can
-support a negative contact conclusion.
-
-Adapter incompleteness is sticky when a callback arrived outside capture, after close, with an
-unmapped endpoint, without a known begin, or during a failed step. Later quiet ticks remain
-incomplete because silence cannot reconstruct the active set. A scenario/epoch reset or world
-replacement supplies the authoritative clean baseline that clears this taint. Nested record or
-active-contact truncations also force `complete=false` until the affected active value is replaced
-by complete evidence or ends.
-
-### Exact contact event schema
-
-Each retained record emits one of:
-
-```text
-box2d.contact.begin
-box2d.contact.end
-box2d.contact.preSolve
-box2d.contact.postSolve
-```
-
-The event type supplies the phase. Canonical body A is `subject`; canonical body B is `source`. The
-event's own `frameId` is the runtime-frame correlation. Its exact attribute set is the record field
-set without `phase`, plus world/tick correlation:
-
-```text
-worldId
-simulationTickId
-executionEpochId
-epochTick
-key
-endpointA
-endpointB
-sensor
-touching
-enabled
-availability
-points
-normal
-impulses
-oldManifold
-occurrence
-truncations
-```
-
-There is deliberately no duplicate `runtimeFrameId` attribute. Explicit null rules and every nested
-schema are identical to the entity record. Records and emitted events use stable phase/key/occurrence
-ordering after selecting the configured bounded native-delivery prefix.
-
-### Query through protocol and MCP
-
-No Box2D command or transport dependency is added. Use the existing exact entity, entity-history,
-and event commands. MCP examples:
-
-```json
-{"name":"runtime_entity","arguments":{"sessionId":"game","entityId":"box2d.contacts.main","fromFrame":0,"toFrame":60,"limit":60}}
-```
-
-```json
-{"name":"runtime_entity_history","arguments":{"sessionId":"game","entityId":"box2d.contacts.main","fromFrame":0,"toFrame":60,"versionOffset":0,"versionLimit":60}}
-```
-
-```json
-{"name":"runtime_events","arguments":{"sessionId":"game","fromFrame":1,"toFrame":60,"eventType":"box2d.contact.begin","subject":"box2d.body.ball-body","source":"box2d.body.ground-body","limit":60}}
-```
-
-The equivalent transport-neutral protocol commands are `RuntimeCommand.Entity`,
-`RuntimeCommand.EntityHistory`, and `RuntimeCommand.Events`. Protocol 2.0 or 2.1 is required for
-entity history; the existing frozen entity/event command shapes remain unchanged. Protocol/MCP
-responses carry the same closed `RuntimeValue` objects described above. Check both adapter-level
-`complete`/`truncations` and the enclosing `EntitySnapshot.truncations` or query retention metadata.
-
-### Bounds, diagnostics, and failure handling
-
-The adapter selects a bounded callback prefix, bounds every retained callback value, and then sorts
-the retained evidence. It does not promise that different Box2D native versions or platforms
-deliver callbacks in the same order. The deterministic claim is limited to selected observations
-under the same native library, platform, configuration, initial state, fixed step, and scheduled
-input.
-
-Contact-level truncation dimensions are closed strings:
-
-```text
-box2d.contact.records
-box2d.contact.active
-box2d.contact.points
-box2d.contact.impulses
-box2d.contact.oldManifoldPoints
-box2d.contact.diagnostics
-```
-
-Each truncation contains `dimension`, saturating `observed`, `retained`, and `limit`. Relevant
-diagnostics make `complete=false`. The closed diagnostic codes are:
-
-Public contact record, active-contact, tick, and page constructors preflight their documented hard
-sizes and closed truncation dimensions before copying a caller collection. They cannot be used to
-construct an oversized or open-schema value that only appears bounded.
-
-```text
-UNMAPPED_ENDPOINT
-CALLBACK_OUTSIDE_TICK
-CALLBACK_AFTER_CLOSE
-RECORD_LIMIT_REACHED
-ACTIVE_LIMIT_REACHED
-POINT_LIMIT_REACHED
-IMPULSE_LIMIT_REACHED
-OLD_MANIFOLD_LIMIT_REACHED
-ENDPOINT_CHANGED
-MISSING_CORRELATION
-APPLICATION_LISTENER_FAILED
-PHASE_VALUE_UNAVAILABLE
-STEP_FAILED
-EPOCH_RESET
-WORLD_REBOUND
-```
-
-An unregistered callback endpoint increments `unmappedContacts` and `UNMAPPED_ENDPOINT` but exposes
-no partial endpoint identity. A callback outside `captureStep` copies no native endpoint detail.
-An application listener or step failure is rethrown after bounded finalization. Agent logic should
-surface the structured facts instead of treating an empty list as success, for example:
-
-```text
-expected contact ball-body <-> ground-body
-no complete contact evidence observed
-
-contact entity:
-  simulationTickId: 42
-  callbackCounts: {observed: 129, retained: 128, limit: 128}
-  complete: false
-  diagnostics: [{code: RECORD_LIMIT_REACHED, observed: 1}]
-  truncations:
-    [{dimension: box2d.contact.records, observed: 129, retained: 128, limit: 128}]
-```
-
-### Reset, rebind, and close
-
-A scenario reset or checkpoint restore starts a new execution epoch. Its baseline clears the active
-set and typed `Box2dContacts.ticks` history, publishes `latestTick=null`, and reports `EPOCH_RESET`;
-session simulation tick IDs still are not reused. Old typed queries report `PARTIALLY_EVICTED`
-while their exact eviction IDs are retained, then `EVICTION_UNKNOWN` if that bounded metadata is
-discarded. World rebind clears contact evidence and reports
-`WORLD_REBOUND`. Install the same explicit listener or composition on the replacement world before
-stepping it. Fixture rebind/unregister clears only affected retained active keys, preserves
-unrelated contacts, and reports `ENDPOINT_CHANGED`.
-These operations retain incomplete evidence instead of silently preserving a stale native contact.
-
-Close `Box2dContacts` or its parent `Box2dInspection` on the application thread and outside an open
-frame or captured step. Close is idempotent, removes live contact providers and listener-composition
-references, clears typed contact history, and never calls a native dispose operation. Calls through
-the closed handle fail with stable lifecycle errors. Completed runtime frames and events already
-copied into core remain immutable until ordinary core retention evicts them.
-
-Contact events state only that Box2D delivered a callback for registered endpoints. The runtime
-never infers that a player landed, took damage, died, scored, or caused another gameplay outcome.
-Emit an application semantic event or explicit attribution when an agent needs that causality.
+After the step, the adapter immediately copies `b2ContactEvents`. Begin and end events retain only
+stable registered endpoints. Hit events retain copied point and normal values and correlate bounded
+`b2Shape_GetContactData` results to the same stable pair. The `normal` impulse is the maximum
+positive `b2ManifoldPoint.totalNormalImpulse`, accumulated across substeps and restitution; the
+final-substep `normalImpulse` is intentionally not used.
+
+Records and active contacts keep the existing `box2d.contacts.<worldId>` entity and
+`box2d.contact.begin`, `box2d.contact.end`, and `box2d.contact.postSolve` event schemas. Native
+event arrays, IDs, manifold pointers, and contact buffers never cross the capture call. Bounds fail
+complete evidence with diagnostics rather than silently truncating.
+
+Close contact capture before world rebind or scenario reset, then register a fresh capture after
+replacement shapes; this clears active evidence before the next baseline. Close `Box2dContacts` or
+its parent inspection before native destruction; close releases its manually owned contact-data
+buffer.
 
 ## Assert physics over exact simulation ticks
 
@@ -1452,7 +982,7 @@ SimulationDeterminismSpec spec = Box2dDeterminism.builder(
         "main",
         new Box2dDeterminism.WorldSettings(
                 stepNanos, new Box2dVector(0.0, -9.8),
-                8, 3, true, true, true),
+                4, true, true, true),
         "player-move", 7L,
         RuntimeValues.object(RuntimeValues.field("level", RuntimeValues.string("one"))),
         2, 60)
@@ -1662,47 +1192,16 @@ application-reported setup in this operation. It is not whole-program determinis
 causality, or a promise that another CPU, platform, libGDX version, or Box2D native version produces
 identical floating-point state or callback order.
 
-## Run the actual-native Box2D conformance recipe
+## Run the actual-native Box2D 3 inspection fixture
 
-The unpublished `runtime-fixtures` module contains the copyable agent example:
+`Box2dInspectionFixtureTest` creates a real zero-worker Box2D 3 world, dynamic body, and genuine
+capsule, registers stable runtime IDs, and verifies copied evidence contains no native scalar
+identity. On Linux run it under Xvfb:
 
-- `Box2dConformanceSimulation` composes the public fixed-step, inspection, contacts, input,
-  scenario, checkpoint, recording, assertion, and determinism APIs around an actual native
-  `World`, including selected bodies, fixtures, and a distance joint plus observable
-  post-physics game logic;
-- `Box2dConformanceFixtureTest` proves ball drop, two-body collision, scheduled player movement,
-  post-solve points/normal/impulses, active contacts, exact tick/frame evidence, checkpoint restore,
-  recording/replay, protocol 2.3-2.5, MCP, render independence, and deterministic reruns;
-- `Box2dConformanceApplication` runs the same model from a hidden real LWJGL3 render loop, using
-  `Gdx.graphics.getDeltaTime()` only as input to the canonical accumulator.
-
-The fixture also locks down the negative matrix agents need when a game is broken:
-
-| Deliberate fault | Required evidence |
-| --- | --- |
-| application reports twice the configured step | `EXECUTED_DELTA_MISMATCH` and tick outcome `DELTA_MISMATCH` |
-| one-second render delta | render clamp, accumulator loss, catch-up tick loss, and exact dropped time/ticks |
-| 100 render units/metre violates an application-supplied 10-unit extent | assertion `FAIL` with observed `renderPosition` |
-| polygon vertices and contact callbacks exceed configured limits | `SHAPE_VERTICES_TRUNCATED`, `RECORD_LIMIT_REACHED`, and `complete=false` |
-| colliding fixture endpoint is not registered | `UNMAPPED_ENDPOINT`, `complete=false`, and contact assertion `INCONCLUSIVE` |
-| fault mode alters application handling of the same scheduled input on one repeat | `DIVERGED` at epoch tick 1 with `linearVelocity` as the first differing fact |
-
-These faults are separate fixtures/configurations. Do not combine incomplete evidence with a
-successful claim or infer a scale meaning that the application did not supply.
-
-On Linux run the isolated native gate, never the developer desktop display:
-
-```bash
-xvfb-run -a ./gradlew :runtime-fixtures:test --tests '*Box2dConformance*' \
-  --tests '*Lwjgl3FixtureSmokeTest*' --warning-mode=fail
+```text
+xvfb-run -a ./gradlew :runtime-fixtures:test \
+  --tests '*Box2dInspectionFixtureTest' --warning-mode=fail
 ```
 
-The compact evidence asserts 60 controlled physics ticks, one supplementary presentation render,
-PASS position/contact assertions, EQUAL selected rerun evidence, runtime-frame correlation, and
-application-thread dispatch. See
-[Bootstrap migration: deterministic Box2D games](bootstrap-box2d-migration.md) for the exact
-generated-game contract.
-
-When any public Java API, protocol/MCP contract, dependency, or agent-visible behavior changes,
-update the affected cookbook schema and runnable recipe in that same pull request. Do not defer the
-agent example to a later documentation issue.
+The runtime module additionally covers a real revolute joint and stale, wrong-world, duplicate,
+bounded, wrong-thread, and closed failures.

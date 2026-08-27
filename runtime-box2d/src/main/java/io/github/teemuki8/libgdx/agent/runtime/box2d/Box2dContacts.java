@@ -1,9 +1,12 @@
 package io.github.teemuki8.libgdx.agent.runtime.box2d;
 
-import com.badlogic.gdx.physics.box2d.Contact;
-import com.badlogic.gdx.physics.box2d.ContactImpulse;
-import com.badlogic.gdx.physics.box2d.ContactListener;
-import com.badlogic.gdx.physics.box2d.Manifold;
+import com.badlogic.gdx.box2d.Box2d;
+import com.badlogic.gdx.box2d.structs.b2ContactData;
+import com.badlogic.gdx.box2d.structs.b2ContactEvents;
+import com.badlogic.gdx.box2d.structs.b2ContactHitEvent;
+import com.badlogic.gdx.box2d.structs.b2Manifold;
+import com.badlogic.gdx.box2d.structs.b2ManifoldPoint;
+import com.badlogic.gdx.box2d.structs.b2ShapeId;
 import io.github.teemuki8.libgdx.agent.runtime.core.ActiveSimulationTick;
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
@@ -23,16 +26,17 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.TreeMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
-/** Application-owned bounded capture of explicitly registered Box2D contact callbacks. */
+/** Application-owned bounded copy of post-step Box2D 3 contact events. */
 public final class Box2dContacts implements AutoCloseable {
+    private static final AtomicInteger OPEN_NATIVE_SCRATCH = new AtomicInteger();
     private final AgentRuntime runtime;
     private final Box2dInspection inspection;
     private final String worldId;
     private final Box2dContactLimits limits;
     private final Box2dContactPolicy policy;
     private final Thread ownerThread;
-    private final ContactListener listener = new EvidenceListener();
     private final Object historyLock = new Object();
     private final ArrayDeque<Box2dContactTick> history = new ArrayDeque<>();
     private final ArrayDeque<SimulationTickId> evictedTickIds = new ArrayDeque<>();
@@ -42,8 +46,8 @@ public final class Box2dContacts implements AutoCloseable {
             new EnumMap<>(Box2dContactTick.DiagnosticCode.class);
     private final EnumMap<Box2dContactTick.DiagnosticCode, Long> persistentDiagnostics =
             new EnumMap<>(Box2dContactTick.DiagnosticCode.class);
-    private ContactListener applicationListener;
-    private ContactListener composedListener;
+    private final b2ContactEvents contactEvents = new b2ContactEvents();
+    private final b2ContactData.b2ContactDataPointer contactData;
     private EntityRegistration entityRegistration;
     private Capture capture;
     private SimulationTickId lastCapturedTick;
@@ -62,6 +66,9 @@ public final class Box2dContacts implements AutoCloseable {
         this.limits = Objects.requireNonNull(limits, "limits");
         this.policy = Objects.requireNonNull(policy, "policy");
         this.ownerThread = Objects.requireNonNull(ownerThread, "ownerThread");
+        contactData = new b2ContactData.b2ContactDataPointer(
+                limits.callbackRecordsPerTick(), false);
+        OPEN_NATIVE_SCRATCH.incrementAndGet();
         observedEpoch = runtime.currentEpoch();
     }
 
@@ -71,31 +78,10 @@ public final class Box2dContacts implements AutoCloseable {
                 () -> worldId, this::declareEntity);
     }
 
-    /** Returns the evidence listener without installing it on the application-owned world. */
-    public ContactListener listener() {
-        requireOpen();
-        return listener;
-    }
-
-    /** Returns one evidence-first, application-second listener composition. */
-    public ContactListener compose(ContactListener application) {
-        requireOwnerOpen();
-        Objects.requireNonNull(application, "applicationListener");
-        if (application == listener) {
-            throw new IllegalArgumentException("cannot compose the evidence listener with itself");
-        }
-        if (composedListener != null) {
-            throw new IllegalStateException("Box2D contact listener is already composed");
-        }
-        applicationListener = application;
-        composedListener = new ComposedListener();
-        return composedListener;
-    }
 
     /**
-     * Captures callbacks from exactly one application-owned world step in the active runtime tick.
-     * The original unchecked step or listener failure is rethrown after bounded finalization.
-     * Disabled runtimes execute the step once and retain no contact evidence.
+     * Captures post-step event arrays from exactly one application-owned world step in the active
+     * runtime tick. Disabled runtimes execute the step once and retain no contact evidence.
      */
     public void captureStep(Runnable worldStep) {
         requireOwnerOpen();
@@ -104,6 +90,7 @@ public final class Box2dContacts implements AutoCloseable {
             worldStep.run();
             return;
         }
+        validateEventFlags();
         settlePending();
         ActiveSimulationTick activeTick = runtime.simulation().activeTick()
                 .orElseThrow(() -> new IllegalStateException(
@@ -117,19 +104,13 @@ public final class Box2dContacts implements AutoCloseable {
         lifecycleDiagnostics.forEach(next::diagnostic);
         lifecycleDiagnostics.clear();
         persistentDiagnostics.forEach(next::diagnostic);
-        long afterCloseCallbacks = inspection.takeCallbacksAfterClose(worldId);
-        if (afterCloseCallbacks > 0) {
-            next.diagnostic(Box2dContactTick.DiagnosticCode.CALLBACK_AFTER_CLOSE,
-                    afterCloseCallbacks);
-            persistentDiagnostic(Box2dContactTick.DiagnosticCode.CALLBACK_AFTER_CLOSE,
-                    afterCloseCallbacks);
-        }
         capture = next;
         lastCapturedTick = activeTick.simulationTickId();
         RuntimeException runtimeFailure = null;
         Error errorFailure = null;
         try {
             worldStep.run();
+            copyEvents(next);
         } catch (RuntimeException failure) {
             next.diagnostic(Box2dContactTick.DiagnosticCode.STEP_FAILED, 1);
             persistentDiagnostic(Box2dContactTick.DiagnosticCode.STEP_FAILED, 1);
@@ -210,7 +191,7 @@ public final class Box2dContacts implements AutoCloseable {
         }
     }
 
-    /** Releases listener references and bounded history without disposing native objects. */
+    /** Releases bounded history and owned native scratch without destroying the world. */
     @Override public void close() {
         requireOwner();
         closeInternal(true);
@@ -219,6 +200,19 @@ public final class Box2dContacts implements AutoCloseable {
     void closeFromInspection() {
         requireOwner();
         closeInternal(false);
+    }
+
+    boolean nativeScratchFreed() {
+        return contactData.isFreed();
+    }
+
+    static int openNativeScratchCount() {
+        return OPEN_NATIVE_SCRATCH.get();
+    }
+
+    void validateEventFlags() {
+        requireOwnerOpen();
+        inspection.requireContactEventFlags(worldId, policy, false);
     }
 
     void worldChanged() {
@@ -259,8 +253,6 @@ public final class Box2dContacts implements AutoCloseable {
             runtime.entities().requireProviderMutationAllowed();
         }
         closed = true;
-        applicationListener = null;
-        composedListener = null;
         active.clear();
         activeObserved = 0;
         latestTick = null;
@@ -270,6 +262,10 @@ public final class Box2dContacts implements AutoCloseable {
             evictedTickIds.clear();
         }
         persistentDiagnostics.clear();
+        if (!contactData.isFreed()) {
+            contactData.free();
+            OPEN_NATIVE_SCRATCH.decrementAndGet();
+        }
         if (entityRegistration != null
                 && runtime.status() != io.github.teemuki8.libgdx.agent.runtime.core.RuntimeStatus.CLOSED) {
             entityRegistration.close();
@@ -280,132 +276,138 @@ public final class Box2dContacts implements AutoCloseable {
         }
     }
 
-    private void callback(Box2dContactRecord.Phase phase, Contact contact,
-            Manifold oldManifold, ContactImpulse impulse) {
-        requireOwner();
-        if (!runtime.configuration().enabled()) {
-            return;
+    private void copyEvents(Capture current) {
+        Box2d.b2World_GetContactEvents(inspection.worldId(worldId), contactEvents);
+        for (int index = 0; index < contactEvents.beginCount(); index++) {
+            var event = contactEvents.beginEvents().asStackElement(index);
+            recordEndpoints(Box2dContactRecord.Phase.BEGIN,
+                    event.shapeIdA(), event.shapeIdB(), current);
         }
-        if (closed) {
-            inspection.callbackAfterContactsClosed(worldId);
-            return;
+        for (int index = 0; index < contactEvents.hitCount(); index++) {
+            recordHit(contactEvents.hitEvents().asStackElement(index), current);
         }
-        Capture current = capture;
-        if (current == null) {
-            persistentDiagnostic(Box2dContactTick.DiagnosticCode.CALLBACK_OUTSIDE_TICK, 1);
-            return;
+        for (int index = 0; index < contactEvents.endCount(); index++) {
+            var event = contactEvents.endEvents().asStackElement(index);
+            recordEndpoints(Box2dContactRecord.Phase.END,
+                    event.shapeIdA(), event.shapeIdB(), current);
         }
-        Optional<Box2dInspection.ContactMapping> mapping = inspection.contactMapping(
-                worldId, contact.getFixtureA(), contact.getChildIndexA(),
-                contact.getFixtureB(), contact.getChildIndexB());
+    }
+
+    private void recordEndpoints(Box2dContactRecord.Phase phase,
+            b2ShapeId shapeA, b2ShapeId shapeB, Capture current) {
+        Optional<Box2dInspection.ContactMapping> mapping =
+                inspection.contactMapping(worldId, shapeA, shapeB);
         if (mapping.isEmpty()) {
-            current.unmapped = saturatingIncrement(current.unmapped);
-            current.diagnostic(Box2dContactTick.DiagnosticCode.UNMAPPED_ENDPOINT, 1);
-            persistentDiagnostic(Box2dContactTick.DiagnosticCode.UNMAPPED_ENDPOINT, 1);
+            unmapped(current);
             return;
         }
         Box2dInspection.ContactMapping resolved = mapping.orElseThrow();
-        updateActive(phase, resolved, contact, oldManifold, impulse, current);
+        updateActiveEndpoints(phase, resolved, current);
         if (!retained(phase)) {
             return;
         }
-        current.observedRecords = saturatingIncrement(current.observedRecords);
-        if (current.records.size() >= limits.callbackRecordsPerTick()) {
-            current.diagnostic(Box2dContactTick.DiagnosticCode.RECORD_LIMIT_REACHED, 1);
+        append(current, new Box2dContactRecord(
+                phase, resolved.key(), resolved.endpointA(), resolved.endpointB(),
+                phase == Box2dContactRecord.Phase.BEGIN, true,
+                Box2dContactRecord.Availability.ENDPOINTS_ONLY,
+                List.of(), Optional.empty(), List.of(),
+                nextOccurrence(current), List.of()));
+    }
+
+    private void recordHit(b2ContactHitEvent event, Capture current) {
+        Optional<Box2dInspection.ContactMapping> mapping =
+                inspection.contactMapping(worldId, event.shapeIdA(), event.shapeIdB());
+        if (mapping.isEmpty()) {
+            unmapped(current);
             return;
         }
-        current.records.add(copyRecord(phase, resolved, contact, oldManifold, impulse, current));
-    }
-
-    private Box2dContactRecord copyRecord(Box2dContactRecord.Phase phase,
-            Box2dInspection.ContactMapping mapping, Contact contact, Manifold oldManifold,
-            ContactImpulse impulse, Capture current) {
-        long occurrence = saturatingIncrement(current.occurrence);
-        current.occurrence = occurrence;
-        List<Box2dVector> points = List.of();
-        Optional<Box2dVector> normal = Optional.empty();
-        List<Box2dContactRecord.Impulse> impulses = List.of();
-        Optional<Box2dContactRecord.OldManifold> old = Optional.empty();
-        ArrayList<Truncation> truncations = new ArrayList<>();
-        Box2dContactRecord.Availability availability =
-                Box2dContactRecord.Availability.ENDPOINTS_ONLY;
-        if (phase == Box2dContactRecord.Phase.PRE_SOLVE) {
-            Box2dContactCopies.CurrentManifold manifold = Box2dContactCopies.current(
-                    contact, mapping.reversed(), limits.pointsPerContact());
-            Box2dContactCopies.OldCopy oldCopy = Box2dContactCopies.oldManifold(
-                    oldManifold, mapping.reversed(), limits.oldManifoldPointsPerContact());
-            points = manifold.points();
-            normal = manifold.normal();
-            old = Optional.of(oldCopy.value());
-            truncations.addAll(manifold.truncations());
-            truncations.addAll(oldCopy.truncations());
-            oldCopy.truncations().forEach(
-                    truncation -> current.diagnostic(diagnosticFor(truncation), 1));
-            availability = Box2dContactRecord.Availability.CURRENT_AND_OLD_MANIFOLD;
-        } else if (phase == Box2dContactRecord.Phase.POST_SOLVE) {
-            Box2dContactCopies.CurrentManifold manifold = Box2dContactCopies.current(
-                    contact, mapping.reversed(), limits.pointsPerContact());
-            Box2dContactCopies.ImpulseCopy impulseCopy = Box2dContactCopies.impulses(
-                    impulse, mapping.reversed(), limits.impulsesPerContact());
-            points = manifold.points();
-            normal = manifold.normal();
-            impulses = impulseCopy.values();
-            truncations.addAll(manifold.truncations());
-            truncations.addAll(impulseCopy.truncations());
-            availability = Box2dContactRecord.Availability.CURRENT_MANIFOLD_AND_IMPULSES;
+        Box2dInspection.ContactMapping resolved = mapping.orElseThrow();
+        Box2dVector point = new Box2dVector(event.point().x(), event.point().y());
+        float normalSign = resolved.reversed() ? -1.0f : 1.0f;
+        Box2dVector normal = new Box2dVector(
+                normalSign * event.normal().x(), normalSign * event.normal().y());
+        double totalNormalImpulse = maximumTotalNormalImpulse(
+                event.shapeIdA(), resolved, current);
+        List<Box2dContactRecord.Impulse> impulses = totalNormalImpulse > 0
+                ? List.of(new Box2dContactRecord.Impulse(totalNormalImpulse, 0))
+                : List.of();
+        List<Box2dVector> points = limits.pointsPerContact() > 0
+                ? List.of(point) : List.of();
+        updateActiveHit(resolved, points, normal, impulses, current);
+        if (!retained(Box2dContactRecord.Phase.POST_SOLVE)) {
+            return;
         }
-        truncations.sort((left, right) -> left.dimension().compareTo(right.dimension()));
-        return new Box2dContactRecord(phase, mapping.key(), mapping.endpointA(),
-                mapping.endpointB(), contact.isTouching(), contact.isEnabled(), availability,
-                points, normal, impulses, old, occurrence, truncations);
+        append(current, new Box2dContactRecord(
+                Box2dContactRecord.Phase.POST_SOLVE,
+                resolved.key(), resolved.endpointA(), resolved.endpointB(), true, true,
+                Box2dContactRecord.Availability.CURRENT_MANIFOLD_AND_IMPULSES,
+                points, Optional.of(normal), impulses,
+                nextOccurrence(current), List.of()));
     }
 
-    private void updateActive(Box2dContactRecord.Phase phase,
-            Box2dInspection.ContactMapping mapping, Contact contact, Manifold oldManifold,
-            ContactImpulse impulse, Capture current) {
-        Box2dContactRecord.Key key = mapping.key();
+    private double maximumTotalNormalImpulse(b2ShapeId queryShape,
+            Box2dInspection.ContactMapping expected, Capture current) {
+        int nativeCapacity = Box2d.b2Shape_GetContactCapacity(queryShape);
+        int capacity = Math.min(nativeCapacity, limits.callbackRecordsPerTick());
+        if (nativeCapacity > capacity) {
+            current.diagnostic(Box2dContactTick.DiagnosticCode.IMPULSE_LIMIT_REACHED, 1);
+        }
+        if (capacity == 0) {
+            return 0;
+        }
+        int count = Box2d.b2Shape_GetContactData(queryShape, contactData, capacity);
+        float maximum = 0;
+        for (int contactIndex = 0; contactIndex < count; contactIndex++) {
+            b2ContactData data = contactData.asStackElement(contactIndex);
+            Optional<Box2dInspection.ContactMapping> mapping =
+                    inspection.contactMapping(worldId, data.shapeIdA(), data.shapeIdB());
+            if (mapping.isEmpty() || !mapping.orElseThrow().key().equals(expected.key())) {
+                continue;
+            }
+            b2Manifold manifold = data.manifold();
+            int retainedPoints = Math.min(manifold.pointCount(), limits.impulsesPerContact());
+            if (manifold.pointCount() > retainedPoints) {
+                current.diagnostic(Box2dContactTick.DiagnosticCode.IMPULSE_LIMIT_REACHED, 1);
+            }
+            for (int pointIndex = 0; pointIndex < retainedPoints; pointIndex++) {
+                b2ManifoldPoint point = manifold.points().asStackElement(pointIndex);
+                maximum = Math.max(maximum, point.totalNormalImpulse());
+            }
+        }
+        return maximum;
+    }
+
+    private void updateActiveEndpoints(Box2dContactRecord.Phase phase,
+            Box2dInspection.ContactMapping mapping, Capture current) {
         if (phase == Box2dContactRecord.Phase.END) {
-            active.remove(key);
-            if (activeObserved > 0) {
+            if (active.remove(mapping.key()) != null && activeObserved > 0) {
                 activeObserved--;
             }
             return;
         }
-        Box2dContactTick.ActiveContact value;
-        if (phase == Box2dContactRecord.Phase.BEGIN) {
-            activeObserved = saturatingIncrement(activeObserved);
-            value = new Box2dContactTick.ActiveContact(key, mapping.endpointA(),
-                    mapping.endpointB(), contact.isTouching(), contact.isEnabled(), List.of(),
-                    Optional.empty(), List.of(), List.of());
-        } else if (!active.containsKey(key)) {
-            current.diagnostic(Box2dContactTick.DiagnosticCode.MISSING_CORRELATION, 1);
-            persistentDiagnostic(Box2dContactTick.DiagnosticCode.MISSING_CORRELATION, 1);
-            return;
-        } else if (phase == Box2dContactRecord.Phase.PRE_SOLVE) {
-            Box2dContactCopies.CurrentManifold manifold = Box2dContactCopies.current(
-                    contact, mapping.reversed(), limits.pointsPerContact());
-            manifold.truncations().forEach(
-                    truncation -> current.diagnostic(diagnosticFor(truncation), 1));
-            value = new Box2dContactTick.ActiveContact(key, mapping.endpointA(),
-                    mapping.endpointB(), contact.isTouching(), contact.isEnabled(),
-                    manifold.points(), manifold.normal(), List.of(), manifold.truncations());
-        } else {
-            Box2dContactCopies.CurrentManifold manifold = Box2dContactCopies.current(
-                    contact, mapping.reversed(), limits.pointsPerContact());
-            Box2dContactCopies.ImpulseCopy copiedImpulses = Box2dContactCopies.impulses(
-                    impulse, mapping.reversed(), limits.impulsesPerContact());
-            ArrayList<Truncation> truncations = new ArrayList<>(manifold.truncations());
-            truncations.addAll(copiedImpulses.truncations());
-            truncations.forEach(
-                    truncation -> current.diagnostic(diagnosticFor(truncation), 1));
-            truncations.sort((left, right) -> left.dimension().compareTo(right.dimension()));
-            value = new Box2dContactTick.ActiveContact(key, mapping.endpointA(),
-                    mapping.endpointB(), contact.isTouching(), contact.isEnabled(),
-                    manifold.points(), manifold.normal(), copiedImpulses.values(), truncations);
-        }
+        Box2dContactTick.ActiveContact value = new Box2dContactTick.ActiveContact(
+                mapping.key(), mapping.endpointA(), mapping.endpointB(),
+                true, true, List.of(), Optional.empty(), List.of(), List.of());
+        retainActive(mapping.key(), value, current);
+    }
+
+    private void updateActiveHit(Box2dInspection.ContactMapping mapping,
+            List<Box2dVector> points, Box2dVector normal,
+            List<Box2dContactRecord.Impulse> impulses, Capture current) {
+        Box2dContactTick.ActiveContact value = new Box2dContactTick.ActiveContact(
+                mapping.key(), mapping.endpointA(), mapping.endpointB(),
+                true, true, points, Optional.of(normal), impulses, List.of());
+        retainActive(mapping.key(), value, current);
+    }
+
+    private void retainActive(Box2dContactRecord.Key key,
+            Box2dContactTick.ActiveContact value, Capture current) {
         if (active.containsKey(key)) {
             active.put(key, value);
-        } else if (active.size() < limits.activeContactsPerTick()) {
+            return;
+        }
+        activeObserved = saturatingIncrement(activeObserved);
+        if (active.size() < limits.activeContactsPerTick()) {
             active.put(key, value);
         } else if (key.compareTo(active.lastKey()) < 0) {
             active.pollLastEntry();
@@ -414,6 +416,26 @@ public final class Box2dContacts implements AutoCloseable {
         } else {
             current.diagnostic(Box2dContactTick.DiagnosticCode.ACTIVE_LIMIT_REACHED, 1);
         }
+    }
+
+    private void append(Capture current, Box2dContactRecord record) {
+        current.observedRecords = saturatingIncrement(current.observedRecords);
+        if (current.records.size() < limits.callbackRecordsPerTick()) {
+            current.records.add(record);
+        } else {
+            current.diagnostic(Box2dContactTick.DiagnosticCode.RECORD_LIMIT_REACHED, 1);
+        }
+    }
+
+    private void unmapped(Capture current) {
+        current.unmapped = saturatingIncrement(current.unmapped);
+        current.diagnostic(Box2dContactTick.DiagnosticCode.UNMAPPED_ENDPOINT, 1);
+        persistentDiagnostic(Box2dContactTick.DiagnosticCode.UNMAPPED_ENDPOINT, 1);
+    }
+
+    private static long nextOccurrence(Capture current) {
+        current.occurrence = saturatingIncrement(current.occurrence);
+        return current.occurrence;
     }
 
     private void finish(Capture completed) {
@@ -628,27 +650,10 @@ public final class Box2dContacts implements AutoCloseable {
         return switch (phase) {
             case BEGIN -> policy.begin();
             case END -> policy.end();
-            case PRE_SOLVE -> policy.preSolve();
             case POST_SOLVE -> policy.postSolve();
         };
     }
 
-    private static Box2dContactTick.DiagnosticCode diagnosticFor(Truncation truncation) {
-        return switch (truncation.dimension()) {
-            case "box2d.contact.points" -> Box2dContactTick.DiagnosticCode.POINT_LIMIT_REACHED;
-            case "box2d.contact.impulses" -> Box2dContactTick.DiagnosticCode.IMPULSE_LIMIT_REACHED;
-            case "box2d.contact.oldManifoldPoints" ->
-                    Box2dContactTick.DiagnosticCode.OLD_MANIFOLD_LIMIT_REACHED;
-            default -> throw new IllegalArgumentException("unknown Box2D contact truncation");
-        };
-    }
-
-    private void applicationFailure() {
-        Capture current = capture;
-        if (current != null) {
-            current.diagnostic(Box2dContactTick.DiagnosticCode.APPLICATION_LISTENER_FAILED, 1);
-        }
-    }
 
     private void requireOwnerOpen() {
         requireOwner();
@@ -675,58 +680,6 @@ public final class Box2dContacts implements AutoCloseable {
         return Long.MAX_VALUE - first < second ? Long.MAX_VALUE : first + second;
     }
 
-    private final class EvidenceListener implements ContactListener {
-        @Override public void beginContact(Contact contact) {
-            callback(Box2dContactRecord.Phase.BEGIN, contact, null, null);
-        }
-
-        @Override public void endContact(Contact contact) {
-            callback(Box2dContactRecord.Phase.END, contact, null, null);
-        }
-
-        @Override public void preSolve(Contact contact, Manifold oldManifold) {
-            callback(Box2dContactRecord.Phase.PRE_SOLVE, contact, oldManifold, null);
-        }
-
-        @Override public void postSolve(Contact contact, ContactImpulse impulse) {
-            callback(Box2dContactRecord.Phase.POST_SOLVE, contact, null, impulse);
-        }
-    }
-
-    private final class ComposedListener implements ContactListener {
-        @Override public void beginContact(Contact contact) {
-            listener.beginContact(contact);
-            application(value -> value.beginContact(contact));
-        }
-
-        @Override public void endContact(Contact contact) {
-            listener.endContact(contact);
-            application(value -> value.endContact(contact));
-        }
-
-        @Override public void preSolve(Contact contact, Manifold oldManifold) {
-            listener.preSolve(contact, oldManifold);
-            application(value -> value.preSolve(contact, oldManifold));
-        }
-
-        @Override public void postSolve(Contact contact, ContactImpulse impulse) {
-            listener.postSolve(contact, impulse);
-            application(value -> value.postSolve(contact, impulse));
-        }
-
-        private void application(java.util.function.Consumer<ContactListener> callback) {
-            ContactListener application = applicationListener;
-            if (application == null) {
-                return;
-            }
-            try {
-                callback.accept(application);
-            } catch (RuntimeException | Error failure) {
-                applicationFailure();
-                throw failure;
-            }
-        }
-    }
 
     private static final class Capture {
         private final ActiveSimulationTick tick;

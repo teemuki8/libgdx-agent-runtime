@@ -1,9 +1,14 @@
 package io.github.teemuki8.libgdx.agent.runtime.box2d;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-import java.util.OptionalDouble;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 
 final class Box2dConfigurationTest {
@@ -37,20 +42,34 @@ final class Box2dConfigurationTest {
         assertThrows(IllegalArgumentException.class,
                 () -> new Box2dAdapterLimits(1, 1, 1, 1, 1, 19, 1));
 
-        Box2dWorldSpec spec = new Box2dWorldSpec(true, true, true, 6, 2,
-                OptionalDouble.of(60.0), new Box2dUnitTransform(100));
-        assertEquals(6, spec.velocityIterations());
-        assertThrows(IllegalArgumentException.class, () -> new Box2dWorldSpec(
-                true, true, true, 0, 2, OptionalDouble.empty(),
-                new Box2dUnitTransform(100)));
-        assertThrows(IllegalArgumentException.class, () -> new Box2dWorldSpec(
-                true, true, true, 6, 2, OptionalDouble.of(Double.POSITIVE_INFINITY),
-                new Box2dUnitTransform(100)));
-        assertThrows(IllegalArgumentException.class, () -> new Box2dWorldSpec(
-                true, true, true, 6, 2, OptionalDouble.of(Double.MAX_VALUE),
-                new Box2dUnitTransform(100)));
-        assertThrows(IllegalArgumentException.class, () -> new Box2dWorldSpec(
-                true, true, true, 6, 2, OptionalDouble.of(Double.MIN_VALUE),
-                new Box2dUnitTransform(100)));
+        Box2dWorldSpec spec = new Box2dWorldSpec(4, new Box2dUnitTransform(100));
+        assertEquals(4, spec.subStepCount());
+        assertThrows(IllegalArgumentException.class,
+                () -> new Box2dWorldSpec(0, new Box2dUnitTransform(100)));
+        assertThrows(IllegalArgumentException.class,
+                () -> new Box2dWorldSpec(17, new Box2dUnitTransform(100)));
+    }
+
+    @Test
+    void publishedModuleContainsOnlyTheOfficialBox2d3Backend() throws IOException {
+        String source;
+        try (Stream<Path> paths = Files.walk(Path.of("src/main/java"))) {
+            source = paths.filter(path -> path.toString().endsWith(".java"))
+                    .map(path -> {
+                        try {
+                            return Files.readString(path);
+                        } catch (IOException failure) {
+                            throw new IllegalStateException(failure);
+                        }
+                    })
+                    .reduce("", String::concat);
+        }
+        assertFalse(source.contains("com.badlogic.gdx.physics.box2d"));
+        assertTrue(source.contains("com.badlogic.gdx.box2d"));
+
+        String lock = Files.readString(Path.of("gradle.lockfile"));
+        assertTrue(lock.contains("gdx-box2d:3.1.1-0"));
+        assertFalse(lock.contains("gdx-box2d:1.14.2"));
+        assertFalse(lock.contains("gdx-box2d-platform:1.14.2"));
     }
 }

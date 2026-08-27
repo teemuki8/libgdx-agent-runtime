@@ -4,6 +4,22 @@ All notable changes follow Keep a Changelog structure.
 
 ## [Unreleased]
 
+### Changed
+
+- `agent-runtime-box2d` targets runtime 3.0 and the official Box2D 3.1.1 binding. Registration now
+  accepts `b2WorldId`, `b2BodyId`, `b2ShapeId`, and `b2JointId`, uses private copied scalar keys for
+  liveness, and adds genuine capsule geometry, angular velocity, mass, inertia, revolute-joint
+  detail, and Box2D 3 world counters.
+- Box2D 3 contact registration/capture validates selected shape contact/hit event flags and copies
+  begin/hit/end arrays with maximum whole-step `totalNormalImpulse`.
+
+### Removed
+
+- The legacy `World`/`Body`/`Fixture`/`Joint`, `registerFixture`, `Box2dFixtureSpec`, contact
+  listener/composition, and unsupported pre-solve policy/model/event surfaces are removed without
+  compatibility aliases. `Box2dContacts.captureStep` is the bounded Box2D 3 replacement. See the
+  3.0 migration guide for the clean cutover and destruction order.
+
 ## [2.2.0] - 2026-08-10
 
 ### Added

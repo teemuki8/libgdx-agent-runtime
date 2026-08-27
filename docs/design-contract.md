@@ -159,44 +159,52 @@ Disabled runtimes retain no providers or frames and perform no serialization.
     The helper creates no thread, timer, scheduler, sleep, render call, or disposal ownership.
     Protocol 2.2 adds fixed-step state/report inspection and configured-step advance while leaving
     protocols 1.0-1.13, 2.0, and 2.1 closed and unchanged.
-36. Box2D inspection is an optional adapter module directed toward `runtime-core`; core, protocol,
-    and MCP have no Box2D dependency. Applications explicitly register selected worlds, bodies,
-    fixtures, and joints under stable IDs. The adapter publishes closed `box2d.*` entity schemas
-    through existing snapshot/entity paths, retains only weak native references, bounds every
-    registration class, shape vertex list, property schema, and diagnostic list, and reports
-    adapter-level vertex truncation. Application testimony supplies solver settings, chain-loop
-    state, reaction-force inverse step, and the physics-metre/render-unit transform. The adapter
-    never reflects, traverses a world for discovery, owns stepping/rendering, disposes native
-    objects, infers pixel semantics, or hides runtime capture truncation.
-    `EntityRegistry.requireProviderMutationAllowed()` is the generic no-mutation preflight for an
-    adapter that rebinds an existing provider target; it preserves the same capture-thread,
-    open-frame, and closed-runtime lifecycle as provider registration.
-37. Box2D contacts are explicit per-world adapter registrations. The application installs the
-    direct or evidence-first composed listener and wraps exactly one application-owned `World.step`
-    in `captureStep` during an active simulation tick; the runtime never installs a listener or
-    owns stepping. Callback facts resolve only explicitly registered fixture/body endpoints and
-    are copied before native callback return into canonical application-ID order. Callback records,
-    active contacts, points, impulses, old-manifold points, diagnostics, typed tick history, and
-    query pages are independently bounded. Observed/retained/limit and typed truncation evidence
-    make incomplete negative conclusions impossible. Begin/end expose endpoint facts only;
-    pre-solve and post-solve expose their closed phase-specific values with unavailable values as
-    explicit nulls or empty lists. The `box2d.contacts.<worldId>` entity and
-    `box2d.contact.*` events correlate retained evidence to the active simulation tick and actual
-    runtime frame through existing immutable entity/event, protocol, and MCP paths. Epoch reset,
-    world rebind, and fixture rebind/unregister clear stale active evidence with closed diagnostics.
-    Close releases adapter evidence and references without disposing native objects; completed core
+36. Box2D 3 inspection is an optional adapter module directed toward `runtime-core`; core,
+    protocol, and MCP have no Box2D dependency. Applications explicitly register selected
+    `b2WorldId`, `b2BodyId`, `b2ShapeId`, and `b2JointId` values under stable application IDs.
+    `registerShape` replaces the legacy fixture API while stable runtime entity IDs retain the
+    `box2d.fixture.*` namespace. Native `(index1, world0, generation)` scalars are copied only into
+    private lookup keys and persistent per-entry ID scratch; no handle scalar, generated struct, or
+    pointer enters runtime evidence. Native struct getters use persistent output-parameter scratch.
+    Registrations, polygon vertices, properties, diagnostics, and copied values are bounded.
+    `Box2dWorldSpec` supplies bounded substeps and the physics-metre/render-unit transform.
+    The adapter never reflects, traverses a world for discovery, owns stepping/rendering, or
+    destroys application-owned native resources.
+    `EntityRegistry.requireProviderMutationAllowed()` remains the generic no-mutation preflight for
+    registration rebind. Rebind requires a live ID with the same parent and, for a joint, the same
+    registered endpoints. Contacts, joints, shapes, and bodies are world descendants and close
+    before world rebind/close.
+37. Box2D 3 contacts are explicit per-world adapter registrations. Every selected shape must have
+    native contact-event flags enabled for retained begin/end evidence and hit-event flags enabled
+    for retained post-solve evidence; registration rejects missing flags and every capture
+    revalidates liveness and flags before stepping. The application wraps exactly one
+    application-owned `b2World_Step(worldId, fixedDeltaSeconds, subStepCount)` in `captureStep`
+    during an active simulation tick. Immediately after the step, the adapter copies bounded
+    begin, hit, and end arrays into canonical stable application-ID order. Hit events copy point and
+    normal values, query bounded matching `b2Shape_GetContactData`, and retain the maximum positive
+    `b2ManifoldPoint.totalNormalImpulse` accumulated across substeps and restitution; the
+    final-substep `normalImpulse` is not equivalent. No event array, native ID, contact-data buffer,
+    manifold view, or point view survives capture.
+    Records, active contacts, points, impulses, diagnostics, typed tick history, and query pages are
+    independently bounded. Observed/retained/limit and typed truncation evidence prevent incomplete
+    negative conclusions. Begin/end expose endpoint facts only; hit-derived compatible
+    `box2d.contact.postSolve` evidence exposes point, normal, and whole-step impulse. There is no
+    pre-solve policy, model phase, event type, listener, or listener-composition API in runtime 3.
+    The `box2d.contacts.<worldId>` entity and `box2d.contact.*` events correlate retained evidence to
+    the active simulation tick and actual runtime frame through existing immutable entity/event,
+    protocol, and MCP paths.
+38. Contact active-state incompleteness is sticky across quiet ticks for unmapped endpoints,
+    missing correlation, failed steps, and bound exhaustion; only authoritative close and fresh
+    registration for an epoch/replacement world clears the active set. Contact capture is itself a
+    world descendant. Close releases bounded evidence and manually owned contact-data scratch
+    without destroying the native world. Partially constructed contact registration is closed on
+    entity/map registration failure before the original typed failure is rethrown. Completed core
     frames retain their normal immutable lifetime. Contact adjacency never implies gameplay
     causality, and canonical order is not a cross-platform or whole-program determinism claim.
-38. Contact active-state incompleteness is sticky across quiet ticks for outside, late, unmapped,
-    missing-begin, and failed-step callbacks; only an authoritative epoch/world baseline clears the
-    unknown state. Nested record/active truncation participates in `complete`. Typed contact ticks
-    become queryable only after the simulation timeline confirms their resulting runtime frame;
-    failed correlation is retained as typed incomplete evidence. Typed history retains bounded exact
-    evicted tick IDs across deque eviction and epoch reset: known evictions report
-    `PARTIALLY_EVICTED`, discarded eviction metadata reports `EVICTION_UNKNOWN`, and uncovered gaps
-    remain `NOT_YET_CAPTURED`. Disabled capture executes the application step and forwards its
-    listener without evidence. Fixture mutation removes only affected retained contact keys, and
-    public evidence values reject oversized or open truncation structures before copying them.
+    Known evicted tick IDs report `PARTIALLY_EVICTED`, discarded eviction metadata reports
+    `EVICTION_UNKNOWN`, and uncovered gaps remain `NOT_YET_CAPTURED`. Disabled capture executes the
+    application step without evidence. Shape mutation removes only affected retained contact keys,
+    and public evidence values reject oversized or open truncation structures before copying them.
 39. Simulation-scoped assertions name one execution epoch and an exact bounded inclusive
     simulation-tick range; they never reinterpret arbitrary runtime-frame ranges as ticks. The
     closed JDK-only assertion union evaluates completed immutable frames with deterministic decimal

@@ -1,92 +1,64 @@
 # Bootstrap migration: deterministic Box2D games
 
-Use this integration when `libgdx-agent-bootstrap` generates a game that owns a Box2D `World`.
-The generated application remains responsible for the render loop, world lifecycle, listener,
-input mutation, and disposal. The runtime supplies the accumulator and immutable evidence path.
+Use this integration when `libgdx-agent-bootstrap` generates a game that owns a Box2D 3
+`b2WorldId`. The generated application remains responsible for rendering, world stepping, input
+mutation, and native destruction. The runtime supplies the accumulator and immutable evidence path.
 
 ## Generated application setup
 
-Use one runtime version and the same libGDX version for Java and native artifacts.
+Use runtime 3.0 with libGDX core 1.14.2 and the independently versioned official Box2D binding:
 
 ```kotlin
-val agentRuntimeVersion = "2.2.0"
+val agentRuntimeVersion = "3.0.0"
 val gdxVersion = "1.14.2"
+val box2dVersion = "3.1.1-0"
 
 dependencies {
     implementation("io.github.teemuki8:agent-runtime-core:$agentRuntimeVersion")
     implementation("io.github.teemuki8:agent-runtime-libgdx:$agentRuntimeVersion")
     implementation("io.github.teemuki8:agent-runtime-box2d:$agentRuntimeVersion")
-    implementation("com.badlogicgames.gdx:gdx-box2d:$gdxVersion")
-
+    implementation("com.badlogicgames.gdx:gdx-box2d:$box2dVersion")
     runtimeOnly("com.badlogicgames.gdx:gdx-platform:$gdxVersion:natives-desktop")
-    runtimeOnly("com.badlogicgames.gdx:gdx-box2d-platform:$gdxVersion:natives-desktop")
+    runtimeOnly("com.badlogicgames.gdx:gdx-box2d-platform:$box2dVersion:natives-desktop")
 }
 ```
 
-Then generate these steps:
-
-1. Create the runtime on the application/render thread and use
-   `command -> Gdx.app.postRunnable(command)` as its application-owned dispatcher.
-2. Register the world, selected bodies, fixtures, and joints with stable semantic IDs such as
-   `main`, `player`, `player-shape`, and `player-rope`; never derive IDs from pointers or identity.
-3. Register contacts, semantic input, scenario reset/checkpoint hooks, and the acknowledged
-   fixed-step callback. Call `runtime.start()` only after registration is complete.
+Create definitions and IDs on the render thread, then register stable semantic IDs:
 
 ```java
-AgentRuntime runtime = LibGdxAgentRuntime.builder()
-        .captureThread(Thread.currentThread())
-        .commandDispatcher(command -> Gdx.app.postRunnable(command))
-        .build();
+Box2d.initialize();
 Box2dInspection box2d = new Box2dInspection(
         runtime, Box2dAdapterLimits.developmentDefaults());
-box2d.registerWorld("main", world, new Box2dWorldSpec(
-        true, true, true, 8, 3, OptionalDouble.of(60),
-        new Box2dUnitTransform(100)));
+Box2dWorldSpec worldSpec = new Box2dWorldSpec(4, new Box2dUnitTransform(100));
+box2d.registerWorld("main", world, worldSpec);
+shapeDef.enableContactEvents(true);
+shapeDef.enableHitEvents(true);
+b2ShapeId playerShape = Box2d.b2CreateCapsuleShape(
+        playerBody, shapeDef.asPointer(), capsule.asPointer());
 box2d.registerBody("player", "main", playerBody);
-box2d.registerFixture("player-shape", "player", playerFixture);
+box2d.registerShape(
+        "player-shape", "player", playerShape, Box2dShapeSpec.defaults());
 box2d.registerBody("anchor", "main", anchorBody);
 box2d.registerJoint("player-rope", "main", playerRope);
 Box2dContacts contacts = box2d.registerContacts(
         "main", Box2dContactLimits.developmentDefaults(),
         Box2dContactPolicy.developmentDefaults());
-world.setContactListener(contacts.listener());
 ```
 
-The generated callback should have this shape:
+There is no contact listener. Capture exactly one post-step event array inside the acknowledged
+fixed-step callback:
 
 ```java
 LibGdxFixedStepSimulation simulation = LibGdxFixedStepSimulation.acknowledged(
-        runtime,
-        fixedStepConfiguration,
-        tick -> {
-            contacts.captureStep(() -> world.step(
-                    tick.fixedStepSeconds(), velocityIterations, positionIterations));
+        runtime, fixedStepConfiguration, tick -> {
+            contacts.captureStep(() -> Box2d.b2World_Step(
+                    world, tick.fixedStepSeconds(), worldSpec.subStepCount()));
             gameLogicAfterPhysics();
             return tick.fixedStepNanos();
         });
 ```
 
-Use an explicit bounded configuration; generated games should expose these application-owned
-choices alongside the Box2D world testimony:
-
-```java
-FixedStepSimulationConfiguration fixedStepConfiguration =
-        new FixedStepSimulationConfiguration(
-                16_666_667L, 533_333_344L, 266_666_672L, 8, 1_024,
-                FixedStepDropPolicy.DROP_WHOLE_TICKS_KEEP_REMAINDER, true);
-int velocityIterations = 8;
-int positionIterations = 3;
-```
-
-The final line explicitly installs the listener; neither registration nor `listener()` installs
-itself. If the game already owns a listener, replace that direct installation with explicit
-composition. The runtime evidence callback runs first:
-
-```java
-world.setContactListener(contacts.compose(gameContactListener));
-```
-
-The generated render method stays application-owned:
+The generated render method remains application-owned:
 
 ```java
 @Override public void render() {
@@ -95,16 +67,16 @@ The generated render method stays application-owned:
 }
 ```
 
-Do not emit `world.step(Gdx.graphics.getDeltaTime(), ...)`, create a worker thread, sleep, or use
+Do not step from render delta directly, create a worker thread, sleep, retain event pointers, or use
 render-frame count as simulation correctness evidence.
 
 ## Generated reset and input hooks
 
 Scenario reset must recreate or restore native state before the runtime captures the new baseline.
-When recreating a world, close selected descendant registrations, rebind the world, register the
-replacement bodies/fixtures/joints under the same stable IDs, reinstall the contact listener, and
-clear the accumulator. If registered `Box2dWorldSpec` or `Box2dFixtureSpec` testimony changes,
-unregister and register again rather than preserving stale testimony.
+When recreating a world, close contact capture and selected descendant registrations, rebind the
+world, register replacement body/shape/joint IDs under the same stable IDs, register fresh contact
+capture, and clear the accumulator. If `Box2dWorldSpec` or `Box2dShapeSpec` changes, unregister and
+register again rather than preserving stale testimony.
 
 Generated input handlers should mutate only explicit game intent or bodies on the application
 thread. Agents can then schedule input for a controlled tick and use `advanceFixed`; bootstrap must
@@ -112,10 +84,9 @@ not expose a caller-selected physics delta.
 
 ## Disposal ownership
 
-Dispose on the capture/render thread in dependency order: stop the local MCP publication/launcher
-if present, detach or replace the world contact listener, close `Box2dInspection` (which closes its
-contact/body/fixture/joint registrations), close the runtime, then dispose the application-owned
-Box2D `World`. The runtime never destroys native objects.
+Dispose on the capture/render thread in dependency order: stop the local MCP publication/launcher,
+close contacts and `Box2dInspection`, close the runtime, then destroy application-owned joints,
+shapes, bodies, and world. The runtime never destroys native resources.
 
 ## Protocol and MCP surface
 

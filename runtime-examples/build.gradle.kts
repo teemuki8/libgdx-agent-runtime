@@ -12,7 +12,7 @@ dependencies {
     implementation(libs.gdx.backend.lwjgl3)
     runtimeOnly("com.badlogicgames.gdx:gdx-platform:${libs.versions.gdx.get()}:natives-desktop")
     runtimeOnly(
-        "com.badlogicgames.gdx:gdx-box2d-platform:${libs.versions.gdx.get()}:natives-desktop",
+        "com.badlogicgames.gdx:gdx-box2d-platform:${libs.versions.box2d.get()}:natives-desktop",
     )
     runtimeOnly("org.slf4j:slf4j-nop:2.0.17")
 }

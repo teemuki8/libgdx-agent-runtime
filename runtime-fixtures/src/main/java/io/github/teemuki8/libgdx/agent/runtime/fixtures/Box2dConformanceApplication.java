@@ -70,9 +70,7 @@ public final class Box2dConformanceApplication extends ApplicationAdapter {
             dispatchThreadCorrect &= Thread.currentThread() == applicationThread;
             command.run();
         }));
-        settings = new Box2dDeterminism.WorldSettings(
-                Box2dConformanceSimulation.FIXED_STEP_NANOS,
-                new Box2dVector(0, 0), 8, 3, true, true, true);
+        settings = new Box2dDeterminism.WorldSettings(Box2dConformanceSimulation.FIXED_STEP_NANOS, new Box2dVector(0, 0), 4, true, true, true);
     }
 
     @Override public void render() {

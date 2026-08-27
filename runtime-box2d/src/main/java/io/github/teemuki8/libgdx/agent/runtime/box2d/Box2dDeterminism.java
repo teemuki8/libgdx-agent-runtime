@@ -22,18 +22,17 @@ import java.util.Objects;
 public final class Box2dDeterminism {
     private static final List<EventType> CONTACT_EVENTS = List.of(
             EventType.of("box2d.contact.begin"), EventType.of("box2d.contact.end"),
-            EventType.of("box2d.contact.postSolve"), EventType.of("box2d.contact.preSolve"));
+            EventType.of("box2d.contact.postSolve"));
 
     private Box2dDeterminism() {}
 
     /** Explicit world configuration expected in every reset baseline. */
     public record WorldSettings(long fixedStepNanos, Box2dVector gravity,
-            int velocityIterations, int positionIterations, boolean sleepingAllowed,
+            int subStepCount, boolean sleepingAllowed,
             boolean warmStarting, boolean continuousPhysics) {
-        /** Validates fixed-step, solver, and float-representable gravity testimony. */
+        /** Validates fixed-step, bounded substeps, and float-representable gravity testimony. */
         public WorldSettings {
-            if (fixedStepNanos <= 0 || velocityIterations <= 0 || velocityIterations > 1_000
-                    || positionIterations <= 0 || positionIterations > 1_000) {
+            if (fixedStepNanos <= 0 || subStepCount < 1 || subStepCount > 16) {
                 throw new IllegalArgumentException("Box2D determinism settings are outside range");
             }
             Objects.requireNonNull(gravity, "gravity");
@@ -201,10 +200,8 @@ public final class Box2dDeterminism {
                     new SimulationConfigurationRequirement(world, "gravity",
                             new RuntimeValue.Vector2Value(floatDecimal(settings.gravity().x()),
                                     floatDecimal(settings.gravity().y()))),
-                    new SimulationConfigurationRequirement(world, "velocityIterations",
-                            RuntimeValues.integer(settings.velocityIterations())),
-                    new SimulationConfigurationRequirement(world, "positionIterations",
-                            RuntimeValues.integer(settings.positionIterations())),
+                    new SimulationConfigurationRequirement(world, "subStepCount",
+                            RuntimeValues.integer(settings.subStepCount())),
                     new SimulationConfigurationRequirement(world, "sleepingAllowed",
                             RuntimeValues.bool(settings.sleepingAllowed())),
                     new SimulationConfigurationRequirement(world, "warmStarting",

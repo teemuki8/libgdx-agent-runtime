@@ -5,10 +5,11 @@
 
 ## Context
 
-Box2D contact callbacks contain the facts needed to explain collisions, but their arguments are
-native-backed, mutable, callback-scoped objects. Callback delivery order is not a stable application
-identity, and a listener installed or a world stepped by the runtime would violate application loop
-and lifecycle ownership. A render frame also cannot prove which simulation tick produced a contact.
+Box2D 3 post-step contact arrays contain facts needed to explain collisions, but their entries,
+shape IDs, contact-data buffers, manifolds, and points are native-backed scoped views. Native
+delivery order is not stable application identity, and a world stepped by the runtime would violate
+application loop/lifecycle ownership. A render frame cannot prove which simulation tick produced a
+contact.
 
 The existing runtime already provides explicit simulation ticks, immutable frames, registered
 entities, bounded events, entity history, protocol queries, and MCP tools. Contact evidence should
@@ -23,48 +24,41 @@ empty outside that timeline-owned frame and is not completed-tick evidence. The 
 remains authoritative for executed delta, outcome, elapsed simulation time, and final frame
 correlation.
 
-`runtime-box2d` adds one explicit `Box2dContacts` registration per registered world. The application
-installs either `listener()` or the evidence-first result of `compose(applicationListener)` on its
-world and wraps exactly one application-owned `World.step` per simulation tick with `captureStep`.
-The adapter never installs a listener, steps a world independently, creates a loop or thread, or
-disposes native objects.
+`runtime-box2d` adds one explicit `Box2dContacts` registration per registered world. Every selected
+shape must enable contact events for retained begin/end facts and hit events for retained
+post-solve facts. The application wraps exactly one application-owned `b2World_Step` per simulation
+tick with `captureStep`; the adapter validates flags/liveness before stepping and never owns a loop,
+thread, world, or native destruction.
 
-Callbacks resolve only explicitly registered bodies and fixtures. Their values are copied before
-the native callback returns into bounded immutable records. Stable contact identity is the
-lexicographically canonical pair of application fixture IDs and child indices; it never contains a
-native pointer, Java identity, discovery index, or `userData`. Canonical reversal swaps endpoint
-facts, negates the world normal and signed tangent impulses, preserves normal impulse magnitudes,
-and leaves world points unchanged.
+After the step, begin, hit, and end arrays resolve only explicitly registered body/shape IDs. Values
+are copied immediately into bounded immutable records. Stable identity is the lexicographically
+canonical pair of application fixture IDs and child indices; it never contains a native scalar,
+pointer, Java identity, discovery index, or `userData`. Canonical reversal swaps endpoint facts,
+negates the world normal, and leaves world points and normal impulse magnitudes unchanged.
 
-Begin and end records contain endpoint facts only. Pre-solve, when explicitly enabled, contains the
-current world manifold and a bounded old-manifold copy. Post-solve contains the current world
-manifold and bounded impulses. Unavailable values are explicit nulls or empty lists paired with a
-closed availability enum, not synthetic zeroes. The default policy retains begin, end, and
-post-solve and omits pre-solve.
+Begin and end records contain endpoint facts only. Hit events supply copied point and normal facts;
+bounded matching contact data supplies the maximum positive `totalNormalImpulse` accumulated across
+substeps and restitution. Runtime 3 has no pre-solve phase, listener, listener composition, or old
+manifold model. Records, active contacts, points, impulses, diagnostics, typed history, and query
+pages have independent positive hard bounds. Finalization publishes observed, retained, and limit
+counters plus typed diagnostics/truncations. `complete=false` prevents incomplete evidence from
+being read as proof that no contact occurred.
 
-Callback records, active contacts, points, impulses, old-manifold points, diagnostics, typed history,
-and query pages have independent positive hard bounds. Finalization publishes observed, retained,
-and limit counters plus typed diagnostics and truncations. `complete=false` prevents truncated,
-unmapped, reset, failed, or otherwise incomplete evidence from being read as proof that no contact
-occurred.
+Unknown active state is sticky across quiet ticks for unmapped, missing-correlation, failed-step, or
+bounded evidence until contact capture closes and is freshly registered for an epoch/replacement
+world. Nested active-value truncation participates in completeness. Public constructors preflight
+hard sizes and closed truncation dimensions before copying collections.
 
-Unknown active state is sticky across quiet ticks. Outside, late, unmapped, missing-begin, or failed
-step evidence remains incomplete until an execution-epoch or world baseline authoritatively clears
-it. Nested active-value truncation also participates in completeness. Public evidence constructors
-preflight their hard sizes and closed truncation dimensions before copying caller collections.
+Each completed captured step publishes `box2d.contacts.<worldId>` and emits retained records as
+`box2d.contact.begin`, `.end`, or compatible `.postSolve` events in canonical order. Canonical body
+A is subject, body B is source, and frame ID is the runtime-frame correlation. Existing entity,
+history, event, protocol, and MCP paths carry these values; there is no Box2D-specific protocol
+command.
 
-Each completed captured step publishes the closed entity `box2d.contacts.<worldId>` and emits the
-retained callback records as `box2d.contact.begin`, `.end`, `.preSolve`, or `.postSolve` events in
-canonical order. The canonical body A is the event subject, body B is the source, and the event's
-frame ID is the runtime-frame correlation. Existing entity, entity-history, event, protocol, and MCP
-paths carry these values; there is no Box2D-specific protocol command.
-
-A new execution epoch clears active contacts and typed contact history before its baseline. World or
-fixture rebind/unregister clears affected active evidence and publishes a closed diagnostic. A
-replacement world still requires the application to install the listener explicitly. Close releases
-the entity provider, composition reference, staged state, active set, and typed history without
-disposing application objects; already completed runtime frames remain immutable under core
-retention.
+Contact capture is a world descendant. Scenario/world replacement closes contacts, joints, shapes,
+and bodies before world rebind, then registers replacement descendants and fresh contacts. Close
+releases the entity provider, manually owned contact buffer, staged state, active set, and typed
+history without destroying the application world; completed runtime frames remain immutable.
 
 Typed contact ticks are staged inside the simulation callback but enter queryable history only
 after the simulation timeline confirms the resulting runtime frame. A failed frame is retained as
@@ -72,15 +66,15 @@ incomplete `MISSING_CORRELATION` evidence. Bounded history keeps an eviction wat
 eviction and epoch reset, together with a bounded exact set of evicted tick IDs. Exact matches
 report `PARTIALLY_EVICTED`; once exact eviction metadata is discarded, affected old ranges report
 `EVICTION_UNKNOWN`. A missing tick not covered by either form of evidence remains
-`NOT_YET_CAPTURED`. A disabled runtime still executes the application step and composed application
-listener while retaining no evidence.
+`NOT_YET_CAPTURED`. A disabled runtime still executes the application step while retaining no
+evidence.
 
 ## Consequences
 
 Agents can correlate selected contact facts to exact simulation ticks and runtime frames without
 using screenshots or traversing native object graphs. Applications must explicitly register both
-endpoints, install the listener, and wrap every authoritative step they want captured. A callback
-with an unregistered endpoint exposes no partial identity.
+endpoints, enable required native shape event flags, and wrap every authoritative step they want
+captured. An event with an unregistered endpoint exposes no partial identity.
 
 Canonical ordering provides repeatable selected evidence for identical native library, platform,
 configuration, initial state, fixed-step sequence, and scheduled input. It is not a claim of

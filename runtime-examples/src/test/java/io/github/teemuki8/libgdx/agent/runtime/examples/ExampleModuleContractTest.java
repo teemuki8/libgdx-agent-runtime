@@ -19,11 +19,12 @@ final class ExampleModuleContractTest {
                 rootBuild.indexOf("val publishedModules"),
                 rootBuild.indexOf("val artifactNames"));
         assertFalse(publishedModules.contains("runtime-examples"));
-        assertEquals("2.2.1-SNAPSHOT", capture(rootBuild,
+        assertEquals("3.0.0-SNAPSHOT", capture(rootBuild,
                 "orElse\\(\"([^\"]+)\"\\)"));
 
         String versions = Files.readString(repositoryFile("gradle/libs.versions.toml"));
         assertEquals("1.14.2", capture(versions, "gdx = \"([^\"]+)\""));
+        assertEquals("3.1.1-0", capture(versions, "box2d = \"([^\"]+)\""));
         assertNotNull(System.getProperty("example.classpath"));
         assertTrue(Files.exists(repositoryFile("runtime-examples/gradle.lockfile")));
         String verification = Files.readString(repositoryFile(

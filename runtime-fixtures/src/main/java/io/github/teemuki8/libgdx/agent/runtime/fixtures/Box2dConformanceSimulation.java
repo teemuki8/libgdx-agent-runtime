@@ -67,12 +67,13 @@ public final class Box2dConformanceSimulation implements AutoCloseable {
 
     private final AgentRuntime runtime;
     private final Box2dInspection inspection;
-    private final Box2dContacts contacts;
+    private Box2dContacts contacts;
     private final LibGdxFixedStepSimulation simulation;
     private final Box2dRegistration<b2WorldId> worldRegistration;
     private final String omittedShapeId;
     private final long reportedExecutedStepNanos;
     private final boolean divergentPlayerInput;
+    private final Box2dContactLimits contactLimits;
     private final LinkedHashMap<String, Box2dRegistration<b2BodyId>> bodyRegistrations =
             new LinkedHashMap<>();
     private final LinkedHashMap<String, Box2dRegistration<b2ShapeId>> shapeRegistrations =
@@ -98,7 +99,7 @@ public final class Box2dConformanceSimulation implements AutoCloseable {
             Box2dAdapterLimits adapterLimits, Box2dContactLimits contactLimits,
             boolean divergentPlayerInput) {
         Objects.requireNonNull(dispatcher, "dispatcher");
-        Objects.requireNonNull(contactLimits, "contactLimits");
+        this.contactLimits = Objects.requireNonNull(contactLimits, "contactLimits");
         this.reportedExecutedStepNanos = reportedExecutedStepNanos;
         this.omittedShapeId = omittedShapeId;
         this.divergentPlayerInput = divergentPlayerInput;
@@ -115,7 +116,7 @@ public final class Box2dConformanceSimulation implements AutoCloseable {
         worldRegistration = inspection.registerWorld(WORLD_ID, scene.world(), worldSpec());
         registerDescendants(scene);
         contacts = inspection.registerContacts(
-                WORLD_ID, contactLimits, Box2dContactPolicy.developmentDefaults());
+                WORLD_ID, this.contactLimits, Box2dContactPolicy.developmentDefaults());
 
         runtime.inputs().register(InputSpec.builder("move-player")
                 .description("Sets horizontal player velocity before the selected physics tick")
@@ -219,6 +220,7 @@ public final class Box2dConformanceSimulation implements AutoCloseable {
 
     private void replaceScene(NativeScene replacement) {
         NativeScene previous = scene;
+        contacts.close();
         jointRegistrations.values().forEach(Box2dRegistration::close);
         jointRegistrations.clear();
         shapeRegistrations.values().forEach(Box2dRegistration::close);
@@ -227,6 +229,8 @@ public final class Box2dConformanceSimulation implements AutoCloseable {
         bodyRegistrations.clear();
         worldRegistration.rebind(replacement.world());
         registerDescendants(replacement);
+        contacts = inspection.registerContacts(
+                WORLD_ID, contactLimits, Box2dContactPolicy.developmentDefaults());
         scene = replacement;
         sceneGeneration++;
         runtime.fixedStepSimulation().clearAccumulator();

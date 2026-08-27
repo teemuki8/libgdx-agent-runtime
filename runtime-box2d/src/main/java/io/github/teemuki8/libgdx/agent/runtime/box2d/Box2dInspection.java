@@ -137,9 +137,18 @@ public final class Box2dInspection implements AutoCloseable {
         }
         Box2dContacts registration = new Box2dContacts(
                 runtime, this, id, contactLimits, policy, ownerThread);
-        registration.registerEntity();
-        contacts.put(id, registration);
-        return registration;
+        try {
+            registration.registerEntity();
+            contacts.put(id, registration);
+            return registration;
+        } catch (RuntimeException | Error failure) {
+            try {
+                registration.closeFromInspection();
+            } catch (RuntimeException | Error cleanupFailure) {
+                failure.addSuppressed(cleanupFailure);
+            }
+            throw failure;
+        }
     }
 
     /** Returns configured adapter limits. */
@@ -625,7 +634,8 @@ public final class Box2dInspection implements AutoCloseable {
         }
         @Override Map<String, WorldEntry> map() { return worlds; }
         @Override void requireNoDescendants() {
-            if (bodies.values().stream().anyMatch(body -> id.equals(body.parentId))
+            if (contacts.containsKey(id)
+                    || bodies.values().stream().anyMatch(body -> id.equals(body.parentId))
                     || joints.values().stream().anyMatch(joint -> id.equals(joint.parentId))) {
                 throw new IllegalStateException("unregister world descendants first");
             }

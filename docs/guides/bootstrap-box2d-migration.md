@@ -69,9 +69,9 @@ render-frame count as simulation correctness evidence.
 ## Generated reset and input hooks
 
 Scenario reset must recreate or restore native state before the runtime captures the new baseline.
-When recreating a world, close selected descendant registrations, rebind the world, register the
-replacement body/shape/joint IDs under the same stable IDs, and clear the accumulator. World rebind
-clears active contact evidence. If `Box2dWorldSpec` or `Box2dShapeSpec` changes, unregister and
+When recreating a world, close contact capture and selected descendant registrations, rebind the
+world, register replacement body/shape/joint IDs under the same stable IDs, register fresh contact
+capture, and clear the accumulator. If `Box2dWorldSpec` or `Box2dShapeSpec` changes, unregister and
 register again rather than preserving stale testimony.
 
 Generated input handlers should mutate only explicit game intent or bodies on the application

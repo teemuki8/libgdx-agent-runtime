@@ -26,9 +26,11 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.TreeMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /** Application-owned bounded copy of post-step Box2D 3 contact events. */
 public final class Box2dContacts implements AutoCloseable {
+    private static final AtomicInteger OPEN_NATIVE_SCRATCH = new AtomicInteger();
     private final AgentRuntime runtime;
     private final Box2dInspection inspection;
     private final String worldId;
@@ -66,6 +68,7 @@ public final class Box2dContacts implements AutoCloseable {
         this.ownerThread = Objects.requireNonNull(ownerThread, "ownerThread");
         contactData = new b2ContactData.b2ContactDataPointer(
                 limits.callbackRecordsPerTick(), false);
+        OPEN_NATIVE_SCRATCH.incrementAndGet();
         observedEpoch = runtime.currentEpoch();
     }
 
@@ -202,6 +205,10 @@ public final class Box2dContacts implements AutoCloseable {
         return contactData.isFreed();
     }
 
+    static int openNativeScratchCount() {
+        return OPEN_NATIVE_SCRATCH.get();
+    }
+
     void worldChanged() {
         requireOwnerOpen();
         resetCurrentEvidence(Box2dContactTick.DiagnosticCode.WORLD_REBOUND);
@@ -251,6 +258,7 @@ public final class Box2dContacts implements AutoCloseable {
         persistentDiagnostics.clear();
         if (!contactData.isFreed()) {
             contactData.free();
+            OPEN_NATIVE_SCRATCH.decrementAndGet();
         }
         if (entityRegistration != null
                 && runtime.status() != io.github.teemuki8.libgdx.agent.runtime.core.RuntimeStatus.CLOSED) {

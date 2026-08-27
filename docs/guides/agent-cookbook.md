@@ -750,9 +750,10 @@ Records and active contacts keep the existing `box2d.contacts.<worldId>` entity 
 event arrays, IDs, manifold pointers, and contact buffers never cross the capture call. Bounds fail
 complete evidence with diagnostics rather than silently truncating.
 
-World rebind and scenario reset clear active evidence before the next baseline. Close
-`Box2dContacts` or its parent inspection before native destruction; close releases its manually
-owned contact-data buffer.
+Close contact capture before world rebind or scenario reset, then register a fresh capture after
+replacement shapes; this clears active evidence before the next baseline. Close `Box2dContacts` or
+its parent inspection before native destruction; close releases its manually owned contact-data
+buffer.
 
 ## Assert physics over exact simulation ticks
 

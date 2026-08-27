@@ -18,9 +18,10 @@ There are no aliases, adapters, deprecated overloads, or dual backend. Remove al
 ## Lifecycle cutover
 
 Create and register parent-first. Close contact capture and runtime registrations, then destroy
-native resources child-first: joints, shapes, bodies, then world. Rebind only to a live ID with the
-same registered parent and, for joints, the same registered endpoints. World rebind clears active
-contact evidence. A stale ID is an error rather than missing evidence.
+native resources child-first: joints, shapes, bodies, then world. Contact capture is a world
+descendant and must close before world rebind/close; register fresh capture after replacement
+shapes. Rebind only to a live ID with the same registered parent and, for joints, the same
+registered endpoints. A stale ID is an error rather than missing evidence.
 
 Runtime IDs remain stable across the major migration. Native ID scalar fields are
 implementation-private and are not evidence. `Box2dDeterminism.WorldSettings` replaces velocity

@@ -17,8 +17,10 @@ import com.badlogic.gdx.box2d.structs.b2ShapeId;
 import com.badlogic.gdx.box2d.structs.b2WorldDef;
 import com.badlogic.gdx.box2d.structs.b2WorldId;
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
+import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntimeException;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntitySnapshot;
+import io.github.teemuki8.libgdx.agent.runtime.core.EntityType;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import io.github.teemuki8.libgdx.agent.runtime.core.SessionId;
@@ -152,6 +154,43 @@ final class Box2dInspectionTest {
             assertEquals("provider.property", diagnostic.failure().category());
             assertEquals("java.lang.IllegalArgumentException",
                     diagnostic.failure().exceptionClass());
+        }
+    }
+
+    @Test
+    void contactRegistrationFailureFreesScratchWithoutAccumulation() {
+        try (NativeScene scene = NativeScene.create("contact-registration-failure")) {
+            scene.inspection.registerWorld("main", scene.world,
+                    new Box2dWorldSpec(4, new Box2dUnitTransform(100)));
+            scene.runtime.entities().register(
+                    EntityId.of("box2d.contacts.main"), EntityType.of("occupied"),
+                    () -> "occupied", inspector -> inspector.property("value", () -> 1L));
+            int before = Box2dContacts.openNativeScratchCount();
+
+            for (int attempt = 0; attempt < 3; attempt++) {
+                assertThrows(AgentRuntimeException.class,
+                        () -> scene.inspection.registerContacts(
+                                "main", Box2dContactLimits.developmentDefaults(),
+                                Box2dContactPolicy.developmentDefaults()));
+                assertEquals(before, Box2dContacts.openNativeScratchCount());
+            }
+        }
+    }
+
+    @Test
+    void worldRegistrationRequiresContactDescendantToCloseFirst() {
+        try (NativeScene scene = NativeScene.create("contact-parent-lifecycle")) {
+            Box2dRegistration<b2WorldId> world = scene.inspection.registerWorld(
+                    "main", scene.world,
+                    new Box2dWorldSpec(4, new Box2dUnitTransform(100)));
+            Box2dContacts contacts = scene.inspection.registerContacts(
+                    "main", Box2dContactLimits.developmentDefaults(),
+                    Box2dContactPolicy.developmentDefaults());
+
+            assertThrows(IllegalStateException.class, world::close);
+            contacts.close();
+            world.close();
+            assertFalse(scene.runtime.entity(world.runtimeEntityId()).isPresent());
         }
     }
 

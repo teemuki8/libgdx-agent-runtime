@@ -32,6 +32,9 @@ Native `index1`, `world0`, and `generation` fields are private lookup keys. They
 ## Failure and lifecycle
 
 Registration and rebind reject null, invalid, stale, duplicate, wrong-world, over-limit, missing-parent, and missing-joint-endpoint IDs. Mutation requires the adapter owner thread, an open runtime, and no open frame. Completed immutable snapshots remain queryable according to the core runtime lifecycle.
+Contact capture is a world descendant: world rebind/close is rejected until contacts close. If
+contact entity registration fails, the adapter closes the partial registration and frees its native
+scratch before rethrowing the original typed failure.
 
 Close contact capture and registration providers before destroying native resources, in
 descendant-first order:

@@ -23,7 +23,7 @@ inside its existing libGDX process and display session.
 
 ## Add dependencies
 
-For the current 2.2 release:
+Released runtime 2.2 instructions remain for applications using the legacy Box2D object binding:
 
 ```kotlin
 dependencies {
@@ -32,10 +32,24 @@ dependencies {
 }
 ```
 
-V1 requires Java 25. It qualifies LWJGL3 desktop only; Android, iOS, and web are not release claims.
-The optional Box2D adapter is published separately as
-`io.github.teemuki8:agent-runtime-box2d:2.2.0`; add it only when the game uses Box2D inspection,
-contact evidence, or the data-only physics assertion/determinism factories.
+The Box2D 3 recipe in this guide targets the runtime 3.0 API and official standalone binding; do
+not combine it with the 2.2 Box2D artifact:
+
+```kotlin
+val agentRuntimeVersion = "3.0.0"
+val box2dVersion = "3.1.1-0"
+
+dependencies {
+    implementation("io.github.teemuki8:agent-runtime-core:$agentRuntimeVersion")
+    implementation("io.github.teemuki8:agent-runtime-libgdx:$agentRuntimeVersion")
+    implementation("io.github.teemuki8:agent-runtime-box2d:$agentRuntimeVersion")
+    implementation("com.badlogicgames.gdx:gdx-box2d:$box2dVersion")
+    runtimeOnly("com.badlogicgames.gdx:gdx-box2d-platform:$box2dVersion:natives-desktop")
+}
+```
+
+Runtime requires Java 25. Linux qualification covers LWJGL3 desktop; Android, iOS, and web are not
+release claims.
 
 ## Capture a fixed-step simulation
 
@@ -99,6 +113,10 @@ see. IDs are application-owned and stable across native replacement:
 box2d = new Box2dInspection(runtime, Box2dAdapterLimits.developmentDefaults());
 Box2dWorldSpec worldSpec = new Box2dWorldSpec(4, new Box2dUnitTransform(100));
 box2d.registerWorld("main", world, worldSpec);
+shapeDef.enableContactEvents(true);
+shapeDef.enableHitEvents(true);
+b2ShapeId ballShape = Box2d.b2CreateCircleShape(
+        ballBody, shapeDef.asPointer(), circle.asPointer());
 ballRegistration = box2d.registerBody("ball", "main", ballBody);
 box2d.registerShape("ball-shape", "ball", ballShape, Box2dShapeSpec.defaults());
 contacts = box2d.registerContacts(

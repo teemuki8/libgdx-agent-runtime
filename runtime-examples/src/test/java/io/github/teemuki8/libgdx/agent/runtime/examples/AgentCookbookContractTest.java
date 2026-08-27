@@ -24,6 +24,8 @@ import org.junit.jupiter.api.Test;
 class AgentCookbookContractTest {
     private static final String CURRENT_RELEASE = "2.2.0";
     private static final String NEXT_DEVELOPMENT = "3.0.0-SNAPSHOT";
+    private static final String BOX2D_RUNTIME_RELEASE = "3.0.0";
+    private static final String BOX2D_BINDING_RELEASE = "3.1.1-0";
     private static final Map<String, String> PUBLISHED_ARTIFACTS = Map.of(
             "runtime-core", "agent-runtime-core",
             "runtime-libgdx", "agent-runtime-libgdx",
@@ -206,8 +208,18 @@ class AgentCookbookContractTest {
                     checked++;
                 }
             }
-            assertTrue(checked >= 5, "expected consumer coordinates to be checked");
+            assertTrue(checked >= 2, "expected released 2.2 coordinates to be checked");
         }
+        String gettingStarted = read("docs/guides/getting-started.md");
+        String bootstrap = read("docs/guides/bootstrap-box2d-migration.md");
+        assertTrue(gettingStarted.contains(
+                "val agentRuntimeVersion = \"" + BOX2D_RUNTIME_RELEASE + "\""));
+        assertTrue(gettingStarted.contains(
+                "val box2dVersion = \"" + BOX2D_BINDING_RELEASE + "\""));
+        assertTrue(bootstrap.contains(
+                "val agentRuntimeVersion = \"" + BOX2D_RUNTIME_RELEASE + "\""));
+        assertTrue(bootstrap.contains(
+                "val box2dVersion = \"" + BOX2D_BINDING_RELEASE + "\""));
     }
 
     private static Set<String> tokens(String content, String expression) {

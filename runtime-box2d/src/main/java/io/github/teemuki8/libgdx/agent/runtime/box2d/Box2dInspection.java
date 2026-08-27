@@ -135,6 +135,7 @@ public final class Box2dInspection implements AutoCloseable {
             throw new IllegalArgumentException(
                     "Box2D contacts are already registered for this world");
         }
+        requireContactEventFlags(id, policy, true);
         Box2dContacts registration = new Box2dContacts(
                 runtime, this, id, contactLimits, policy, ownerThread);
         try {
@@ -437,6 +438,34 @@ public final class Box2dInspection implements AutoCloseable {
                 new Box2dContactRecord.Key(
                         canonicalA.fixtureId(), 0, canonicalB.fixtureId(), 0),
                 canonicalA, canonicalB, order > 0));
+    }
+
+    void requireContactEventFlags(
+            String worldId, Box2dContactPolicy policy, boolean registration) {
+        try {
+            for (ShapeEntry shape : shapes.values()) {
+                BodyEntry body = bodies.get(shape.parentId);
+                if (body == null || !worldId.equals(body.parentId)) {
+                    continue;
+                }
+                b2ShapeId nativeShape = shape.live();
+                if ((policy.begin() || policy.end())
+                        && !Box2d.b2Shape_AreContactEventsEnabled(nativeShape)) {
+                    throw new IllegalArgumentException(
+                            "registered Box2D shape requires contact events");
+                }
+                if (policy.postSolve() && !Box2d.b2Shape_AreHitEventsEnabled(nativeShape)) {
+                    throw new IllegalArgumentException(
+                            "registered Box2D shape requires hit events");
+                }
+            }
+        } catch (IllegalArgumentException failure) {
+            if (registration) {
+                throw failure;
+            }
+            throw new IllegalStateException(
+                    "registered Box2D contact shape flags are no longer valid", failure);
+        }
     }
 
     void unregisterContacts(String worldId, Box2dContacts registration) {

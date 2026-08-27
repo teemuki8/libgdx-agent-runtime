@@ -31,6 +31,10 @@ Box2dInspection box2d = new Box2dInspection(
         runtime, Box2dAdapterLimits.developmentDefaults());
 Box2dWorldSpec worldSpec = new Box2dWorldSpec(4, new Box2dUnitTransform(100));
 box2d.registerWorld("main", world, worldSpec);
+shapeDef.enableContactEvents(true);
+shapeDef.enableHitEvents(true);
+b2ShapeId playerShape = Box2d.b2CreateCapsuleShape(
+        playerBody, shapeDef.asPointer(), capsule.asPointer());
 box2d.registerBody("player", "main", playerBody);
 box2d.registerShape(
         "player-shape", "player", playerShape, Box2dShapeSpec.defaults());

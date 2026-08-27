@@ -15,7 +15,6 @@ final class Box2dContactValues {
         return RuntimeValues.object(
                 field("begin", bool(policy.begin())),
                 field("end", bool(policy.end())),
-                field("preSolve", bool(policy.preSolve())),
                 field("postSolve", bool(policy.postSolve())));
     }
 
@@ -25,8 +24,6 @@ final class Box2dContactValues {
                 field("activeContactsPerTick", integer(limits.activeContactsPerTick())),
                 field("pointsPerContact", integer(limits.pointsPerContact())),
                 field("impulsesPerContact", integer(limits.impulsesPerContact())),
-                field("oldManifoldPointsPerContact",
-                        integer(limits.oldManifoldPointsPerContact())),
                 field("diagnosticsPerTick", integer(limits.diagnosticsPerTick())),
                 field("retainedContactTicks", integer(limits.retainedContactTicks())),
                 field("queryPageSize", integer(limits.queryPageSize())));
@@ -88,7 +85,6 @@ final class Box2dContactValues {
                 .attribute("points", vectors(record.points()))
                 .attribute("normal", optionalVector(record.normal().orElse(null)))
                 .attribute("impulses", impulses(record.impulses()))
-                .attribute("oldManifold", oldManifold(record.oldManifold().orElse(null)))
                 .attribute("occurrence", integer(record.occurrence()))
                 .attribute("truncations", truncations(record.truncations()));
     }
@@ -106,7 +102,6 @@ final class Box2dContactValues {
                 field("points", vectors(record.points())),
                 field("normal", optionalVector(record.normal().orElse(null))),
                 field("impulses", impulses(record.impulses())),
-                field("oldManifold", oldManifold(record.oldManifold().orElse(null))),
                 field("occurrence", integer(record.occurrence())),
                 field("truncations", truncations(record.truncations())));
     }
@@ -159,17 +154,6 @@ final class Box2dContactValues {
                 field("tangent", decimal(value.tangent())))).toList());
     }
 
-    private static RuntimeValue oldManifold(Box2dContactRecord.OldManifold value) {
-        if (value == null) {
-            return RuntimeValues.nullValue();
-        }
-        return RuntimeValues.object(
-                field("type", enumeration(value.type().name())),
-                field("points", list(value.points().stream().map(point -> RuntimeValues.object(
-                        field("id", integer(point.id())),
-                        field("normalImpulse", decimal(point.normalImpulse())),
-                        field("tangentImpulse", decimal(point.tangentImpulse())))).toList())));
-    }
 
     private static RuntimeValue truncation(Truncation value) {
         return RuntimeValues.object(
@@ -183,7 +167,6 @@ final class Box2dContactValues {
         return switch (phase) {
             case BEGIN -> "begin";
             case END -> "end";
-            case PRE_SOLVE -> "preSolve";
             case POST_SOLVE -> "postSolve";
         };
     }

@@ -42,8 +42,7 @@ final class Box2dDeterminismTest {
         assertEquals(List.of(
                 EventType.of("box2d.contact.begin"),
                 EventType.of("box2d.contact.end"),
-                EventType.of("box2d.contact.postSolve"),
-                EventType.of("box2d.contact.preSolve")), spec.eventTypes());
+                EventType.of("box2d.contact.postSolve")), spec.eventTypes());
         assertEquals(List.of(new SimulationEvidenceRequirement(
                 EntityId.of("box2d.contacts.main"), "complete")),
                 spec.evidenceRequirements());

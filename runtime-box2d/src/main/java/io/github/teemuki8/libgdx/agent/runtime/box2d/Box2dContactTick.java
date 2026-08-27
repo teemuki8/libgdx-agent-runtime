@@ -113,18 +113,12 @@ public record Box2dContactTick(SimulationTickId simulationTickId,
     /** Closed agent-facing contact diagnostic code. */
     public enum DiagnosticCode {
         /** A callback endpoint was not explicitly registered. */ UNMAPPED_ENDPOINT,
-        /** A callback arrived outside a captured simulation tick. */ CALLBACK_OUTSIDE_TICK,
-        /** A callback arrived after the contact adapter closed. */ CALLBACK_AFTER_CLOSE,
         /** Callback evidence exceeded its record limit. */ RECORD_LIMIT_REACHED,
         /** The active set exceeded its retention limit. */ ACTIVE_LIMIT_REACHED,
         /** Contact points exceeded their limit. */ POINT_LIMIT_REACHED,
         /** Contact impulses exceeded their limit. */ IMPULSE_LIMIT_REACHED,
-        /** Old-manifold points exceeded their limit. */ OLD_MANIFOLD_LIMIT_REACHED,
         /** A registered endpoint changed while evidence was active. */ ENDPOINT_CHANGED,
         /** No active simulation tick/frame correlation was available. */ MISSING_CORRELATION,
-        /** The application listener threw and the failure was rethrown. */
-        APPLICATION_LISTENER_FAILED,
-        /** A value is unavailable in this callback phase. */ PHASE_VALUE_UNAVAILABLE,
         /** The application-owned world step failed. */ STEP_FAILED,
         /** A new execution epoch cleared active contacts. */ EPOCH_RESET,
         /** A replacement world cleared active contacts. */ WORLD_REBOUND

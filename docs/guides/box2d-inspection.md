@@ -22,6 +22,8 @@ var jointRegistration = inspection.registerJoint("shoulder", "main", shoulderJoi
 Register `Box2dContacts` after all selected shapes. Call `captureStep` around exactly one
 application-owned `b2World_Step`; it copies begin/end/hit arrays immediately and obtains whole-step
 normal impulse from bounded matching contact data. No listener is installed.
+For the default contact policy, set `enableContactEvents(true)` and `enableHitEvents(true)` on every
+selected shape definition before native creation. Registration and capture both validate the flags.
 
 A joint is accepted only when both endpoint bodies are registered. Stable runtime entity IDs are `box2d.world.<id>`, `box2d.body.<id>`, `box2d.fixture.<id>`, and `box2d.joint.<id>`.
 

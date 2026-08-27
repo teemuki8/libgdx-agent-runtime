@@ -652,7 +652,7 @@ final class Box2dConformanceFixtureTest {
         try (Box2dConformanceSimulation fixture = new Box2dConformanceSimulation(
                 Runnable::run, Box2dConformanceSimulation.FIXED_STEP_NANOS,
                 null, Box2dAdapterLimits.developmentDefaults(),
-                new Box2dContactLimits(1, 1, 1, 1, 1, 8, 1_024, 256), false)) {
+                new Box2dContactLimits(1, 1, 1, 1, 8, 1_024, 256), false)) {
             AgentRuntime runtime = fixture.runtime();
             runtime.scenarios().reset(
                     "collision", "truncated-collision-reset", Duration.ofSeconds(2));

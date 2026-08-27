@@ -2,8 +2,8 @@ package io.github.teemuki8.libgdx.agent.runtime.box2d;
 
 /** Hard bounds for Box2D callback, active-contact, diagnostic, and history evidence. */
 public record Box2dContactLimits(int callbackRecordsPerTick, int activeContactsPerTick,
-        int pointsPerContact, int impulsesPerContact, int oldManifoldPointsPerContact,
-        int diagnosticsPerTick, int retainedContactTicks, int queryPageSize) {
+        int pointsPerContact, int impulsesPerContact, int diagnosticsPerTick,
+        int retainedContactTicks, int queryPageSize) {
     static final int MAX_ITEMS = 1_000_000;
     static final int MAX_CONTACT_VALUES = 64;
     static final int MAX_DIAGNOSTICS = 64;
@@ -14,8 +14,6 @@ public record Box2dContactLimits(int callbackRecordsPerTick, int activeContactsP
                 || activeContactsPerTick <= 0 || activeContactsPerTick > MAX_ITEMS
                 || pointsPerContact <= 0 || pointsPerContact > MAX_CONTACT_VALUES
                 || impulsesPerContact <= 0 || impulsesPerContact > MAX_CONTACT_VALUES
-                || oldManifoldPointsPerContact <= 0
-                || oldManifoldPointsPerContact > MAX_CONTACT_VALUES
                 || diagnosticsPerTick <= 0 || diagnosticsPerTick > MAX_DIAGNOSTICS
                 || retainedContactTicks <= 0 || retainedContactTicks > MAX_ITEMS
                 || queryPageSize <= 0 || queryPageSize > retainedContactTicks) {
@@ -25,6 +23,6 @@ public record Box2dContactLimits(int callbackRecordsPerTick, int activeContactsP
 
     /** Returns conservative defaults for ordinary Box2D worlds. */
     public static Box2dContactLimits developmentDefaults() {
-        return new Box2dContactLimits(128, 256, 2, 2, 2, 8, 1_024, 256);
+        return new Box2dContactLimits(128, 256, 2, 2, 8, 1_024, 256);
     }
 }

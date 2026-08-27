@@ -194,6 +194,32 @@ final class Box2dInspectionTest {
         }
     }
 
+    @Test
+    void contactRegistrationRequiresSelectedShapeEventFlagsAndRevalidatesLiveness() {
+        try (NativeScene scene = NativeScene.create("contact-event-flags")) {
+            scene.dynamicBody = Box2d.b2CreateBody(scene.world, scene.bodyDef.asPointer());
+            scene.shape = scene.createCapsule(scene.dynamicBody);
+            scene.inspection.registerWorld("main", scene.world,
+                    new Box2dWorldSpec(4, new Box2dUnitTransform(100)));
+            scene.inspection.registerBody("body", "main", scene.dynamicBody);
+            scene.inspection.registerShape(
+                    "shape", "body", scene.shape, Box2dShapeSpec.defaults());
+
+            assertThrows(IllegalArgumentException.class,
+                    () -> scene.inspection.registerContacts(
+                            "main", Box2dContactLimits.developmentDefaults(),
+                            Box2dContactPolicy.developmentDefaults()));
+            Box2d.b2Shape_EnableContactEvents(scene.shape, true);
+            Box2d.b2Shape_EnableHitEvents(scene.shape, true);
+            Box2dContacts contacts = scene.inspection.registerContacts(
+                    "main", Box2dContactLimits.developmentDefaults(),
+                    Box2dContactPolicy.developmentDefaults());
+
+            Box2d.b2Shape_EnableHitEvents(scene.shape, false);
+            assertThrows(IllegalStateException.class, contacts::validateEventFlags);
+        }
+    }
+
     private static RuntimeValue property(EntitySnapshot entity, String name) {
         return entity.properties().stream().filter(value -> value.name().equals(name))
                 .findFirst().orElseThrow().value();

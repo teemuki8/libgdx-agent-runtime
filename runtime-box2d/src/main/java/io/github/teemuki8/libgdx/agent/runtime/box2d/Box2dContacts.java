@@ -90,6 +90,7 @@ public final class Box2dContacts implements AutoCloseable {
             worldStep.run();
             return;
         }
+        validateEventFlags();
         settlePending();
         ActiveSimulationTick activeTick = runtime.simulation().activeTick()
                 .orElseThrow(() -> new IllegalStateException(
@@ -209,6 +210,11 @@ public final class Box2dContacts implements AutoCloseable {
         return OPEN_NATIVE_SCRATCH.get();
     }
 
+    void validateEventFlags() {
+        requireOwnerOpen();
+        inspection.requireContactEventFlags(worldId, policy, false);
+    }
+
     void worldChanged() {
         requireOwnerOpen();
         resetCurrentEvidence(Box2dContactTick.DiagnosticCode.WORLD_REBOUND);
@@ -304,7 +310,7 @@ public final class Box2dContacts implements AutoCloseable {
                 phase, resolved.key(), resolved.endpointA(), resolved.endpointB(),
                 phase == Box2dContactRecord.Phase.BEGIN, true,
                 Box2dContactRecord.Availability.ENDPOINTS_ONLY,
-                List.of(), Optional.empty(), List.of(), Optional.empty(),
+                List.of(), Optional.empty(), List.of(),
                 nextOccurrence(current), List.of()));
     }
 
@@ -335,7 +341,7 @@ public final class Box2dContacts implements AutoCloseable {
                 Box2dContactRecord.Phase.POST_SOLVE,
                 resolved.key(), resolved.endpointA(), resolved.endpointB(), true, true,
                 Box2dContactRecord.Availability.CURRENT_MANIFOLD_AND_IMPULSES,
-                points, Optional.of(normal), impulses, Optional.empty(),
+                points, Optional.of(normal), impulses,
                 nextOccurrence(current), List.of()));
     }
 
@@ -644,7 +650,6 @@ public final class Box2dContacts implements AutoCloseable {
         return switch (phase) {
             case BEGIN -> policy.begin();
             case END -> policy.end();
-            case PRE_SOLVE -> policy.preSolve();
             case POST_SOLVE -> policy.postSolve();
         };
     }

@@ -725,6 +725,16 @@ evidence.
 Register contact capture after the world, bodies, and shapes. The adapter owns one bounded native
 contact-data scratch buffer but never owns or steps the world:
 
+Every selected shape must be created with the flags required by the retained policy:
+
+```java
+shapeDef.enableContactEvents(true); // begin/end
+shapeDef.enableHitEvents(true);     // hit-derived postSolve
+```
+
+Registration rejects a missing flag. `captureStep` revalidates every selected live shape before
+stepping so later native flag mutation cannot produce falsely complete evidence.
+
 ```java
 Box2dContacts contacts = physics.registerContacts(
         "main",

@@ -22,7 +22,7 @@ import java.util.Objects;
 public final class Box2dDeterminism {
     private static final List<EventType> CONTACT_EVENTS = List.of(
             EventType.of("box2d.contact.begin"), EventType.of("box2d.contact.end"),
-            EventType.of("box2d.contact.postSolve"), EventType.of("box2d.contact.preSolve"));
+            EventType.of("box2d.contact.postSolve"));
 
     private Box2dDeterminism() {}
 

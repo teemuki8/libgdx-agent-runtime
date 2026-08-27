@@ -9,7 +9,7 @@ import java.util.Optional;
 public record Box2dContactRecord(Phase phase, Key key, Endpoint endpointA, Endpoint endpointB,
         boolean touching, boolean enabled, Availability availability, List<Box2dVector> points,
         Optional<Box2dVector> normal, List<Impulse> impulses,
-        Optional<OldManifold> oldManifold, long occurrence, List<Truncation> truncations)
+        long occurrence, List<Truncation> truncations)
         implements Comparable<Box2dContactRecord> {
     /** Validates closed phase availability and defensively copies bounded values. */
     public Box2dContactRecord {
@@ -29,7 +29,6 @@ public record Box2dContactRecord(Phase phase, Key key, Endpoint endpointA, Endpo
         points = List.copyOf(points);
         normal = Objects.requireNonNull(normal, "normal");
         impulses = List.copyOf(impulses);
-        oldManifold = Objects.requireNonNull(oldManifold, "oldManifold");
         truncations = List.copyOf(truncations);
         requireTruncations(truncations, phase);
         if (occurrence <= 0) {
@@ -41,13 +40,9 @@ public record Box2dContactRecord(Phase phase, Key key, Endpoint endpointA, Endpo
         boolean endpointsOnly = phase == Phase.BEGIN || phase == Phase.END;
         if (endpointsOnly != (availability == Availability.ENDPOINTS_ONLY)
                 || endpointsOnly && (!points.isEmpty() || normal.isPresent()
-                        || !impulses.isEmpty() || oldManifold.isPresent())
-                || phase == Phase.PRE_SOLVE
-                        && (availability != Availability.CURRENT_AND_OLD_MANIFOLD
-                                || oldManifold.isEmpty() || !impulses.isEmpty())
+                        || !impulses.isEmpty())
                 || phase == Phase.POST_SOLVE
-                        && (availability != Availability.CURRENT_MANIFOLD_AND_IMPULSES
-                                || oldManifold.isPresent())) {
+                        && availability != Availability.CURRENT_MANIFOLD_AND_IMPULSES) {
             throw new IllegalArgumentException("contact phase and available values disagree");
         }
     }
@@ -66,27 +61,18 @@ public record Box2dContactRecord(Phase phase, Key key, Endpoint endpointA, Endpo
         return endpointA.sensor() || endpointB.sensor();
     }
 
-    /** Native callback phase. */
+    /** Box2D 3 post-step event phase. */
     public enum Phase {
         /** A contact began. */ BEGIN,
         /** A contact ended. */ END,
-        /** Pre-solve callback. */ PRE_SOLVE,
-        /** Post-solve callback. */ POST_SOLVE
+        /** A hit event copied as compatible post-solve evidence. */ POST_SOLVE
     }
 
     /** Closed testimony about which phase-specific values were copied. */
     public enum Availability {
         /** Only endpoint and contact flags are available. */ ENDPOINTS_ONLY,
-        /** Current and bounded old-manifold values are available. */ CURRENT_AND_OLD_MANIFOLD,
-        /** Current manifold and bounded impulse values are available. */
+        /** Hit point, normal, and whole-step impulses are available. */
         CURRENT_MANIFOLD_AND_IMPULSES
-    }
-
-    /** Closed Box2D manifold type. */
-    public enum ManifoldType {
-        /** Circle-to-circle manifold. */ CIRCLES,
-        /** Face on canonical endpoint A. */ FACE_A,
-        /** Face on canonical endpoint B. */ FACE_B
     }
 
     /** Stable registered endpoint plus copied sensor state. */
@@ -150,40 +136,14 @@ public record Box2dContactRecord(Phase phase, Key key, Endpoint endpointA, Endpo
         }
     }
 
-    /** Copied old-manifold point identifier and warm-start impulses. */
-    public record OldManifoldPoint(long id, double normalImpulse, double tangentImpulse) {
-        /** Rejects invalid unsigned IDs and non-finite impulse values. */
-        public OldManifoldPoint {
-            if (id < 0 || id > 0xffff_ffffL || !Double.isFinite(normalImpulse)
-                    || normalImpulse < 0 || !Double.isFinite(tangentImpulse)) {
-                throw new IllegalArgumentException("old manifold point is invalid");
-            }
-        }
-    }
-
-    /** Bounded copied old-manifold values. */
-    public record OldManifold(ManifoldType type, List<OldManifoldPoint> points) {
-        /** Defensively copies old points. */
-        public OldManifold {
-            Objects.requireNonNull(type, "type");
-            Objects.requireNonNull(points, "points");
-            if (points.size() > Box2dContactLimits.MAX_CONTACT_VALUES) {
-                throw new IllegalArgumentException("old manifold exceeds its hard bound");
-            }
-            points = List.copyOf(points);
-        }
-    }
 
     private static void requireTruncations(List<Truncation> values, Phase phase) {
         String previous = null;
         for (Truncation value : values) {
             String dimension = value.dimension();
-            boolean supported = (phase == Phase.PRE_SOLVE || phase == Phase.POST_SOLVE)
-                            && dimension.equals("box2d.contact.points")
-                    || phase == Phase.POST_SOLVE
-                            && dimension.equals("box2d.contact.impulses")
-                    || phase == Phase.PRE_SOLVE
-                            && dimension.equals("box2d.contact.oldManifoldPoints");
+            boolean supported = phase == Phase.POST_SOLVE
+                    && (dimension.equals("box2d.contact.points")
+                            || dimension.equals("box2d.contact.impulses"));
             if (!supported || previous != null && previous.compareTo(dimension) >= 0) {
                 throw new IllegalArgumentException(
                         "contact record truncations are not closed and sorted");

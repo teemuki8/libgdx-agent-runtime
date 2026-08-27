@@ -5,26 +5,23 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import com.badlogic.gdx.math.Vector2;
-import com.badlogic.gdx.physics.box2d.Body;
-import com.badlogic.gdx.physics.box2d.BodyDef;
-import com.badlogic.gdx.physics.box2d.Box2D;
-import com.badlogic.gdx.physics.box2d.CircleShape;
-import com.badlogic.gdx.physics.box2d.Fixture;
-import com.badlogic.gdx.physics.box2d.FixtureDef;
-import com.badlogic.gdx.physics.box2d.Joint;
-import com.badlogic.gdx.physics.box2d.World;
-import com.badlogic.gdx.physics.box2d.joints.DistanceJointDef;
-import com.badlogic.gdx.utils.GdxNativesLoader;
+import com.badlogic.gdx.box2d.Box2d;
+import com.badlogic.gdx.box2d.enums.b2BodyType;
+import com.badlogic.gdx.box2d.structs.b2BodyDef;
+import com.badlogic.gdx.box2d.structs.b2BodyId;
+import com.badlogic.gdx.box2d.structs.b2Capsule;
+import com.badlogic.gdx.box2d.structs.b2JointId;
+import com.badlogic.gdx.box2d.structs.b2RevoluteJointDef;
+import com.badlogic.gdx.box2d.structs.b2ShapeDef;
+import com.badlogic.gdx.box2d.structs.b2ShapeId;
+import com.badlogic.gdx.box2d.structs.b2WorldDef;
+import com.badlogic.gdx.box2d.structs.b2WorldId;
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
-import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntimeException;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntityId;
 import io.github.teemuki8.libgdx.agent.runtime.core.EntitySnapshot;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValue;
 import io.github.teemuki8.libgdx.agent.runtime.core.RuntimeValues;
 import io.github.teemuki8.libgdx.agent.runtime.core.SessionId;
-import java.util.List;
-import java.util.OptionalDouble;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -32,129 +29,94 @@ import org.junit.jupiter.api.Test;
 final class Box2dInspectionTest {
     @BeforeAll
     static void initializeNativeBox2d() {
-        GdxNativesLoader.load();
-        Box2D.init();
+        Box2d.initialize();
     }
 
     @Test
-    void explicitlyRegisteredWorldBodyAndFixtureBecomeClosedRuntimeEntities() {
-        World world = new World(new Vector2(0, -9.8f), true);
-        try {
-            BodyDef bodyDef = new BodyDef();
-            bodyDef.type = BodyDef.BodyType.DynamicBody;
-            bodyDef.position.set(2, 3);
-            Body ball = world.createBody(bodyDef);
-            ball.setLinearVelocity(4, 5);
-            CircleShape circle = new CircleShape();
-            circle.setRadius(0.5f);
-            circle.setPosition(new Vector2(0.1f, 0.2f));
-            FixtureDef fixtureDef = new FixtureDef();
-            fixtureDef.shape = circle;
-            fixtureDef.density = 2;
-            fixtureDef.friction = 0.3f;
-            fixtureDef.restitution = 0.4f;
-            fixtureDef.filter.categoryBits = (short) 0x8001;
-            fixtureDef.filter.maskBits = (short) 0xFFFE;
-            fixtureDef.filter.groupIndex = -2;
-            Fixture fixture = ball.createFixture(fixtureDef);
-            circle.dispose();
-            world.createBody(new BodyDef());
+    void publishesCopiedBox2d3WorldBodyCapsuleAndRevoluteFacts() {
+        try (NativeScene scene = NativeScene.create("facts")) {
+            scene.bodyDef.position().x(2.0f);
+            scene.bodyDef.position().y(3.0f);
+            scene.dynamicBody = Box2d.b2CreateBody(scene.world, scene.bodyDef.asPointer());
+            Box2d.b2Body_SetLinearVelocity(scene.dynamicBody, NativeScene.vector(4.0f, 5.0f));
+            scene.shape = scene.createCapsule(scene.dynamicBody);
+            scene.staticBody = Box2d.b2CreateBody(scene.world, Box2d.b2DefaultBodyDef().asPointer());
+            scene.joint = scene.createRevoluteJoint(scene.staticBody, scene.dynamicBody);
 
-            AgentRuntime runtime = AgentRuntime.builder()
-                    .sessionId(SessionId.of("box2d-inspection"))
-                    .build();
-            Box2dInspection inspection = new Box2dInspection(runtime,
-                    Box2dAdapterLimits.developmentDefaults());
-            inspection.registerWorld("main", world, worldSpec());
-            inspection.registerBody("ball", "main", ball);
-            inspection.registerFixture("ball-shape", "ball", fixture);
-            runtime.start();
+            scene.inspection.registerWorld("main", scene.world,
+                    new Box2dWorldSpec(4, new Box2dUnitTransform(100)));
+            scene.inspection.registerBody("ball", "main", scene.dynamicBody);
+            scene.inspection.registerBody("ground", "main", scene.staticBody);
+            scene.inspection.registerShape("ball-shape", "ball", scene.shape,
+                    Box2dShapeSpec.defaults());
+            scene.inspection.registerJoint("hinge", "main", scene.joint);
+            scene.runtime.start();
 
-            EntitySnapshot worldEntity = runtime.entity(EntityId.of("box2d.world.main"))
-                    .orElseThrow();
-            assertEquals(List.of(
-                    "continuousPhysics", "fixedStepNanos", "gravity", "id", "locked",
-                    "positionIterations", "registeredBodyCount", "registeredFixtureCount",
-                    "registeredJointCount", "renderUnitsPerMeter", "runtimeEntityId",
-                    "sleepingAllowed", "totalBodyCount", "totalContactCount",
-                    "totalFixtureCount", "totalJointCount", "velocityIterations", "warmStarting"),
-                    propertyNames(worldEntity));
-            assertEquals("box2d.world", worldEntity.type().value());
-            assertEquals(RuntimeValues.vector2(0, -9.8), property(worldEntity, "gravity"));
-            assertEquals(RuntimeValues.integer(1), property(worldEntity, "registeredBodyCount"));
-            assertEquals(RuntimeValues.integer(2), property(worldEntity, "totalBodyCount"));
-            assertEquals(RuntimeValues.decimal(100),
-                    property(worldEntity, "renderUnitsPerMeter"));
+            EntitySnapshot world = scene.entity("box2d.world.main");
+            assertEquals(RuntimeValues.vector2(0, -9.8), property(world, "gravity"));
+            assertEquals(RuntimeValues.integer(2), property(world, "totalBodyCount"));
+            assertEquals(RuntimeValues.integer(1), property(world, "totalShapeCount"));
+            assertEquals(RuntimeValues.integer(1), property(world, "totalJointCount"));
+            assertEquals(RuntimeValues.integer(4), property(world, "subStepCount"));
 
-            EntitySnapshot bodyEntity = runtime.entity(EntityId.of("box2d.body.ball"))
-                    .orElseThrow();
-            assertEquals(List.of(
-                    "active", "angleRadians", "angularDamping", "angularVelocity", "awake",
-                    "bodyType", "bullet", "fixedRotation", "gravityScale", "id", "inertia",
-                    "linearDamping", "linearVelocity", "mass", "position",
-                    "registeredFixtureCount", "runtimeEntityId", "sleepingAllowed",
-                    "totalFixtureCount", "worldId"), propertyNames(bodyEntity));
-            assertEquals(RuntimeValues.enumValue("DYNAMIC"), property(bodyEntity, "bodyType"));
-            assertEquals(RuntimeValues.vector2(2, 3), property(bodyEntity, "position"));
-            assertEquals(RuntimeValues.vector2(4, 5), property(bodyEntity, "linearVelocity"));
-            assertEquals(RuntimeValues.bool(true), property(bodyEntity, "active"));
-            assertEquals(RuntimeValues.integer(1), property(bodyEntity, "registeredFixtureCount"));
+            EntitySnapshot body = scene.entity("box2d.body.ball");
+            assertEquals(RuntimeValues.enumValue("DYNAMIC"), property(body, "bodyType"));
+            assertEquals(RuntimeValues.vector2(2, 3), property(body, "position"));
+            assertEquals(RuntimeValues.vector2(4, 5), property(body, "linearVelocity"));
+            assertTrue(decimal(property(body, "mass")) > 0.0);
+            assertTrue(decimal(property(body, "inertia")) > 0.0);
+            assertEquals(RuntimeValues.decimal(0), property(body, "angularVelocity"));
 
-            EntitySnapshot fixtureEntity = runtime.entity(EntityId.of("box2d.fixture.ball-shape"))
-                    .orElseThrow();
-            assertEquals(List.of(
-                    "bodyId", "categoryBits", "density", "diagnostics", "friction", "geometry",
-                    "groupIndex", "id", "maskBits", "restitution", "runtimeEntityId", "sensor",
-                    "shapeType"), propertyNames(fixtureEntity));
-            assertEquals(RuntimeValues.enumValue("CIRCLE"), property(fixtureEntity, "shapeType"));
-            assertEquals(RuntimeValues.integer(0x8001), property(fixtureEntity, "categoryBits"));
-            assertEquals(RuntimeValues.integer(0xFFFE), property(fixtureEntity, "maskBits"));
-            assertEquals(RuntimeValues.integer(-2), property(fixtureEntity, "groupIndex"));
-            RuntimeValue.ObjectValue geometry = (RuntimeValue.ObjectValue) property(
-                    fixtureEntity, "geometry");
-            assertTrue(geometry.fields().stream().anyMatch(field -> field.name().equals("radius")
-                    && field.value().equals(RuntimeValues.decimal(0.5))));
+            EntitySnapshot shape = scene.entity("box2d.fixture.ball-shape");
+            assertEquals(RuntimeValues.enumValue("CAPSULE"), property(shape, "shapeType"));
+            RuntimeValue.ObjectValue geometry = (RuntimeValue.ObjectValue) property(shape, "geometry");
+            assertEquals(RuntimeValues.vector2(0, -0.5), field(geometry, "center1"));
+            assertEquals(RuntimeValues.vector2(0, 0.5), field(geometry, "center2"));
+            assertEquals(RuntimeValues.decimal(0.25), field(geometry, "radius"));
 
-            assertFalse(runtime.entity(EntityId.of("box2d.body.unregistered")).isPresent());
-            runtime.close();
-            inspection.close();
-        } finally {
-            world.dispose();
+            EntitySnapshot joint = scene.entity("box2d.joint.hinge");
+            assertEquals(RuntimeValues.enumValue("REVOLUTE"), property(joint, "jointType"));
+            assertEquals(RuntimeValues.string("ground"), property(joint, "bodyAId"));
+            assertEquals(RuntimeValues.string("ball"), property(joint, "bodyBId"));
         }
     }
 
     @Test
-    void registrationBoundsRelationshipsThreadAndRebindAreExplicit() throws Exception {
-        World first = new World(new Vector2(), true);
-        World second = new World(new Vector2(), true);
-        try {
-            Body firstBody = first.createBody(new BodyDef());
-            AgentRuntime runtime = AgentRuntime.builder()
-                    .sessionId(SessionId.of("box2d-registration"))
-                    .build();
-            Box2dInspection inspection = new Box2dInspection(runtime,
+    void rejectsStaleWrongWorldDuplicateBoundsThreadAndClosedCalls() throws Exception {
+        try (NativeScene scene = NativeScene.create("failures");
+                NativeScene other = NativeScene.create("other")) {
+            scene.dynamicBody = Box2d.b2CreateBody(scene.world, scene.bodyDef.asPointer());
+            scene.shape = scene.createCapsule(scene.dynamicBody);
+            Box2dInspection inspection = new Box2dInspection(scene.runtime,
                     new Box2dAdapterLimits(1, 1, 1, 1, 32, 64, 4));
-            Box2dRegistration<World> world = inspection.registerWorld(
-                    "main", first, worldSpec());
-            Box2dRegistration<Body> body = inspection.registerBody("body", "main", firstBody);
-            CircleShape circle = new CircleShape();
-            circle.setRadius(1);
-            Fixture firstFixture = firstBody.createFixture(circle, 0);
-            circle.dispose();
-            Box2dRegistration<Fixture> fixture = inspection.registerFixture(
-                    "fixture", "body", firstFixture);
+            inspection.registerWorld("main", scene.world,
+                    new Box2dWorldSpec(4, new Box2dUnitTransform(100)));
+            inspection.registerBody("body", "main", scene.dynamicBody);
 
+            IllegalArgumentException duplicate = assertThrows(IllegalArgumentException.class,
+                    () -> inspection.registerWorld("duplicate", scene.world,
+                            new Box2dWorldSpec(4, new Box2dUnitTransform(100))));
+            assertEquals("native Box2D ID is already registered", duplicate.getMessage());
+            IllegalArgumentException bound = assertThrows(IllegalArgumentException.class,
+                    () -> inspection.registerWorld("other", other.world,
+                            new Box2dWorldSpec(4, new Box2dUnitTransform(100))));
+            assertEquals("Box2D world registration limit reached", bound.getMessage());
+            b2BodyId wrongWorldBody = Box2d.b2CreateBody(
+                    other.world, Box2d.b2DefaultBodyDef().asPointer());
+            other.dynamicBody = wrongWorldBody;
             assertThrows(IllegalArgumentException.class,
-                    () -> inspection.registerWorld("other", second, worldSpec()));
+                    () -> inspection.registerBody("wrong", "main", wrongWorldBody));
+
+            Box2d.b2DestroyShape(scene.shape, true);
+            assertFalse(Box2d.b2Shape_IsValid(scene.shape));
             assertThrows(IllegalArgumentException.class,
-                    () -> inspection.registerBody("other", "main", firstBody));
-            assertThrows(IllegalStateException.class, () -> world.rebind(second));
-            assertThrows(IllegalStateException.class, body::close);
+                    () -> inspection.registerShape("stale", "body", scene.shape,
+                            Box2dShapeSpec.defaults()));
 
             AtomicReference<Throwable> wrongThread = new AtomicReference<>();
             Thread thread = new Thread(() -> {
                 try {
-                    body.rebind(firstBody);
+                    inspection.registerBody("thread", "main", scene.dynamicBody);
                 } catch (Throwable failure) {
                     wrongThread.set(failure);
                 }
@@ -163,280 +125,122 @@ final class Box2dInspectionTest {
             thread.join();
             assertTrue(wrongThread.get() instanceof IllegalStateException);
 
-            fixture.close();
-            assertThrows(IllegalStateException.class, () -> fixture.rebind(firstFixture));
-            body.close();
-            world.rebind(second);
-            runtime.start();
-            assertEquals(RuntimeValues.vector2(0, 0), property(runtime.entity(
-                    world.runtimeEntityId()).orElseThrow(), "gravity"));
-            runtime.close();
             inspection.close();
             assertThrows(IllegalStateException.class,
-                    () -> inspection.registerWorld("closed", first, worldSpec()));
-        } finally {
-            first.dispose();
-            second.dispose();
+                    () -> inspection.registerBody("closed", "main", scene.dynamicBody));
         }
     }
 
     @Test
-    void destroyedWorldCanBeRecreatedUnderTheSameStableRegistration() {
-        World original = new World(new Vector2(1, -9), true);
-        World replacement = new World(new Vector2(2, -8), true);
-        boolean originalDisposed = false;
-        AgentRuntime runtime = AgentRuntime.builder()
-                .sessionId(SessionId.of("box2d-world-recreation"))
-                .build();
-        Box2dInspection inspection = new Box2dInspection(
-                runtime, Box2dAdapterLimits.developmentDefaults());
-        try {
-            Box2dRegistration<World> registration = inspection.registerWorld(
-                    "main", original, worldSpec());
-            original.dispose();
-            originalDisposed = true;
+    void staleRegisteredIdFailsCaptureInsteadOfPublishingPartialEvidence() {
+        try (NativeScene scene = NativeScene.create("stale-capture")) {
+            scene.dynamicBody = Box2d.b2CreateBody(scene.world, scene.bodyDef.asPointer());
+            scene.inspection.registerWorld("main", scene.world,
+                    new Box2dWorldSpec(4, new Box2dUnitTransform(100)));
+            scene.inspection.registerBody("body", "main", scene.dynamicBody);
 
-            registration.rebind(replacement);
-            runtime.start();
-
-            assertEquals(EntityId.of("box2d.world.main"), registration.runtimeEntityId());
-            assertEquals(RuntimeValues.vector2(2, -8), property(runtime.entity(
-                    registration.runtimeEntityId()).orElseThrow(), "gravity"));
-            assertEquals(RuntimeValues.decimal(100), property(runtime.entity(
-                    registration.runtimeEntityId()).orElseThrow(), "renderUnitsPerMeter"));
-        } finally {
-            runtime.close();
-            inspection.close();
-            if (!originalDisposed) {
-                original.dispose();
-            }
-            replacement.dispose();
+            Box2d.b2DestroyBody(scene.dynamicBody);
+            assertFalse(Box2d.b2Body_IsValid(scene.dynamicBody));
+            scene.runtime.start();
+            var diagnostic = scene.runtime.latestFrame().orElseThrow().stats().diagnostics()
+                    .stream().filter(value -> value.entityId().orElseThrow().equals(
+                            EntityId.of("box2d.body.body"))).findFirst().orElseThrow();
+            assertEquals("provider.property", diagnostic.failure().category());
+            assertEquals("java.lang.IllegalArgumentException",
+                    diagnostic.failure().exceptionClass());
         }
-    }
-
-    @Test
-    void rebindAndCloseRejectOpenFrameWithoutPoisoningRegistration() {
-        World original = new World(new Vector2(), true);
-        World replacement = new World(new Vector2(3, -7), true);
-        AgentRuntime runtime = AgentRuntime.builder()
-                .sessionId(SessionId.of("box2d-open-frame-lifecycle"))
-                .build();
-        Box2dInspection inspection = new Box2dInspection(
-                runtime, Box2dAdapterLimits.developmentDefaults());
-        try {
-            Box2dRegistration<World> registration = inspection.registerWorld(
-                    "main", original, worldSpec());
-            runtime.start();
-            runtime.beginFrame(1);
-            try {
-                assertThrows(AgentRuntimeException.class, () -> registration.rebind(replacement));
-                assertThrows(AgentRuntimeException.class, registration::close);
-                assertThrows(AgentRuntimeException.class, inspection::close);
-            } finally {
-                runtime.endFrame();
-            }
-            registration.rebind(replacement);
-            runtime.frame(1, () -> {});
-            assertEquals(RuntimeValues.vector2(3, -7), property(runtime.entity(
-                    registration.runtimeEntityId()).orElseThrow(), "gravity"));
-            inspection.close();
-        } finally {
-            runtime.close();
-            inspection.close();
-            original.dispose();
-            replacement.dispose();
-        }
-    }
-
-    @Test
-    void everyRegistrationKindEnforcesCapacityAndCloseIsIdempotent() {
-        World world = new World(new Vector2(), true);
-        World excessWorld = new World(new Vector2(), true);
-        try {
-            Body bodyA = world.createBody(new BodyDef());
-            Body bodyB = world.createBody(new BodyDef());
-            Body excessBody = world.createBody(new BodyDef());
-            CircleShape circle = new CircleShape();
-            circle.setRadius(1);
-            Fixture fixtureA = bodyA.createFixture(circle, 0);
-            Fixture fixtureB = bodyA.createFixture(circle, 0);
-            circle.dispose();
-            DistanceJointDef firstDefinition = new DistanceJointDef();
-            firstDefinition.initialize(bodyA, bodyB, new Vector2(), new Vector2(1, 0));
-            Joint firstJoint = world.createJoint(firstDefinition);
-            DistanceJointDef secondDefinition = new DistanceJointDef();
-            secondDefinition.initialize(bodyA, bodyB, new Vector2(), new Vector2(2, 0));
-            Joint secondJoint = world.createJoint(secondDefinition);
-            AgentRuntime runtime = AgentRuntime.builder()
-                    .sessionId(SessionId.of("box2d-registration-capacities"))
-                    .build();
-            Box2dInspection inspection = new Box2dInspection(runtime,
-                    new Box2dAdapterLimits(1, 2, 1, 1, 32, 64, 4));
-            Box2dRegistration<World> worldRegistration = inspection.registerWorld(
-                    "main", world, worldSpec());
-            assertThrows(IllegalArgumentException.class,
-                    () -> inspection.registerWorld("excess", excessWorld, worldSpec()));
-            Box2dRegistration<Body> bodyARegistration = inspection.registerBody(
-                    "a", "main", bodyA);
-            Box2dRegistration<Body> bodyBRegistration = inspection.registerBody(
-                    "b", "main", bodyB);
-            assertThrows(IllegalArgumentException.class,
-                    () -> inspection.registerBody("excess", "main", excessBody));
-            Box2dRegistration<Fixture> fixtureRegistration = inspection.registerFixture(
-                    "fixture", "a", fixtureA);
-            assertThrows(IllegalArgumentException.class,
-                    () -> inspection.registerFixture("excess", "a", fixtureB));
-            Box2dRegistration<Joint> jointRegistration = inspection.registerJoint(
-                    "joint", "main", firstJoint);
-            assertThrows(IllegalArgumentException.class,
-                    () -> inspection.registerJoint("excess", "main", secondJoint));
-
-            jointRegistration.close();
-            jointRegistration.close();
-            fixtureRegistration.close();
-            fixtureRegistration.close();
-            bodyARegistration.close();
-            bodyARegistration.close();
-            bodyBRegistration.close();
-            worldRegistration.close();
-            worldRegistration.close();
-            inspection.close();
-            inspection.close();
-            runtime.close();
-        } finally {
-            world.dispose();
-            excessWorld.dispose();
-        }
-    }
-
-    @Test
-    void duplicateNativeObjectsAndConflictingRelationshipsAreRejected() {
-        World main = new World(new Vector2(), true);
-        World other = new World(new Vector2(), true);
-        try {
-            Body bodyA = main.createBody(new BodyDef());
-            Body bodyB = main.createBody(new BodyDef());
-            Body unregistered = main.createBody(new BodyDef());
-            Body remote = other.createBody(new BodyDef());
-            Body remoteB = other.createBody(new BodyDef());
-            CircleShape circle = new CircleShape();
-            circle.setRadius(1);
-            Fixture fixtureA = bodyA.createFixture(circle, 0);
-            Fixture fixtureA2 = bodyA.createFixture(circle, 0);
-            Fixture fixtureB = bodyB.createFixture(circle, 0);
-            circle.dispose();
-            DistanceJointDef registeredDefinition = new DistanceJointDef();
-            registeredDefinition.initialize(bodyA, bodyB, new Vector2(), new Vector2(1, 0));
-            Joint registeredJoint = main.createJoint(registeredDefinition);
-            DistanceJointDef missingEndpointDefinition = new DistanceJointDef();
-            missingEndpointDefinition.initialize(
-                    bodyA, unregistered, new Vector2(), new Vector2(2, 0));
-            Joint missingEndpointJoint = main.createJoint(missingEndpointDefinition);
-            DistanceJointDef remoteDefinition = new DistanceJointDef();
-            remoteDefinition.initialize(remote, remoteB, new Vector2(), new Vector2(1, 0));
-            Joint remoteJoint = other.createJoint(remoteDefinition);
-            AgentRuntime runtime = AgentRuntime.builder()
-                    .sessionId(SessionId.of("box2d-registration-conflicts"))
-                    .build();
-            Box2dInspection inspection = new Box2dInspection(
-                    runtime, Box2dAdapterLimits.developmentDefaults());
-            inspection.registerWorld("main", main, worldSpec());
-            inspection.registerWorld("other", other, worldSpec());
-            assertThrows(IllegalArgumentException.class,
-                    () -> inspection.registerWorld("main", other, worldSpec()));
-            assertThrows(IllegalArgumentException.class,
-                    () -> inspection.registerWorld("main-alias", main, worldSpec()));
-            assertThrows(IllegalArgumentException.class,
-                    () -> inspection.registerBody("wrong-world", "main", remote));
-            inspection.registerBody("a", "main", bodyA);
-            inspection.registerBody("b", "main", bodyB);
-            inspection.registerBody("remote", "other", remote);
-            inspection.registerBody("remote-b", "other", remoteB);
-            assertThrows(IllegalArgumentException.class,
-                    () -> inspection.registerBody("a", "main", bodyB));
-            assertThrows(IllegalArgumentException.class,
-                    () -> inspection.registerBody("a-alias", "main", bodyA));
-            assertThrows(IllegalArgumentException.class,
-                    () -> inspection.registerFixture("wrong-body", "a", fixtureB));
-            inspection.registerFixture("fixture", "a", fixtureA);
-            assertThrows(IllegalArgumentException.class,
-                    () -> inspection.registerFixture("fixture", "a", fixtureA2));
-            assertThrows(IllegalArgumentException.class,
-                    () -> inspection.registerFixture("fixture-alias", "a", fixtureA));
-            assertThrows(IllegalArgumentException.class,
-                    () -> inspection.registerJoint("missing", "main", missingEndpointJoint));
-            assertThrows(IllegalArgumentException.class,
-                    () -> inspection.registerJoint("wrong-world", "main", remoteJoint));
-            inspection.registerJoint("joint", "main", registeredJoint);
-            assertThrows(IllegalArgumentException.class,
-                    () -> inspection.registerJoint("joint", "main", registeredJoint));
-            assertThrows(IllegalArgumentException.class,
-                    () -> inspection.registerJoint("joint-alias", "main", registeredJoint));
-            runtime.close();
-            inspection.close();
-        } finally {
-            main.dispose();
-            other.dispose();
-        }
-    }
-
-    @Test
-    void destroyedBodyAndFixtureCanRebindToRecreatedNativeObjects() {
-        World world = new World(new Vector2(), true);
-        try {
-            Body fixtureOwner = world.createBody(new BodyDef());
-            CircleShape originalShape = new CircleShape();
-            originalShape.setRadius(1);
-            Fixture originalFixture = fixtureOwner.createFixture(originalShape, 1);
-            originalShape.dispose();
-            BodyDef originalBodyDefinition = new BodyDef();
-            originalBodyDefinition.position.set(1, 2);
-            Body originalBody = world.createBody(originalBodyDefinition);
-            AgentRuntime runtime = AgentRuntime.builder()
-                    .sessionId(SessionId.of("box2d-leaf-recreation"))
-                    .build();
-            Box2dInspection inspection = new Box2dInspection(
-                    runtime, Box2dAdapterLimits.developmentDefaults());
-            inspection.registerWorld("main", world, worldSpec());
-            inspection.registerBody("fixture-owner", "main", fixtureOwner);
-            Box2dRegistration<Fixture> fixtureRegistration = inspection.registerFixture(
-                    "shape", "fixture-owner", originalFixture);
-            Box2dRegistration<Body> bodyRegistration = inspection.registerBody(
-                    "moving", "main", originalBody);
-
-            fixtureOwner.destroyFixture(originalFixture);
-            CircleShape replacementShape = new CircleShape();
-            replacementShape.setRadius(2);
-            Fixture replacementFixture = fixtureOwner.createFixture(replacementShape, 2);
-            replacementShape.dispose();
-            fixtureRegistration.rebind(replacementFixture);
-            world.destroyBody(originalBody);
-            BodyDef replacementBodyDefinition = new BodyDef();
-            replacementBodyDefinition.position.set(5, 6);
-            bodyRegistration.rebind(world.createBody(replacementBodyDefinition));
-            runtime.start();
-
-            assertEquals(RuntimeValues.decimal(2), property(runtime.entity(
-                    fixtureRegistration.runtimeEntityId()).orElseThrow(), "density"));
-            assertEquals(RuntimeValues.vector2(5, 6), property(runtime.entity(
-                    bodyRegistration.runtimeEntityId()).orElseThrow(), "position"));
-            runtime.close();
-            inspection.close();
-        } finally {
-            world.dispose();
-        }
-    }
-
-    private static Box2dWorldSpec worldSpec() {
-        return new Box2dWorldSpec(true, true, true, 6, 2,
-                OptionalDouble.of(60), new Box2dUnitTransform(100));
     }
 
     private static RuntimeValue property(EntitySnapshot entity, String name) {
-        return entity.property(name).orElseThrow();
+        return entity.properties().stream().filter(value -> value.name().equals(name))
+                .findFirst().orElseThrow().value();
     }
 
-    private static List<String> propertyNames(EntitySnapshot entity) {
-        return entity.properties().stream().map(RuntimeValue.Field::name).toList();
+    private static RuntimeValue field(RuntimeValue.ObjectValue value, String name) {
+        return value.fields().stream().filter(field -> field.name().equals(name))
+                .findFirst().orElseThrow().value();
+    }
+
+    private static double decimal(RuntimeValue value) {
+        return ((RuntimeValue.DecimalValue) value).value().doubleValue();
+    }
+
+    private static final class NativeScene implements AutoCloseable {
+        final AgentRuntime runtime;
+        final Box2dInspection inspection;
+        final b2WorldId world;
+        final b2BodyDef bodyDef = Box2d.b2DefaultBodyDef();
+        b2BodyId dynamicBody;
+        b2BodyId staticBody;
+        b2ShapeId shape;
+        b2JointId joint;
+
+        private NativeScene(String session, AgentRuntime runtime, Box2dInspection inspection,
+                b2WorldId world) {
+            this.runtime = runtime;
+            this.inspection = inspection;
+            this.world = world;
+            bodyDef.type(b2BodyType.b2_dynamicBody);
+        }
+
+        static NativeScene create(String session) {
+            b2WorldDef definition = Box2d.b2DefaultWorldDef();
+            definition.gravity().y(-9.8f);
+            definition.workerCount(0);
+            b2WorldId world = Box2d.b2CreateWorld(definition.asPointer());
+            AgentRuntime runtime = AgentRuntime.builder().sessionId(SessionId.of(session)).build();
+            return new NativeScene(session, runtime,
+                    new Box2dInspection(runtime, Box2dAdapterLimits.developmentDefaults()), world);
+        }
+
+        b2ShapeId createCapsule(b2BodyId body) {
+            b2ShapeDef definition = Box2d.b2DefaultShapeDef();
+            definition.density(2.0f);
+            definition.material().friction(0.3f);
+            definition.material().restitution(0.4f);
+            b2Capsule capsule = new b2Capsule();
+            capsule.center1().y(-0.5f);
+            capsule.center2().y(0.5f);
+            capsule.radius(0.25f);
+            return Box2d.b2CreateCapsuleShape(body, definition.asPointer(), capsule.asPointer());
+        }
+
+        b2JointId createRevoluteJoint(b2BodyId bodyA, b2BodyId bodyB) {
+            b2RevoluteJointDef definition = Box2d.b2DefaultRevoluteJointDef();
+            definition.setBodyIdA(bodyA);
+            definition.setBodyIdB(bodyB);
+            return Box2d.b2CreateRevoluteJoint(world, definition.asPointer());
+        }
+
+        EntitySnapshot entity(String id) {
+            return runtime.entity(EntityId.of(id)).orElseThrow();
+        }
+
+        static com.badlogic.gdx.box2d.structs.b2Vec2 vector(float x, float y) {
+            var value = new com.badlogic.gdx.box2d.structs.b2Vec2();
+            value.x(x);
+            value.y(y);
+            return value;
+        }
+
+        @Override public void close() {
+            runtime.close();
+            inspection.close();
+            if (joint != null && Box2d.b2Joint_IsValid(joint)) {
+                Box2d.b2DestroyJoint(joint);
+            }
+            if (shape != null && Box2d.b2Shape_IsValid(shape)) {
+                Box2d.b2DestroyShape(shape, true);
+            }
+            if (dynamicBody != null && Box2d.b2Body_IsValid(dynamicBody)) {
+                Box2d.b2DestroyBody(dynamicBody);
+            }
+            if (staticBody != null && Box2d.b2Body_IsValid(staticBody)) {
+                Box2d.b2DestroyBody(staticBody);
+            }
+            if (Box2d.b2World_IsValid(world)) {
+                Box2d.b2DestroyWorld(world);
+            }
+        }
     }
 }

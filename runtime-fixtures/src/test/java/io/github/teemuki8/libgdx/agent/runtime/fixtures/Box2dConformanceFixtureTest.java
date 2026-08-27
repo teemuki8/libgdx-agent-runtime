@@ -6,8 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import com.badlogic.gdx.physics.box2d.Box2D;
-import com.badlogic.gdx.utils.GdxNativesLoader;
+import com.badlogic.gdx.box2d.Box2d;
 import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dAdapterLimits;
 import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dAssertions;
 import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dContactLimits;
@@ -65,8 +64,7 @@ import org.junit.jupiter.api.Test;
 final class Box2dConformanceFixtureTest {
     @BeforeAll
     static void initializeNativeBox2d() {
-        GdxNativesLoader.load();
-        Box2D.init();
+        Box2d.initialize();
     }
 
     @Test

@@ -6,8 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import com.badlogic.gdx.physics.box2d.Box2D;
-import com.badlogic.gdx.utils.GdxNativesLoader;
+import com.badlogic.gdx.box2d.Box2d;
 import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dDeterminism;
 import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dVector;
 import io.github.teemuki8.libgdx.agent.runtime.core.AgentRuntime;
@@ -53,8 +52,7 @@ import org.junit.jupiter.api.Timeout;
 final class FixtureProtocolAndMcpTest {
     @Test
     void actualNativeReplayCrossesProtocolAndMcpWithStructuredEquality() {
-        GdxNativesLoader.load();
-        Box2D.init();
+        Box2d.initialize();
         ArrayDeque<Runnable> applicationQueue = new ArrayDeque<>();
         try (Box2dConformanceSimulation fixture =
                 new Box2dConformanceSimulation(applicationQueue::addLast)) {

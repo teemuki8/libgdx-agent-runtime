@@ -23,7 +23,7 @@ import org.junit.jupiter.api.Test;
 
 class AgentCookbookContractTest {
     private static final String CURRENT_RELEASE = "2.2.0";
-    private static final String NEXT_DEVELOPMENT = "2.2.1-SNAPSHOT";
+    private static final String NEXT_DEVELOPMENT = "3.0.0-SNAPSHOT";
     private static final Map<String, String> PUBLISHED_ARTIFACTS = Map.of(
             "runtime-core", "agent-runtime-core",
             "runtime-libgdx", "agent-runtime-libgdx",
@@ -39,12 +39,11 @@ class AgentCookbookContractTest {
             "## Execute a deterministic input timeline",
             "## Host same-JVM stdio MCP",
             "## Diagnose incomplete and failed evidence",
-            "## Use the deterministic Box2D example");
+            "## Use the Box2D 3 inspection recipe");
     private static final List<String> EXAMPLES = List.of(
             "BasicInspectionApplication.java",
             "ControlledWorkflowExample.java",
-            "SameJvmMcpApplication.java",
-            "DeterministicBox2dExample.java");
+            "SameJvmMcpApplication.java");
 
     @Test
     void cookbookIndexesCompiledExamplesVersionsAndMandatoryUpdatePolicy() throws Exception {

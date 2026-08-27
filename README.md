@@ -41,26 +41,25 @@ protocol 2.5 executes explicitly replay-ready recordings from registered scenari
 origins and reports equal, first divergence, or inconclusive selected evidence; protocol 2.6
 executes one bounded exact-tick sequence of explicit registered input transitions with fail-stop
 completed/failed/not-executed evidence and schema-1 recording/replay integration. A
-deterministic LWJGL3 fixture
-qualifies the full workflow. Its actual-native Box2D conformance scenario covers ball drop,
-dynamic collision, scheduled and timeline-driven player movement, application-owned boolean
-control state, exact assertions, deterministic reruns, protocol,
-MCP, and render-independent evidence under Xvfb. The runtime also provides an optional
-explicit Box2D inspection and contact-evidence adapter; it never traverses an application world,
-installs a contact listener, or steps physics automatically. Applications retain ownership of the
-listener, fixed-step call, rendering, and native disposal.
+deterministic LWJGL3 fixture qualifies the full workflow. Runtime 3.0 also provides explicit,
+bounded inspection for the official Box2D 3.1.1 binding. Applications register live
+`b2WorldId`, `b2BodyId`, `b2ShapeId`, and `b2JointId` values under stable runtime IDs; the adapter
+copies capsule geometry, dynamics, material, joint, and world-counter facts without serializing
+native identity. It never traverses or steps an application world and never destroys native
+resources. See [Box2D 3 inspection](docs/guides/box2d-inspection.md) and the
+[3.0 migration notes](docs/guides/migrating-to-3.0.md).
 
 Simulation assertions operate only on completed immutable tick/frame evidence. Generic scalar,
 vector, area, magnitude, distance, wrapped-angle, event, and structured-list predicates live in
-JDK-only core. `Box2dAssertions` supplies data-only factories for body and contact checks; it never
-reads a native object. Negative and every-tick PASS requires complete evidence, including the
-contact adapter's explicit `complete` property.
+JDK-only core. `Box2dAssertions` supplies data-only factories for body and copied contact checks; it
+never reads a native ID. Negative and every-tick PASS requires complete application-registered
+evidence.
 
 Simulation determinism compares only explicitly selected completed evidence under the same
 application-reported reset, seed, configuration, fixed step, registered input script, and exact
-tick count. `Box2dDeterminism` compiles stable registered body/fixture/joint IDs, world testimony,
-and contact completeness into the JDK-only engine. Divergence reports the first actual simulation
-tick and both run correlations; incomplete evidence is never reported equal.
+tick count. `Box2dDeterminism` compiles stable registered body/fixture/joint IDs and explicit world
+testimony into the JDK-only engine. Divergence reports the first actual simulation tick and both run
+correlations; incomplete evidence is never reported equal.
 
 See [Bootstrap migration: deterministic Box2D games](docs/guides/bootstrap-box2d-migration.md)
 for the generated-game loop, reset, input, and verification contract.
@@ -169,7 +168,7 @@ game running elsewhere. Remote process attachment is explicitly outside V1.
 | --- | --- | --- |
 | `runtime-core` | JDK-only model, capture, retention, queries | `agent-runtime-core` |
 | `runtime-libgdx` | render-thread helpers, metrics, converters | `agent-runtime-libgdx` |
-| `runtime-box2d` | explicit bounded Box2D inspection and contact evidence | `agent-runtime-box2d` |
+| `runtime-box2d` | explicit bounded Box2D 3 ID inspection | `agent-runtime-box2d` |
 | `runtime-protocol` | strict V1 JSON and session registry | `agent-runtime-protocol` |
 | `runtime-mcp` | closed base and registered optional stdio MCP tools | `agent-runtime-mcp` |
 | `runtime-fixtures` | deterministic LWJGL3 qualification | not published |

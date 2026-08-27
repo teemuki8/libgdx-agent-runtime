@@ -2,6 +2,7 @@ package io.github.teemuki8.libgdx.agent.runtime.box2d;
 
 import com.badlogic.gdx.box2d.Box2d;
 import com.badlogic.gdx.box2d.structs.b2Capsule;
+import com.badlogic.gdx.box2d.structs.b2ChainSegment;
 import com.badlogic.gdx.box2d.structs.b2Circle;
 import com.badlogic.gdx.box2d.structs.b2Polygon;
 import com.badlogic.gdx.box2d.structs.b2Segment;
@@ -14,16 +15,41 @@ import java.util.List;
 final class Box2dShapeValues {
     private Box2dShapeValues() {}
 
-    static RuntimeValue copy(b2ShapeId shape, int vertexLimit) {
+    static RuntimeValue copy(b2ShapeId shape, int vertexLimit, Scratch scratch) {
         return switch (Box2d.b2Shape_GetType(shape)) {
-            case b2_circleShape -> circle(Box2d.b2Shape_GetCircle(shape));
-            case b2_capsuleShape -> capsule(Box2d.b2Shape_GetCapsule(shape));
-            case b2_segmentShape -> segment(Box2d.b2Shape_GetSegment(shape), "SEGMENT");
-            case b2_chainSegmentShape -> segment(
-                    Box2d.b2Shape_GetChainSegment(shape).segment(), "CHAIN_SEGMENT");
-            case b2_polygonShape -> polygon(Box2d.b2Shape_GetPolygon(shape), vertexLimit);
+            case b2_circleShape -> {
+                Box2d.b2Shape_GetCircle(shape, scratch.circle);
+                yield circle(scratch.circle);
+            }
+            case b2_capsuleShape -> {
+                Box2d.b2Shape_GetCapsule(shape, scratch.capsule);
+                yield capsule(scratch.capsule);
+            }
+            case b2_segmentShape -> {
+                Box2d.b2Shape_GetSegment(shape, scratch.segment);
+                yield segment(scratch.segment, "SEGMENT");
+            }
+            case b2_chainSegmentShape -> {
+                Box2d.b2Shape_GetChainSegment(shape, scratch.chainSegment);
+                yield segment(scratch.chainSegment.segment(), "CHAIN_SEGMENT");
+            }
+            case b2_polygonShape -> {
+                Box2d.b2Shape_GetPolygon(shape, scratch.polygon);
+                yield polygon(scratch.polygon, vertexLimit);
+            }
             case b2_shapeTypeCount -> throw new IllegalStateException("invalid Box2D shape type");
         };
+    }
+
+    static RuntimeValue diagnostics(b2ShapeId shape, int vertexLimit, Scratch scratch) {
+        if (Box2d.b2Shape_GetType(shape)
+                != com.badlogic.gdx.box2d.enums.b2ShapeType.b2_polygonShape) {
+            return RuntimeValues.list();
+        }
+        Box2d.b2Shape_GetPolygon(shape, scratch.polygon);
+        return scratch.polygon.count() > vertexLimit
+                ? RuntimeValues.list(RuntimeValues.enumValue("SHAPE_VERTICES_TRUNCATED"))
+                : RuntimeValues.list();
     }
 
     private static RuntimeValue circle(b2Circle value) {
@@ -64,6 +90,14 @@ final class Box2dShapeValues {
                 field("vertexLimit", RuntimeValues.integer(vertexLimit)),
                 field("truncated", RuntimeValues.bool(observed > retained)),
                 field("vertices", RuntimeValues.list(vertices)));
+    }
+
+    static final class Scratch {
+        private final b2Circle circle = new b2Circle();
+        private final b2Capsule capsule = new b2Capsule();
+        private final b2Segment segment = new b2Segment();
+        private final b2ChainSegment chainSegment = new b2ChainSegment();
+        private final b2Polygon polygon = new b2Polygon();
     }
 
     private static RuntimeValue.Field field(String name, RuntimeValue value) {

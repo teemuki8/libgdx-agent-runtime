@@ -13,9 +13,10 @@ All notable changes follow Keep a Changelog structure.
 
 ### Removed
 
-- The legacy `World`/`Body`/`Fixture`/`Joint`, `registerFixture`, `Box2dFixtureSpec`, and
-  listener-based `Box2dContacts` APIs are removed without compatibility aliases. See the 3.0
-  migration guide for the clean cutover and destruction order.
+- The legacy `World`/`Body`/`Fixture`/`Joint`, `registerFixture`, `Box2dFixtureSpec`, and contact
+  listener/composition APIs are removed without compatibility aliases. `Box2dContacts.captureStep`
+  now copies bounded Box2D 3 post-step arrays and whole-step normal impulse. See the 3.0 migration
+  guide for the clean cutover and destruction order.
 
 ## [2.2.0] - 2026-08-10
 

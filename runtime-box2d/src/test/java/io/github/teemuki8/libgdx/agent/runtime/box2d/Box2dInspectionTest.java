@@ -124,8 +124,12 @@ final class Box2dInspectionTest {
             thread.start();
             thread.join();
             assertTrue(wrongThread.get() instanceof IllegalStateException);
+            Box2dContacts contacts = inspection.registerContacts(
+                    "main", Box2dContactLimits.developmentDefaults(),
+                    Box2dContactPolicy.developmentDefaults());
 
             inspection.close();
+            assertTrue(contacts.nativeScratchFreed());
             assertThrows(IllegalStateException.class,
                     () -> inspection.registerBody("closed", "main", scene.dynamicBody));
         }

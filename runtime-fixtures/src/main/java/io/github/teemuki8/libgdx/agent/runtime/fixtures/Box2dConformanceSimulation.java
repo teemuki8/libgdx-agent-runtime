@@ -15,6 +15,8 @@ import com.badlogic.gdx.box2d.structs.b2WorldDef;
 import com.badlogic.gdx.box2d.structs.b2WorldId;
 import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dAdapterLimits;
 import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dContactLimits;
+import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dContactPolicy;
+import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dContacts;
 import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dInspection;
 import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dRegistration;
 import io.github.teemuki8.libgdx.agent.runtime.box2d.Box2dShapeSpec;
@@ -65,6 +67,7 @@ public final class Box2dConformanceSimulation implements AutoCloseable {
 
     private final AgentRuntime runtime;
     private final Box2dInspection inspection;
+    private final Box2dContacts contacts;
     private final LibGdxFixedStepSimulation simulation;
     private final Box2dRegistration<b2WorldId> worldRegistration;
     private final String omittedShapeId;
@@ -111,6 +114,8 @@ public final class Box2dConformanceSimulation implements AutoCloseable {
                 "adapterLimits"));
         worldRegistration = inspection.registerWorld(WORLD_ID, scene.world(), worldSpec());
         registerDescendants(scene);
+        contacts = inspection.registerContacts(
+                WORLD_ID, contactLimits, Box2dContactPolicy.developmentDefaults());
 
         runtime.inputs().register(InputSpec.builder("move-player")
                 .description("Sets horizontal player velocity before the selected physics tick")
@@ -164,9 +169,11 @@ public final class Box2dConformanceSimulation implements AutoCloseable {
                         FIXED_STEP_NANOS, FIXED_STEP_NANOS * 32,
                         FIXED_STEP_NANOS * 16, 8, 1_024,
                         FixedStepDropPolicy.DROP_WHOLE_TICKS_KEEP_REMAINDER, true), tick -> {
-                            setEnabled(scene.bodies().get("player"), playerControlActive);
-                            Box2d.b2World_Step(
-                                    scene.world(), tick.fixedStepSeconds(), SUB_STEP_COUNT);
+                            contacts.captureStep(() -> {
+                                setEnabled(scene.bodies().get("player"), playerControlActive);
+                                Box2d.b2World_Step(
+                                        scene.world(), tick.fixedStepSeconds(), SUB_STEP_COUNT);
+                            });
                             gameLogicAfterPhysics();
                             return reportedExecutedStepNanos;
                         });
@@ -340,6 +347,8 @@ public final class Box2dConformanceSimulation implements AutoCloseable {
         definition.density(density);
         definition.material().friction(0.6f);
         definition.material().restitution(0);
+        definition.enableContactEvents(true);
+        definition.enableHitEvents(true);
         return definition;
     }
 

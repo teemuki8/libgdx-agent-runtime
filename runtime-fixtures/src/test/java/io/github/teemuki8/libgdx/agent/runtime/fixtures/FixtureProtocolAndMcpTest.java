@@ -64,9 +64,7 @@ final class FixtureProtocolAndMcpTest {
                     RuntimeToolHandler handler =
                             new RuntimeToolHandler(new RuntimeProtocolService(registry))) {
                 assertEquals(runtime.sessionId(), publication.sessionId());
-                var settings = new Box2dDeterminism.WorldSettings(
-                        Box2dConformanceSimulation.FIXED_STEP_NANOS,
-                        new Box2dVector(0, 0), 8, 3, true, true, true);
+                var settings = new Box2dDeterminism.WorldSettings(Box2dConformanceSimulation.FIXED_STEP_NANOS, new Box2dVector(0, 0), 4, true, true, true);
                 var template = Box2dDeterminism.builder(
                                 "main", settings, Box2dConformanceSimulation.PLAYER_MOVEMENT,
                                 7, RuntimeValues.object(), 2, 120)

@@ -90,57 +90,40 @@ rendered frame — see [Frame correlation](frame-correlation.md).
 See the [agent cookbook](agent-cookbook.md#fixed-step-simulation-ticks) for inspection and failure
 recipes.
 
-## Register selected Box2D state
+## Register selected Box2D 3 state
 
-Create `Box2dInspection` on the runtime capture thread and register only the native objects an agent
-should see. IDs are application-owned and remain stable across native object replacement:
+Create `Box2dInspection` on the runtime capture thread and register only live IDs an agent should
+see. IDs are application-owned and stable across native replacement:
 
 ```java
 box2d = new Box2dInspection(runtime, Box2dAdapterLimits.developmentDefaults());
-box2d.registerWorld("main", world, new Box2dWorldSpec(
-        true, true, true, 6, 2, OptionalDouble.of(60),
-        new Box2dUnitTransform(100))); // 100 render units per physics metre
+Box2dWorldSpec worldSpec = new Box2dWorldSpec(4, new Box2dUnitTransform(100));
+box2d.registerWorld("main", world, worldSpec);
 ballRegistration = box2d.registerBody("ball", "main", ballBody);
-box2d.registerFixture("ball-shape", "ball", ballFixture);
+box2d.registerShape("ball-shape", "ball", ballShape, Box2dShapeSpec.defaults());
 contacts = box2d.registerContacts(
-        "main",
-        Box2dContactLimits.developmentDefaults(),
+        "main", Box2dContactLimits.developmentDefaults(),
         Box2dContactPolicy.developmentDefaults());
-world.setContactListener(contacts.listener()); // explicit application-owned installation
 ```
 
-Register before `runtime.start()` so frame 0 contains the initial physics state. The adapter exposes
-the entities as `box2d.world.main`, `box2d.body.ball`, and `box2d.fixture.ball-shape`; existing Java,
-protocol, and MCP entity queries need no Box2D-specific transport command. Register joint endpoints
-before their joint. For a chain fixture, supply `Box2dFixtureSpec.chainLoop(boolean)` because the
-libGDX wrapper cannot reliably recover that Java-side construction choice.
-
-Capture the application-owned step inside the acknowledged fixed-step callback. Do not also call
-`world.step` from render delta:
+Register before `runtime.start()` so frame 0 contains initial physics state. Register both endpoint
+bodies before a joint. Capture the application-owned step inside the acknowledged tick:
 
 ```java
 runtime.simulation().tick(16_666_667L, suppliedDeltaNanos -> {
-    contacts.captureStep(() -> world.step(
-            suppliedDeltaNanos / 1_000_000_000f, 6, 2));
+    contacts.captureStep(() -> Box2d.b2World_Step(
+            world, suppliedDeltaNanos / 1_000_000_000f, worldSpec.subStepCount()));
     gameLogicAfterPhysics();
     return suppliedDeltaNanos;
 });
 ```
 
-Registration and `listener()` never install anything on the native world. If the game already has a
-listener, install `contacts.compose(gameContactListener)` instead; evidence runs first and the
-application listener runs second. The default policy retains begin, end, and post-solve evidence and
-omits pre-solve. Contact state appears as `box2d.contacts.main`, while retained callbacks appear as
-`box2d.contact.*` events through the existing entity/history/event queries.
+No contact listener exists. Contact state appears as `box2d.contacts.main`; copied begin, end, and
+post-solve facts appear as `box2d.contact.*` events. Close contacts/registrations before native
+destruction. The adapter unregisters providers and frees owned contact scratch but never destroys
+the application world.
 
-The application still owns `World.step`, rendering, native destruction, and disposal. Before
-destroying/recreating a selected object, close descendants as required or call the stable
-registration's `rebind` method with its replacement. Close the adapter on the capture thread; it
-unregisters providers and releases weak references but never disposes Box2D objects.
-
-See [Inspect registered Box2D state](agent-cookbook.md#inspect-registered-box2d-state) for the
-registered-object schemas. See [Capture and inspect Box2D contacts](agent-cookbook.md#capture-and-inspect-box2d-contacts)
-for the complete contact API, exact schemas, bounds, queries, lifecycle, and failure recipes.
+See [Box2D 3 inspection](box2d-inspection.md) for schemas, bounds, reset, and lifecycle details.
 
 ## Assert physics over exact ticks
 
@@ -175,7 +158,7 @@ data-only request:
 SimulationDeterminismSpec spec = Box2dDeterminism.builder(
         "main",
         new Box2dDeterminism.WorldSettings(16_666_667L,
-                new Box2dVector(0, -9.8), 6, 2, true, true, true),
+                new Box2dVector(0, -9.8), 4, true, true, true),
         "ball-drop", 7, RuntimeValues.object(), 2, 60)
         .body("ball", "position", "linearVelocity", "awake")
         .activeContacts()

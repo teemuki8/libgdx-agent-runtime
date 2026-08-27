@@ -515,7 +515,7 @@ FixedStepSimulationConfiguration configuration =
 LibGdxFixedStepSimulation simulation = LibGdxFixedStepSimulation.acknowledged(
         runtime, configuration, tick -> {
             processGameInput();
-            world.step(tick.fixedStepSeconds(), 6, 2);
+            Box2d.b2World_Step(world, tick.fixedStepSeconds(), 4);
             gameLogicAfterPhysics();
             return tick.fixedStepNanos(); // the delta actually executed
         });
@@ -720,14 +720,39 @@ IDs, duplicate native keys, wrong-world relationships, missing joint endpoints, 
 bounds, closed adapters, and parent-before-child close all fail rather than producing partial
 evidence.
 
-## Box2D 3 collision evidence migration
+## Capture bounded Box2D 3 contacts
 
-Runtime 3.0 removes the legacy `ContactListener`/`Box2dContacts` adapter because Box2D 3 publishes
-post-step event arrays instead of object callbacks. Applications that need collision evidence copy
-`b2ContactEvents` immediately after `b2World_Step`, correlate shape IDs to their own stable fixture
-IDs, and register only copied bounded values with the runtime. Do not retain event pointers or
-serialize native shape IDs. See [`migrating-to-3.0.md`](migrating-to-3.0.md) for the breaking API
-map.
+Register contact capture after the world, bodies, and shapes. The adapter owns one bounded native
+contact-data scratch buffer but never owns or steps the world:
+
+```java
+Box2dContacts contacts = physics.registerContacts(
+        "main",
+        Box2dContactLimits.developmentDefaults(),
+        Box2dContactPolicy.developmentDefaults());
+```
+
+Wrap exactly one application-owned step inside each acknowledged simulation tick:
+
+```java
+contacts.captureStep(() ->
+        Box2d.b2World_Step(world, tick.fixedStepSeconds(), worldSpec.subStepCount()));
+```
+
+After the step, the adapter immediately copies `b2ContactEvents`. Begin and end events retain only
+stable registered endpoints. Hit events retain copied point and normal values and correlate bounded
+`b2Shape_GetContactData` results to the same stable pair. The `normal` impulse is the maximum
+positive `b2ManifoldPoint.totalNormalImpulse`, accumulated across substeps and restitution; the
+final-substep `normalImpulse` is intentionally not used.
+
+Records and active contacts keep the existing `box2d.contacts.<worldId>` entity and
+`box2d.contact.begin`, `box2d.contact.end`, and `box2d.contact.postSolve` event schemas. Native
+event arrays, IDs, manifold pointers, and contact buffers never cross the capture call. Bounds fail
+complete evidence with diagnostics rather than silently truncating.
+
+World rebind and scenario reset clear active evidence before the next baseline. Close
+`Box2dContacts` or its parent inspection before native destruction; close releases its manually
+owned contact-data buffer.
 
 ## Assert physics over exact simulation ticks
 
@@ -946,7 +971,7 @@ SimulationDeterminismSpec spec = Box2dDeterminism.builder(
         "main",
         new Box2dDeterminism.WorldSettings(
                 stepNanos, new Box2dVector(0.0, -9.8),
-                8, 3, true, true, true),
+                4, true, true, true),
         "player-move", 7L,
         RuntimeValues.object(RuntimeValues.field("level", RuntimeValues.string("one"))),
         2, 60)

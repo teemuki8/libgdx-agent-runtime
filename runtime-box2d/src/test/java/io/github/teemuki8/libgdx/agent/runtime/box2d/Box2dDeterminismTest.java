@@ -17,8 +17,7 @@ final class Box2dDeterminismTest {
     @Test
     void compilesExplicitWorldAndSelectedPhysicsEvidenceToGenericCoreSpec() {
         Box2dDeterminism.WorldSettings settings = new Box2dDeterminism.WorldSettings(
-                16_666_667, new Box2dVector(0, -9.8), 8, 3,
-                true, true, true);
+                16_666_667, new Box2dVector(0, -9.8), 4, true, true, true);
         SimulationDeterminismSpec spec = Box2dDeterminism.builder(
                         "main", settings, "player-move", 7, RuntimeValues.object(), 2, 60)
                 .body("player", "position", "linearVelocity", "awake")
@@ -59,11 +58,9 @@ final class Box2dDeterminismTest {
                         "gravity", new RuntimeValue.Vector2Value(
                                 RuntimeValues.decimal("0"), RuntimeValues.decimal("-9.8"))),
                 new SimulationConfigurationRequirement(EntityId.of("box2d.world.main"),
-                        "positionIterations", RuntimeValues.integer(3)),
-                new SimulationConfigurationRequirement(EntityId.of("box2d.world.main"),
                         "sleepingAllowed", RuntimeValues.bool(true)),
                 new SimulationConfigurationRequirement(EntityId.of("box2d.world.main"),
-                        "velocityIterations", RuntimeValues.integer(8)),
+                        "subStepCount", RuntimeValues.integer(4)),
                 new SimulationConfigurationRequirement(EntityId.of("box2d.world.main"),
                         "warmStarting", RuntimeValues.bool(true))),
                 spec.configurationRequirements());
@@ -81,11 +78,13 @@ final class Box2dDeterminismTest {
         assertThrows(IllegalArgumentException.class,
                 () -> builder.input(11, "move", RuntimeValues.object()));
         assertThrows(IllegalArgumentException.class, () -> new Box2dDeterminism.WorldSettings(
-                1, new Box2dVector(0, 0), 0, 3, true, true, true));
+                1, new Box2dVector(0, 0), 0, true, true, true));
         assertThrows(IllegalArgumentException.class, () -> new Box2dDeterminism.WorldSettings(
-                1, new Box2dVector(Double.MAX_VALUE, 0), 8, 3, true, true, true));
+                1, new Box2dVector(0, 0), 17, true, true, true));
         assertThrows(IllegalArgumentException.class, () -> new Box2dDeterminism.WorldSettings(
-                1, new Box2dVector(Double.MIN_VALUE, 0), 8, 3, true, true, true));
+                1, new Box2dVector(Double.MAX_VALUE, 0), 4, true, true, true));
+        assertThrows(IllegalArgumentException.class, () -> new Box2dDeterminism.WorldSettings(
+                1, new Box2dVector(Double.MIN_VALUE, 0), 4, true, true, true));
 
         SimulationDeterminismSpec contacts = Box2dDeterminism.builder(
                         "main", settings(), "ball-drop", 1,
@@ -144,6 +143,6 @@ final class Box2dDeterminismTest {
 
     private static Box2dDeterminism.WorldSettings settings() {
         return new Box2dDeterminism.WorldSettings(
-                16, new Box2dVector(0, -10), 8, 3, true, true, true);
+                16, new Box2dVector(0, -10), 4, true, true, true);
     }
 }

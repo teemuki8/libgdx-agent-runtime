@@ -138,7 +138,12 @@ final class Box2dConformanceFixtureTest {
             assertInstanceOf(RuntimeValue.Vector2Value.class,
                     attribute(postSolve, "normal"));
             assertFalse(list(attribute(postSolve, "points")).values().isEmpty());
-            assertFalse(list(attribute(postSolve, "impulses")).values().isEmpty());
+            RuntimeValue.ListValue impulses = list(attribute(postSolve, "impulses"));
+            assertFalse(impulses.values().isEmpty());
+            RuntimeValue.DecimalValue totalNormalImpulse = assertInstanceOf(
+                    RuntimeValue.DecimalValue.class,
+                    field(impulses.values().getFirst(), "normal"));
+            assertTrue(totalNormalImpulse.value().signum() > 0);
 
             EntitySnapshot contacts = runtime.entity(
                     EntityId.of("box2d.contacts.main")).orElseThrow();
@@ -146,9 +151,12 @@ final class Box2dConformanceFixtureTest {
                     contacts.property("complete").orElseThrow());
             assertFalse(list(contacts.property("activeContacts").orElseThrow())
                     .values().isEmpty());
-            assertEquals(RuntimeValues.enumValue("DISTANCE"), runtime.entity(
-                    EntityId.of("box2d.joint.static-link")).orElseThrow()
-                    .property("jointType").orElseThrow());
+            EntitySnapshot joint = runtime.entity(
+                    EntityId.of("box2d.joint.static-link")).orElseThrow();
+            assertEquals(RuntimeValues.enumValue("REVOLUTE"),
+                    joint.property("jointType").orElseThrow());
+            assertEquals(RuntimeValues.enumValue("REVOLUTE"),
+                    field(joint.property("detail").orElseThrow(), "type"));
             assertEquals(RuntimeValues.integer(90), runtime.entity(
                     EntityId.of("fixture.post-physics")).orElseThrow()
                     .property("completedTicks").orElseThrow());
@@ -422,9 +430,7 @@ final class Box2dConformanceFixtureTest {
     void identicalActualNativeRunsCompareSelectedTickEvidenceEqual() {
         try (Box2dConformanceSimulation fixture =
                 new Box2dConformanceSimulation(Runnable::run)) {
-            var settings = new Box2dDeterminism.WorldSettings(
-                    Box2dConformanceSimulation.FIXED_STEP_NANOS,
-                    new Box2dVector(0, 0), 8, 3, true, true, true);
+            var settings = new Box2dDeterminism.WorldSettings(Box2dConformanceSimulation.FIXED_STEP_NANOS, new Box2dVector(0, 0), 4, true, true, true);
             var spec = Box2dDeterminism.builder(
                             "main", settings, "player-movement", 7,
                             RuntimeValues.object(), 2, 90)
@@ -485,9 +491,7 @@ final class Box2dConformanceFixtureTest {
                                 .result());
                 assertEquals(AssertionStatus.PASS, asserted.result().status());
 
-                var settings = new Box2dDeterminism.WorldSettings(
-                        Box2dConformanceSimulation.FIXED_STEP_NANOS,
-                        new Box2dVector(0, -10), 8, 3, true, true, true);
+                var settings = new Box2dDeterminism.WorldSettings(Box2dConformanceSimulation.FIXED_STEP_NANOS, new Box2dVector(0, -10), 4, true, true, true);
                 var spec = Box2dDeterminism.builder("main", settings, "ball-drop", 7,
                                 RuntimeValues.object(), 2, 60)
                         .body("ball", "position", "linearVelocity")
@@ -553,9 +557,7 @@ final class Box2dConformanceFixtureTest {
             assertTrue(update.accumulatorLimitDroppedTimeNanos() > 0);
             assertTrue(update.droppedTicks() > 0);
 
-            var wrongSettings = new Box2dDeterminism.WorldSettings(
-                    Box2dConformanceSimulation.FIXED_STEP_NANOS,
-                    new Box2dVector(0, 0), 8, 3, true, true, true);
+            var wrongSettings = new Box2dDeterminism.WorldSettings(Box2dConformanceSimulation.FIXED_STEP_NANOS, new Box2dVector(0, 0), 4, true, true, true);
             var wrongConfiguration = Box2dDeterminism.builder(
                             "main", wrongSettings, "ball-drop", 7,
                             RuntimeValues.object(), 2, 1)
@@ -679,9 +681,7 @@ final class Box2dConformanceFixtureTest {
                 Runnable::run, Box2dConformanceSimulation.FIXED_STEP_NANOS,
                 null, Box2dAdapterLimits.developmentDefaults(),
                 Box2dContactLimits.developmentDefaults(), true)) {
-            var settings = new Box2dDeterminism.WorldSettings(
-                    Box2dConformanceSimulation.FIXED_STEP_NANOS,
-                    new Box2dVector(0, 0), 8, 3, true, true, true);
+            var settings = new Box2dDeterminism.WorldSettings(Box2dConformanceSimulation.FIXED_STEP_NANOS, new Box2dVector(0, 0), 4, true, true, true);
             var spec = Box2dDeterminism.builder(
                             "main", settings, "player-movement", 7,
                             RuntimeValues.object(), 2, 10)
@@ -725,9 +725,7 @@ final class Box2dConformanceFixtureTest {
 
     private static ReplayCaptureSpec replaySpec(String recordingId,
             Optional<String> scenarioId, Optional<String> checkpointId) {
-        var settings = new Box2dDeterminism.WorldSettings(
-                Box2dConformanceSimulation.FIXED_STEP_NANOS,
-                new Box2dVector(0, 0), 8, 3, true, true, true);
+        var settings = new Box2dDeterminism.WorldSettings(Box2dConformanceSimulation.FIXED_STEP_NANOS, new Box2dVector(0, 0), 4, true, true, true);
         var template = Box2dDeterminism.builder(
                         "main", settings, "player-movement", 7,
                         RuntimeValues.object(), 2, 120)

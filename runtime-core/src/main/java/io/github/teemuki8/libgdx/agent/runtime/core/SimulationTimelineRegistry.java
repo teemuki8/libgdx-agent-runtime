@@ -14,6 +14,7 @@ public final class SimulationTimelineRegistry {
     private final ArrayDeque<SimulationTick> history = new ArrayDeque<>();
     private final LinkedHashMap<ExecutionEpochId, EpochSummary> epochs = new LinkedHashMap<>();
     private SimulationTimelineSpec spec;
+    private SimulationFrameOwnership frameOwnership = SimulationFrameOwnership.RUNTIME;
     private ExecutionEpochId currentEpoch = new ExecutionEpochId(0);
     private long nextSimulationTickId;
     private long attemptedEpochTicks;
@@ -23,6 +24,7 @@ public final class SimulationTimelineRegistry {
     private OptionalLong lastRuntimeSuppliedDeltaNanos = OptionalLong.empty();
     private OptionalLong lastExecutedDeltaNanos = OptionalLong.empty();
     private ActiveSimulationTick activeTick;
+    private CallbackCapture callbackCapture;
 
     SimulationTimelineRegistry(AgentRuntime runtime, SimulationTimelineLimits limits) {
         this.runtime = Objects.requireNonNull(runtime, "runtime");
@@ -32,8 +34,19 @@ public final class SimulationTimelineRegistry {
 
     /** Registers one fixed-step timing contract before simulation ticks begin. */
     public synchronized void register(SimulationTimelineSpec value) {
+        register(value, SimulationFrameOwnership.RUNTIME);
+    }
+
+    /**
+     * Registers explicit frame ownership for normal and controlled ticks before runtime start.
+     * Callback ownership requires exactly one callback-completed frame with the supplied delta;
+     * nested capture remains invalid. The existing registration overload uses runtime ownership.
+     */
+    public synchronized void register(
+            SimulationTimelineSpec value, SimulationFrameOwnership ownership) {
         runtime.requireSimulationTimelineRegistration();
         Objects.requireNonNull(value, "value");
+        Objects.requireNonNull(ownership, "ownership");
         if (spec != null) {
             throw new IllegalStateException("simulation timeline timing is already registered");
         }
@@ -43,6 +56,7 @@ public final class SimulationTimelineRegistry {
                     "fixed simulation step exceeds the configured delta limit");
         }
         spec = value;
+        frameOwnership = ownership;
     }
 
     /** Returns configured hard timeline bounds. */
@@ -59,7 +73,7 @@ public final class SimulationTimelineRegistry {
     }
 
     /**
-     * Returns the tick whose timeline-owned runtime frame is currently open.
+     * Returns the tick whose runtime frame is currently open, regardless of capture ownership.
      *
      * <p>The context is visible only on the capture thread and is not completed tick evidence.
      */
@@ -67,7 +81,7 @@ public final class SimulationTimelineRegistry {
         if (!runtime.onCaptureThread()) {
             return Optional.empty();
         }
-        return Optional.ofNullable(activeTick);
+        return runtime.hasOpenFrame() ? Optional.ofNullable(activeTick) : Optional.empty();
     }
 
     /**
@@ -202,29 +216,66 @@ public final class SimulationTimelineRegistry {
         Attempt attempt = beginAttempt();
         FrameId expected = runtime.latestFrame().map(frame -> incrementFrame(frame.frameId()))
                 .orElse(new FrameId(0));
+        if (frameOwnership == SimulationFrameOwnership.CALLBACK) {
+            expected = runtime.nextCaptureFrameId();
+        }
         long[] reported = {0};
         Throwable[] applicationFailure = {null};
         Throwable failure = null;
         try {
-            runtime.frame(suppliedDeltaNanos, () -> {
-                activeTick = new ActiveSimulationTick(attempt.id(),
-                        attempt.executionEpochId(), attempt.epochTick(), suppliedDeltaNanos,
-                        source, runtime.openFrameId());
+            Runnable prepare = () -> {
+                if (controlledTick.isPresent()) {
+                    runtime.inputs().executeTick(
+                            controlledTick.orElseThrow(), attempt.executionEpochId());
+                }
+                beforeSimulation.run();
+            };
+            if (frameOwnership == SimulationFrameOwnership.CALLBACK) {
+                callbackCapture = new CallbackCapture(attempt, suppliedDeltaNanos, source);
                 try {
-                    if (controlledTick.isPresent()) {
-                        runtime.inputs().executeTick(
-                                controlledTick.orElseThrow(), attempt.executionEpochId());
-                    }
-                    beforeSimulation.run();
+                    prepare.run();
+                    callbackCapture.acceptingFrame = true;
                     reported[0] = callback.simulate(suppliedDeltaNanos);
                 } catch (Throwable thrown) {
                     applicationFailure[0] = thrown;
                     throw thrown;
                 }
-            });
+                if (!callbackCapture.opened || runtime.hasOpenFrame()
+                        || runtime.frame(expected).isEmpty()) {
+                    throw captureViolation("callback must complete exactly one simulation frame");
+                }
+                if (callbackCapture.violation != null) {
+                    throw callbackCapture.violation;
+                }
+            } else {
+                runtime.frame(suppliedDeltaNanos, () -> {
+                    activeTick = new ActiveSimulationTick(attempt.id(),
+                            attempt.executionEpochId(), attempt.epochTick(), suppliedDeltaNanos,
+                            source, runtime.openFrameId());
+                    try {
+                        prepare.run();
+                        reported[0] = callback.simulate(suppliedDeltaNanos);
+                    } catch (Throwable thrown) {
+                        applicationFailure[0] = thrown;
+                        throw thrown;
+                    }
+                });
+            }
         } catch (Throwable thrown) {
             failure = thrown;
         } finally {
+            if (callbackCapture != null && runtime.hasOpenFrame()) {
+                try {
+                    runtime.finishFailedSimulationFrame();
+                } catch (Throwable cleanupFailure) {
+                    if (failure == null) {
+                        failure = cleanupFailure;
+                    } else if (failure != cleanupFailure) {
+                        failure.addSuppressed(cleanupFailure);
+                    }
+                }
+            }
+            callbackCapture = null;
             activeTick = null;
         }
         Optional<FrameId> resultingFrame = runtime.frame(expected).isPresent()
@@ -243,6 +294,64 @@ public final class SimulationTimelineRegistry {
         Throwable retainedFailure = failure != null ? failure : completion.postFailure;
         return new TickExecution(Optional.of(completion.tick),
                 Optional.ofNullable(retainedFailure));
+    }
+
+    void beforeFrame(long deltaNanos) {
+        if (callbackCapture == null) {
+            return;
+        }
+        if (!callbackCapture.acceptingFrame || callbackCapture.opened || callbackCapture.violation != null
+                || deltaNanos != callbackCapture.deltaNanos) {
+            throw captureViolation("callback capture requires one frame with the supplied delta");
+        }
+        callbackCapture.opened = true;
+    }
+
+    void frameFailed() {
+        if (callbackCapture != null) {
+            captureViolation("callback-owned frame failed");
+        }
+    }
+
+    void frameOpened(FrameId frame) {
+        if (callbackCapture == null) {
+            return;
+        }
+        CallbackCapture capture = callbackCapture;
+        activeTick = new ActiveSimulationTick(capture.attempt.id(),
+                capture.attempt.executionEpochId(), capture.attempt.epochTick(),
+                capture.deltaNanos, capture.source, frame);
+    }
+
+    void requireNoCallbackTick() {
+        if (callbackCapture != null) {
+            throw captureViolation("a callback-owned simulation tick is already executing");
+        }
+    }
+
+    private AgentRuntimeException captureViolation(String message) {
+        AgentRuntimeException failure = new AgentRuntimeException(
+                RuntimeErrorCode.INVALID_LIFECYCLE, message);
+        if (callbackCapture != null) {
+            callbackCapture.violation = failure;
+        }
+        return failure;
+    }
+
+    private static final class CallbackCapture {
+        private final Attempt attempt;
+        private final long deltaNanos;
+        private final SimulationTickSource source;
+        private boolean acceptingFrame;
+        private boolean opened;
+        private AgentRuntimeException violation;
+
+        private CallbackCapture(Attempt attempt, long deltaNanos,
+                SimulationTickSource source) {
+            this.attempt = attempt;
+            this.deltaNanos = deltaNanos;
+            this.source = source;
+        }
     }
 
     private synchronized Attempt beginAttempt() {

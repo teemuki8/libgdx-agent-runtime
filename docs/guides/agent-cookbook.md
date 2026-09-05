@@ -11,6 +11,44 @@ released 2.1 or 2.2 capabilities.
 
 ## Task index
 
+### Gameplay callbacks that already capture a frame (unreleased)
+
+`GameplayRuntimeBridge` opens/closes a frame inside `GameWorld.step()`. With the unreleased explicit
+capture-ownership API, register this contract before `runtime.start()`:
+
+```java
+runtime.simulation().register(SimulationTimelineSpec.fixedStep(STEP_NANOS),
+        SimulationFrameOwnership.CALLBACK);
+runtime.controls().register(SimulationControllerSpec.builder()
+        .pause(() -> applicationPaused = true)
+        .resume(() -> applicationPaused = false)
+        .acknowledgedTick(delta -> {
+            world.step();
+            return delta;
+        }).build());
+```
+
+Normal updates call `runtime.simulation().tick(STEP_NANOS, sameAcknowledgedWorldStep)` on the
+capture/gameplay owner thread. Paused controls, registered input timelines and replay use that same
+registered callback. Advance the world only once; do not wrap it in a second `runtime.frame`.
+
+Under `CALLBACK`, input handlers run **before** `world.step()`, outside capture, so they enqueue
+commands before the world's command-drain barrier. Systems emit events inside the world-owned
+capture frame. Do not emit runtime events directly from these pre-tick handlers. Under the default
+`RUNTIME` ownership, inputs still execute inside the runtime-owned frame as before.
+
+Every successful callback must complete exactly one frame with the supplied delta. Missing,
+unfinished, multiple or wrong-delta capture is failed evidence; caught ownership violations do not
+become successful ticks. Callback failure retains unknown mutation evidence, and runtime cleanup
+does not restore the game. Reset/recreate damaged application state between requests. Scenario
+reset, runtime close and nested advancement cannot run from within the tick callback.
+
+`CallbackOwnedSimulationTest` exercises normal/controlled capture, input order, replay/reset,
+cancellation and failures. The optional [gameplay consumer](../../qualification/gameplay/README.md)
+compiles against explicit local/runtime and released gameplay JARs without changing dependency
+coordinates. Released runtime 3.0.0 does **not** contain this overload; keep the bootstrap workaround
+until a compatible version has been explicitly released and qualified.
+
 Choose the smallest recipe that answers the current question. The complete sources compile in the
 non-published `runtime-examples` module as ordinary consumers of the public artifacts.
 

@@ -247,6 +247,7 @@ public final class AgentRuntime implements AutoCloseable {
         }
         requireCaptureThread();
         requireRunning();
+        simulation.beforeFrame(deltaNanos);
         if (deltaNanos < 0) {
             throw new IllegalArgumentException("deltaNanos must be non-negative");
         }
@@ -257,6 +258,7 @@ public final class AgentRuntime implements AutoCloseable {
         activeBaseline = Optional.empty();
         activeDeltaNanos = deltaNanos;
         callbackFailed = false;
+        simulation.frameOpened(activeFrame);
     }
 
     /** Completes the open frame and publishes its immutable snapshot. */
@@ -276,6 +278,7 @@ public final class AgentRuntime implements AutoCloseable {
     public FrameId startEpoch(BaselineKind baselineKind) {
         requireCaptureThread();
         requireRunning();
+        simulation.requireNoCallbackTick();
         Objects.requireNonNull(baselineKind, "baselineKind");
         if (baselineKind == BaselineKind.INITIAL) {
             throw new IllegalArgumentException("INITIAL is reserved for frame zero");
@@ -329,11 +332,13 @@ public final class AgentRuntime implements AutoCloseable {
             callback.run();
         } catch (Throwable callbackFailure) {
             callbackFailed = true;
+            simulation.frameFailed();
             failure = callbackFailure;
         }
         try {
             endFrame();
         } catch (Throwable captureFailure) {
+            simulation.frameFailed();
             if (failure == null) {
                 failure = captureFailure;
             } else {
@@ -632,6 +637,7 @@ public final class AgentRuntime implements AutoCloseable {
     @Override
     public void close() {
         requireCaptureThread();
+        simulation.requireNoCallbackTick();
         if (status == RuntimeStatus.CLOSED) {
             return;
         }
@@ -1124,6 +1130,7 @@ public final class AgentRuntime implements AutoCloseable {
         }
         requireCaptureThread();
         requireRunning();
+        simulation.requireNoCallbackTick();
         if (activeFrame != null) {
             throw lifecycle("a simulation tick cannot start while a frame is open");
         }
@@ -1202,6 +1209,19 @@ public final class AgentRuntime implements AutoCloseable {
         requireCaptureThread();
         requireOpenFrame("operation requires an open frame");
         return activeFrame;
+    }
+
+    boolean hasOpenFrame() {
+        return activeFrame != null;
+    }
+
+    FrameId nextCaptureFrameId() {
+        return new FrameId(nextFrame);
+    }
+
+    void finishFailedSimulationFrame() {
+        callbackFailed = true;
+        endFrame();
     }
 
     private void requireRunning() {
